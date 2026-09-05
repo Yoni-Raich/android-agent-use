@@ -1,0 +1,59 @@
+import java.util.Properties
+plugins { id("com.android.application"); kotlin("android"); kotlin("plugin.compose") }
+val appVersion = Properties().apply { rootProject.file("version.properties").inputStream().use(::load) }
+android {
+    namespace = "dev.androidagent.app"
+    compileSdk = 35
+    defaultConfig {
+        applicationId = "dev.androidagent.app"
+        minSdk = 30
+        targetSdk = 35
+        versionCode = appVersion.getProperty("versionCode").toInt()
+        versionName = appVersion.getProperty("versionName")
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        ndk { abiFilters += "arm64-v8a" }
+    }
+    flavorDimensions += "channel"
+    productFlavors {
+        create("prod") { dimension = "channel"; resValue("string", "app_name", "Android Agent") }
+        create("dev") { dimension = "channel"; applicationIdSuffix = ".dev"; resValue("string", "app_name", "Android Agent Dev") }
+    }
+    buildTypes { release { isMinifyEnabled = false; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro") } }
+    compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
+    kotlinOptions { jvmTarget = "17" }
+    buildFeatures { compose = true; buildConfig = true }
+    sourceSets.getByName("main") {
+        jniLibs.srcDir(layout.buildDirectory.dir("generated/runtime/jniLibs"))
+        assets.srcDir(layout.buildDirectory.dir("generated/runtime/assets"))
+    }
+    packaging {
+        jniLibs { useLegacyPackaging = true; keepDebugSymbols += "**/*.so" }
+        resources { excludes += setOf("/META-INF/{AL2.0,LGPL2.1}", "META-INF/versions/**", "META-INF/INDEX.LIST", "META-INF/DEPENDENCIES") }
+    }
+}
+val prepareCodexRuntime by tasks.registering(Exec::class) {
+    workingDir(rootProject.projectDir)
+    val python = if (System.getProperty("os.name").startsWith("Windows")) "python" else "python3"
+    commandLine(python, rootProject.file("tools/prepare_runtime.py").absolutePath)
+    inputs.file(rootProject.file("tools/prepare_runtime.py"))
+    outputs.dir(layout.buildDirectory.dir("generated/runtime"))
+}
+tasks.named("preBuild") { dependsOn(prepareCodexRuntime) }
+dependencies {
+    implementation(project(":core")); implementation(project(":workspace")); implementation(project(":runtime"))
+    implementation(project(":engine-codex")); implementation(project(":adb")); implementation(project(":device-tools")); implementation(project(":overlay"))
+    implementation("androidx.core:core-ktx:1.15.0")
+    implementation("androidx.activity:activity-compose:1.9.3")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
+    implementation(platform("androidx.compose:compose-bom:2024.12.01"))
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
+    debugImplementation("androidx.compose.ui:ui-tooling")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
+    testImplementation("junit:junit:4.13.2")
+}

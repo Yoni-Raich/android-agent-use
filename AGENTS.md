@@ -12,3 +12,4 @@
 - Never commit credentials, device pairing codes, private keys, local.properties, or raw personal screen captures.
 - Update PROGRESS.md with real evidence and remaining gaps. Build/install alone do not prove a working app.
 - Use conventional commits. dev is the integration branch; main holds validated releases. No public distribution repo is needed for this private MVP.
+- Every commit must include a `Signed-off-by:` trailer naming the model that created it. Use `git commit -s` with that model's commit identity; do not claim another model's sign-off.

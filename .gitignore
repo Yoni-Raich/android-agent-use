@@ -10,4 +10,12 @@ local.properties
 research/runtime/downloads/
 artifacts/
 *.log
+__pycache__/
+*.pyc
 .idea/
+.codex-remote-attachments/
+.agents/skills/*/logs/
+research/runtime/app-server-package-1534/bin/
+research/runtime/app-server-package-1534/codex-path/
+research/runtime/app-server-package-1534/codex-resources/
+research/runtime/codex-app-server*
