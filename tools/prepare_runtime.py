@@ -8,7 +8,9 @@ Pipeline (stdlib only, reproducible):
   3. Copy native ELFs to app/build/generated/runtime/jniLibs/arm64-v8a/ as
      lib*.so (targetSdk 35 can only execute APK nativeLibraryDir files).
   4. Verify each staged .so is ELF64-LE AArch64 (e_machine == 183).
-  5. Write app/build/generated/runtime/assets/runtime/ metadata
+  5. Verify a pinned Mozilla CA PEM bundle and write it beside the runtime
+     metadata (the app copies it to app-private storage before launch).
+  6. Write app/build/generated/runtime/assets/runtime/ metadata
      (codex-package.json copy + runtime-manifest.json).
 
 Root wires the Gradle side (jniLibs/assets srcDirs) and runs device tests.
@@ -41,6 +43,12 @@ DEFAULT_JNILIBS = os.path.join(
 DEFAULT_ASSETS = os.path.join(
     "app", "build", "generated", "runtime", "assets", "runtime"
 )
+DEFAULT_CA_BUNDLE = os.path.join(".codex-work", "runtime", "cacert.pem")
+
+# Public Mozilla-derived CA list; the hash makes builds fail closed if the
+# upstream URL changes unexpectedly.
+CA_BUNDLE_URL = "https://curl.se/ca/cacert.pem"
+CA_BUNDLE_SHA256 = "f66dff1bdf8f96060b8177976f8b7d9254bc89bc4db933d769f7384d28480bc9"
 
 # Canonical package path -> staged lib name. Mirror in
 # runtime/.../AndroidRuntimeHost.kt PACKAGE_LINKS; keep both in sync.
@@ -143,6 +151,21 @@ def check_required_layout(names: list[str]) -> None:
         fail("package missing required entries: " + ", ".join(missing))
 
 
+def validate_ca_pem(path: str) -> None:
+    size = os.path.getsize(path)
+    if size <= 0 or size > 8 * 1024 * 1024:
+        fail("CA bundle has an invalid size: %s" % path)
+    with open(path, "rb") as handle:
+        # The PEM blocks are ASCII, but curl's bundle also contains UTF-8
+        # comments with CA names. Decode those comments without accepting
+        # arbitrary binary data.
+        text = handle.read().decode("utf-8", errors="strict")
+    count = text.count("-----BEGIN CERTIFICATE-----")
+    if count < 1 or "-----END CERTIFICATE-----" not in text:
+        fail("CA bundle is not a PEM certificate bundle: %s" % path)
+    print("prepare_runtime: CA bundle ok certificates=%d sha256=%s" % (count, sha256_file(path)))
+
+
 def check_elf_aarch64(path: str) -> int:
     with open(path, "rb") as handle:
         header = handle.read(64)
@@ -186,12 +209,13 @@ def stage_libraries(package_dir: str, jnilibs: str) -> list[dict]:
     return staged
 
 
-def stage_assets(package_dir: str, assets: str, staged: list[dict]) -> None:
+def stage_assets(package_dir: str, assets: str, staged: list[dict], ca_bundle: str) -> None:
     reset_output(assets)
     manifest_src = os.path.join(package_dir, "codex-package.json")
     with open(manifest_src, "r", encoding="utf-8") as handle:
         package_manifest = json.load(handle)
     shutil.copyfile(manifest_src, os.path.join(assets, "codex-package.json"))
+    shutil.copyfile(ca_bundle, os.path.join(assets, "cacert.pem"))
     manifest = {
         "version": package_manifest.get("version", PACKAGE_VERSION),
         "variant": package_manifest.get("variant", "codex-app-server"),
@@ -203,6 +227,12 @@ def stage_assets(package_dir: str, assets: str, staged: list[dict]) -> None:
             "CODEX_HOME": "<files>/runtime/home/.codex",
             "TMPDIR": "<files>/runtime/tmp",
             "PATH": "<nativeLibraryDir>:<files>/runtime/package/codex-path:/system/bin",
+            "HTTPS_PROXY": "http://127.0.0.1:<ephemeral-port>",
+            "HTTP_PROXY": "http://127.0.0.1:<ephemeral-port>",
+            "NO_PROXY": "localhost,127.0.0.1",
+            "SSL_CERT_FILE": "<files>/runtime/cacert.pem",
+            "CODEX_CA_CERTIFICATE": "<files>/runtime/cacert.pem",
+            "CODEX_SANDBOX": "removed",
             "launch": "<nativeLibraryDir>/libcodex_app_server.so --listen stdio://",
         },
         "notes": (
@@ -231,6 +261,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default="https://github.com/openai/codex/releases/download/rust-v0.153.4/codex-app-server-package-aarch64-unknown-linux-musl.tar.gz",
         help="Download the package from this URL when --package is missing.",
     )
+    parser.add_argument("--ca-bundle", default=DEFAULT_CA_BUNDLE)
+    parser.add_argument("--ca-url", default=CA_BUNDLE_URL)
+    parser.add_argument("--ca-sha256", default=CA_BUNDLE_SHA256)
     return parser.parse_args(argv)
 
 
@@ -244,6 +277,7 @@ def main(argv: list[str]) -> int:
     package_dir = resolve(args.package_dir)
     jnilibs = resolve(args.out_jnilibs)
     assets = resolve(args.out_assets)
+    ca_bundle = resolve(args.ca_bundle)
 
     if not os.path.isfile(package):
         if args.url:
@@ -252,11 +286,18 @@ def main(argv: list[str]) -> int:
             fail("package not found: %s (pass --url to download)" % package)
 
     verify_hash(package, args.expected_sha256)
+    if not os.path.isfile(ca_bundle):
+        if args.ca_url:
+            download_package(args.ca_url, ca_bundle)
+        else:
+            fail("CA bundle not found: %s" % ca_bundle)
+    verify_hash(ca_bundle, args.ca_sha256)
+    validate_ca_pem(ca_bundle)
     names = safe_extract(package, package_dir)
     print("prepare_runtime: extracted %d entries" % len(names))
     check_required_layout(names)
     staged = stage_libraries(package_dir, jnilibs)
-    stage_assets(package_dir, assets, staged)
+    stage_assets(package_dir, assets, staged, ca_bundle)
     print("prepare_runtime: OK version=%s target=%s" % (PACKAGE_VERSION, PACKAGE_TARGET))
     print("  jnilibs: " + os.path.relpath(jnilibs, REPO_ROOT))
     print("  assets:  " + os.path.relpath(assets, REPO_ROOT))

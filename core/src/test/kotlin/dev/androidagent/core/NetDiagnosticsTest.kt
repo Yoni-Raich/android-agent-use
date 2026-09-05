@@ -1,0 +1,43 @@
+package dev.androidagent.core
+
+import org.junit.Assert.*
+import org.junit.Test
+
+class NetDiagnosticsTest {
+    @Test
+    fun `only allowlisted tls connect is accepted`() {
+        val allowed = NetDiagnostics.checkConnectRequest(
+            "CONNECT AUTH.OPENAI.COM:443 HTTP/1.1\r\nHost: AUTH.OPENAI.COM\r\n\r\n"
+        )
+        assertEquals(NetDiagnostics.ConnectTarget("auth.openai.com", 443), (allowed as NetDiagnostics.ConnectCheck.Allow).target)
+        assertTrue(NetDiagnostics.checkConnectRequest("GET https://auth.openai.com/ HTTP/1.1\r\n\r\n") is NetDiagnostics.ConnectCheck.Deny)
+        assertTrue(NetDiagnostics.checkConnectRequest("CONNECT api.openai.com:80 HTTP/1.1\r\n\r\n") is NetDiagnostics.ConnectCheck.Deny)
+        assertTrue(NetDiagnostics.checkConnectRequest("CONNECT evil.example:443 HTTP/1.1\r\n\r\n") is NetDiagnostics.ConnectCheck.Deny)
+    }
+
+    @Test
+    fun `environment injects proxy and removes sandbox`() {
+        val result = NetDiagnostics.buildAppServerEnvironment(
+            mapOf("HOME" to "/x", "CODEX_SANDBOX" to "seatbelt"),
+            "http://127.0.0.1:1234",
+            "/x/cacert.pem"
+        )
+        assertEquals("http://127.0.0.1:1234", result["HTTPS_PROXY"])
+        assertEquals("http://127.0.0.1:1234", result["https_proxy"])
+        assertEquals("/x/cacert.pem", result["SSL_CERT_FILE"])
+        assertEquals("/x/cacert.pem", result["CODEX_CA_CERTIFICATE"])
+        assertFalse(result.containsKey("CODEX_SANDBOX"))
+    }
+
+    @Test
+    fun `redaction removes credentials and device codes`() {
+        val safe = SecretRedactor.redact(
+            "https://auth.openai.com/?token=abc Bearer abcdefghijkl sk-secret1234 user_code=ABCD-1234 Cookie: sid=private"
+        )
+        assertFalse(safe.contains("abcdefghijkl"))
+        assertFalse(safe.contains("sk-secret1234"))
+        assertFalse(safe.contains("ABCD-1234"))
+        assertFalse(safe.contains("sid=private"))
+        assertTrue(safe.contains("auth.openai.com"))
+    }
+}

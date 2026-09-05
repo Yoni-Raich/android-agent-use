@@ -8,6 +8,13 @@ A fully usable Android app with Codex chat, on-phone execution, per-session file
 - Existing APK Manager source reviewed. Reuse candidate: Kadb pairing, persistent identity, localhost connection, discovery.
 - Test device: Q8G64TD6ZTB6H6ZL, Android 13, ARM64. USB works; wireless debugging enabled. A shell-UID TCP connection to the current localhost ADB port succeeds. App-UID authenticated self-ADB remains unverified.
 - LUNA/MAX runtime feasibility work started. Native runtime support is a release gate.
+- 2026-09-06: Added the Android/Bionic localhost CONNECT proxy experiment and
+  pinned CA bundle. Unit tests pass; the dev APK builds and installs on Q8.
+  On Q8, the app-server process stays running and a real UI login request
+  produced two `CONNECT auth.openai.com:443` events and returned the browser
+  login state with a one-time code. No code or credential was stored in the
+  repository or logs. Full browser completion and signed-in chat are still
+  untested.
 
 ## Delivery gates
 - [ ] Private GitHub repo and repeatable build

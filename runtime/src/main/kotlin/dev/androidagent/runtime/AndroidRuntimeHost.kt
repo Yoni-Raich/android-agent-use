@@ -1,6 +1,8 @@
 package dev.androidagent.runtime
 
 import android.content.Context
+import android.util.Log
+import dev.androidagent.core.NetDiagnostics
 import dev.androidagent.core.RuntimeHost
 import dev.androidagent.core.RuntimePhase
 import dev.androidagent.core.RuntimeStatus
@@ -21,6 +23,14 @@ import java.io.File
  * - TMPDIR=<files>/runtime/tmp (sibling of home so CODEX_HOME is not under the
  *   system temp dir, which would break Codex arg0 alias setup in release builds)
  * - PATH=<nativeLibraryDir>:<files>/runtime/package/codex-path:/system/bin
+ * - HTTPS_PROXY/HTTP_PROXY (+lowercase) = http://127.0.0.1:<proxy-port>
+ *   served by a lifecycle-owned localhost CONNECT proxy (CONNECT only, port
+ *   443, strict host allowlist, blind byte tunnel, no TLS interception).
+ * - NO_PROXY/no_proxy=localhost,127.0.0.1
+ * - SSL_CERT_FILE + CODEX_CA_CERTIFICATE = <files>/runtime/cacert.pem
+ *   (pinned Mozilla CA bundle staged by tools/prepare_runtime.py; TLS
+ *   verification is never disabled).
+ * - CODEX_SANDBOX is always removed (seatbelt is a macOS sandbox).
  * - Launch: <nativeLibraryDir>/libcodex_app_server.so --listen stdio://
  *   (no `app-server` subcommand; the staged binary already is the app-server).
  *
@@ -67,8 +77,16 @@ class AndroidRuntimeHost(private val appContext: Context) : RuntimeHost {
     val nativeLibraryDirectory: File
         get() = File(appContext.applicationInfo.nativeLibraryDir)
 
+    /** App-private CA bundle staged from the APK asset (never a credential). */
+    val caBundleFile: File get() = File(runtimeRoot, "cacert.pem")
+
+    /** APK asset path of the pinned CA bundle (see tools/prepare_runtime.py). */
+    val caBundleAssetPath: String get() = "runtime/cacert.pem"
+
     private val lock = Mutex()
     private var process: Process? = null
+    private var proxy: LocalhostConnectProxy? = null
+    private val proxyEvents = ArrayDeque<String>()
     private var prepared = false
 
     override suspend fun prepare() {
@@ -89,19 +107,51 @@ class AndroidRuntimeHost(private val appContext: Context) : RuntimeHost {
                 error("Codex binary is not executable: ${binary.absolutePath}")
             }
             stopLocked()
-            setStatus(RuntimePhase.PREPARING, "Starting Codex app-server")
-            val started = withContext(Dispatchers.IO) {
-                ProcessBuilder(binary.absolutePath, "--listen", "stdio://")
-                    .directory(homeDirectory)
-                    .apply {
-                        environment().putAll(serverEnvironment(nativeLibraryDirectory))
-                        redirectErrorStream(false)
+            // The musl app-server cannot resolve DNS on Android, so every
+            // launch goes through the lifecycle-owned localhost CONNECT proxy
+            // below (Android/Bionic networking, blind TLS tunnel).
+            val proxyPort = withContext(Dispatchers.IO) { startProxyLocked() }
+            try {
+                val caPath = withContext(Dispatchers.IO) { stagedCaPath() }
+                if (!NetDiagnostics.isSandboxEnvSafe(System.getenv().orEmpty())) {
+                    Log.w(TAG, "host had CODEX_SANDBOX set; it is stripped for the app-server")
+                }
+                setStatus(RuntimePhase.PREPARING, "Starting Codex app-server")
+                val started = withContext(Dispatchers.IO) {
+                    val proxyUrl = "http://127.0.0.1:$proxyPort"
+                    val activeProxy = proxy
+                    if (activeProxy == null || !activeProxy.verifyListening()) {
+                        setStatus(RuntimePhase.ERROR, "Localhost proxy is not listening; refusing to spawn Codex")
+                        error("Localhost proxy is not listening; refusing to spawn Codex")
                     }
-                    .start()
+                    ProcessBuilder(binary.absolutePath, "--listen", "stdio://")
+                        .directory(homeDirectory)
+                        .apply {
+                            environment().putAll(
+                                NetDiagnostics.buildAppServerEnvironment(
+                                    serverEnvironment(nativeLibraryDirectory),
+                                    proxyUrl,
+                                    caPath
+                                )
+                            )
+                            // Belt and suspenders: the builder inherits the app
+                            // process env, so strip any sandbox key explicitly.
+                            environment().remove(NetDiagnostics.KEY_SANDBOX)
+                            redirectErrorStream(false)
+                        }
+                        .start()
+                }
+                process = started
+                setStatus(RuntimePhase.RUNNING, "Codex app-server running")
+                return started
+            } catch (failure: Throwable) {
+                withContext(Dispatchers.IO) {
+                    proxy?.stop()
+                    proxy = null
+                }
+                setStatus(RuntimePhase.ERROR, failure.message ?: "Could not start Codex app-server")
+                throw failure
             }
-            process = started
-            setStatus(RuntimePhase.RUNNING, "Codex app-server running")
-            return started
         }
     }
 
@@ -166,20 +216,75 @@ class AndroidRuntimeHost(private val appContext: Context) : RuntimeHost {
 
     private suspend fun stopLocked() {
         val current = process
+        val hadProxy = proxy != null
         process = null
-        if (current == null) {
-            if (prepared) setStatus(RuntimePhase.READY, "Codex runtime ready")
-            return
-        }
         withContext(Dispatchers.IO) {
-            current.destroy()
-            if (!waitForExit(current, 2_000_000_000L)) {
-                current.destroyForcibly()
-                waitForExit(current, 2_000_000_000L)
+            if (current != null) {
+                current.destroy()
+                if (!waitForExit(current, 2_000_000_000L)) {
+                    current.destroyForcibly()
+                    waitForExit(current, 2_000_000_000L)
+                }
             }
+            proxy?.stop()
+            proxy = null
         }
-        if (prepared) setStatus(RuntimePhase.READY, "Codex app-server stopped")
+        if (prepared && (current != null || hadProxy)) setStatus(RuntimePhase.READY, "Codex app-server stopped")
     }
+
+    /** Start one allowlisted loopback proxy for the supervised app-server. */
+    private fun startProxyLocked(): Int {
+        proxy?.stop()
+        val events = object : LocalhostConnectProxy.ProxyEventListener {
+            override fun onListening(port: Int) = recordProxyEvent("listening:$port")
+            override fun onAllowed(host: String, port: Int) = recordProxyEvent("CONNECT $host:$port")
+            override fun onDenied(host: String, port: Int, reason: String) =
+                recordProxyEvent("denied:${host.ifBlank { "unknown" }}:${if (port > 0) port else "-"}:$reason")
+            override fun onError(category: String) = recordProxyEvent("proxy-error:$category")
+            override fun onStopped() = recordProxyEvent("stopped")
+        }
+        val next = LocalhostConnectProxy(listener = events)
+        proxy = next
+        return runCatching { next.start() }.getOrElse {
+            proxy = null
+            throw IllegalStateException("Could not start localhost proxy", it)
+        }
+    }
+
+    /** Copy and validate the bundled PEM into app-private storage atomically. */
+    private fun stagedCaPath(): String {
+        if (caBundleFile.isFile && caBundleFile.length() > 0L &&
+            NetDiagnostics.validateCaPem(caBundleFile.readBytes()) != null
+        ) return caBundleFile.absolutePath
+        // A truncated file can remain after a killed process. Remove only this
+        // known app-private path and rebuild it from the verified APK asset.
+        caBundleFile.delete()
+        val partial = File(runtimeRoot, "cacert.pem.part")
+        runCatching {
+            appContext.assets.open(caBundleAssetPath).use { input ->
+                partial.outputStream().use { output -> input.copyTo(output) }
+            }
+            val bytes = partial.readBytes()
+            require(NetDiagnostics.validateCaPem(bytes) != null) { "Bundled CA file is invalid" }
+            require(partial.renameTo(caBundleFile)) { "Could not install bundled CA file" }
+        }.getOrElse {
+            partial.delete()
+            throw IllegalStateException("Could not stage bundled CA file", it)
+        }
+        return caBundleFile.absolutePath
+    }
+
+    private fun recordProxyEvent(event: String) {
+        synchronized(proxyEvents) {
+            if (proxyEvents.size >= MAX_PROXY_EVENTS) proxyEvents.removeFirst()
+            proxyEvents.addLast(event)
+        }
+        if (event.startsWith("CONNECT ")) Log.i(TAG, event)
+        else if (event.startsWith("proxy-error:")) Log.w(TAG, event)
+    }
+
+    /** Recent metadata only: host:port/status, never tunnel bytes or secrets. */
+    fun recentProxyEvents(): List<String> = synchronized(proxyEvents) { proxyEvents.toList() }
 
     private fun resolveServerBinary(): File? {
         val dir = nativeLibraryDirectory
@@ -290,6 +395,8 @@ class AndroidRuntimeHost(private val appContext: Context) : RuntimeHost {
     }
 
     companion object {
+        private const val TAG = "AndroidRuntimeHost"
+        private const val MAX_PROXY_EVENTS = 64
         const val SERVER_LIB_NAME = "libcodex_app_server.so"
         private val SERVER_LIB_CANDIDATES = arrayOf(
             SERVER_LIB_NAME,

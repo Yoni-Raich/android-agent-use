@@ -66,7 +66,7 @@ class MainActivity : ComponentActivity() {
         onLogout = { model.logout() },
         onRefreshAccount = { model.refreshAccount() },
         onOpenWirelessSettings = { startActivity(Intent("android.settings.WIRELESS_DEBUGGING_SETTINGS")) },
-        onOverlayPermission = { startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))) },
+        onOpenOverlayPermission = { startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))) },
         onDisconnect = { model.disconnect() },
         onForgetPairing = { model.forgetPairing() },
         onPair = { code, port -> model.pair(code, port) },

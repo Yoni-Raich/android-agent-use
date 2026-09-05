@@ -94,6 +94,8 @@ interface ControlOverlay {
     suspend fun show(status: String)
     fun update(status: String)
     fun hide()
+    /** Move the compact control card away from a planned device coordinate. */
+    fun avoidTouch(x: Int, y: Int) {}
     /** Temporarily removes the overlay from screenshots/UI hierarchy capture. */
     suspend fun setCaptureHidden(hidden: Boolean) {}
 }
