@@ -17,7 +17,7 @@ A fully usable Android app with Codex chat, on-phone execution, per-session file
   untested.
 
 ## Delivery gates
-- [ ] Private GitHub repo and repeatable build
+- [x] Private GitHub repo and repeatable build
 - [ ] Native chat and durable sessions/files
 - [ ] Real Codex sign-in and streamed conversation on the phone
 - [ ] Same-phone wireless ADB pair/connect/reconnect
