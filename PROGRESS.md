@@ -70,7 +70,7 @@ Record actual commands and results. Mark untested features explicitly. Do not re
 - 2026-09-06: Reproduced the phone error where Codex looked for
   `nativeLibraryDir/codex-code-mode-host` although the APK only contained a
   `.so` helper. The runtime staging step now patches the pinned app-server's
-  helper lookup to `codex-code-mode.so`, which Android extracts and the
+  helper lookup to `codex-code-mode-x.so`, which Android extracts and the
   emulator can execute directly. `prepare_runtime.py`, APK assembly,
   installation, and direct helper `--help` execution passed. The full
   x86_64 app-server still exits with `SIGSYS` on the TV emulator, and the

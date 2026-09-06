@@ -19,7 +19,7 @@ The MVP permits one active agent run per phone. A session has its own working di
 
 Codex app-server is preferred over parsing terminal UI output. The model remains a cloud service; the agent process and workspace live on the phone. The APK packages the official ARM64 and x86_64 Linux-musl app-server variants, and Android selects the matching native library directory. The x86_64 emulator now avoids ARM translation, but its app-process launch currently exits with `SIGSYS` (exit code 159), so emulator runtime support remains unproven.
 
-The Android APK stages the code-mode helper as `codex-code-mode.so`, because
+The Android APK stages the code-mode helper as `codex-code-mode-x.so`, because
 Android extracts `.so` entries into `nativeLibraryDir` but does not preserve a
 no-extension executable there. The staging script patches the helper-name
 lookup in the pinned app-server copy to this exact filename and fails closed

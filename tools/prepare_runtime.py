@@ -63,7 +63,7 @@ LIB_MAPPING = {
     # Android's native-library packaging accepts .so files, but does not
     # preserve an executable with no extension. The app-server is patched at
     # staging time to request this exact name from nativeLibraryDir.
-    "bin/codex-code-mode-host": "codex-code-mode.so",
+    "bin/codex-code-mode-host": "codex-code-mode-x.so",
     "codex-path/rg": "libcodex_rg.so",
     "codex-resources/bwrap": "libcodex_bwrap.so",
     "codex-resources/zsh/bin/zsh": "libcodex_zsh.so",
@@ -73,7 +73,7 @@ EM_AARCH64 = 183
 EM_X86_64 = 62
 ELF_MAGIC = b"\x7fELF"
 CODE_MODE_HOST_NAME = b"codex-code-mode-host"
-CODE_MODE_HOST_ANDROID_NAME = b"codex-code-mode.so"
+CODE_MODE_HOST_ANDROID_NAME = b"codex-code-mode-x.so"
 
 
 def fail(message: str) -> "NoReturn":  # type: ignore[name-defined]
@@ -202,10 +202,14 @@ def patch_code_mode_host_lookup(path: str) -> None:
     from the APK when they have a ``.so`` suffix, so the exact sibling cannot
     exist in ``nativeLibraryDir``. The final occurrence is the compiled
     install-context constant; the earlier occurrence is user-facing error
-    text and must remain unchanged. Fail closed if the pinned binary layout
-    changes instead of silently patching an unknown string.
+    text and must remain unchanged. The Rust string is stored adjacent to
+    other read-only data, so the replacement must have the exact same width:
+    padding with NUL bytes would make them part of the Path and cause process
+    spawning to fail. Fail closed if the pinned binary layout changes instead
+    of silently patching an unknown string.
     """
-    data = bytearray(open(path, "rb").read())
+    with open(path, "rb") as handle:
+        data = bytearray(handle.read())
     positions: list[int] = []
     start = 0
     while True:
@@ -219,13 +223,14 @@ def patch_code_mode_host_lookup(path: str) -> None:
             "expected two code-mode host strings in pinned app-server, found %d: %s"
             % (len(positions), path)
         )
-    if len(CODE_MODE_HOST_ANDROID_NAME) > len(CODE_MODE_HOST_NAME):
-        fail("Android code-mode host alias is longer than upstream name")
+    if len(CODE_MODE_HOST_ANDROID_NAME) != len(CODE_MODE_HOST_NAME):
+        fail("Android code-mode host alias must have the same length as upstream name")
+    if b"\0" in CODE_MODE_HOST_ANDROID_NAME:
+        fail("Android code-mode host alias contains an embedded NUL")
     position = positions[-1]
-    replacement = CODE_MODE_HOST_ANDROID_NAME + b"\0" * (
-        len(CODE_MODE_HOST_NAME) - len(CODE_MODE_HOST_ANDROID_NAME)
-    )
-    data[position : position + len(CODE_MODE_HOST_NAME)] = replacement
+    data[position : position + len(CODE_MODE_HOST_NAME)] = CODE_MODE_HOST_ANDROID_NAME
+    if b"\0" in data[position : position + len(CODE_MODE_HOST_NAME)]:
+        fail("patched code-mode host lookup contains an embedded NUL")
     with open(path, "wb") as handle:
         handle.write(data)
     print(
@@ -308,7 +313,7 @@ def stage_assets(
         "notes": (
             "The official rust-v0.153.4 app-server is staged with an in-place "
             "helper-name patch: its final code-mode host lookup uses "
-            "codex-code-mode.so, the .so entry Android extracts into "
+            "codex-code-mode-x.so, the .so entry Android extracts into "
             "nativeLibraryDir. The original package archive is unchanged; "
             "rg/zsh/bwrap discovery remains best effort. No device success is "
             "claimed by this script."
