@@ -138,6 +138,8 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import dev.androidagent.core.ChatMessage
 import dev.androidagent.core.ConnectionPhase
 import dev.androidagent.core.EngineEvent
+import dev.androidagent.app.update.AppUpdateInfo
+import dev.androidagent.app.update.UpdateStatus
 import dev.androidagent.core.RunPhase
 import dev.androidagent.core.RuntimePhase
 import kotlinx.coroutines.flow.collectLatest
@@ -623,6 +625,18 @@ private fun AgentChatContent(
         if (state.infoMessage != null) {
             item(key = "info") { InfoBanner(state.infoMessage) }
         }
+        val updateInfo = state.updateInfo
+        if (updateInfo?.isUpdateAvailable == true && state.isUpdateBannerVisible) {
+            item(key = "update-banner") {
+                UpdateBanner(
+                    info = updateInfo,
+                    status = state.updateStatus,
+                    onDownload = actions.onDownloadUpdate,
+                    onInstall = actions.onInstallUpdate,
+                    onDismiss = actions.onDismissUpdateBanner,
+                )
+            }
+        }
 
         if (state.statusCards.isNotEmpty()) {
             items(state.statusCards, key = { "status-${it.id}" }) { card -> StatusCard(card) }
@@ -1031,6 +1045,81 @@ private fun InfoBanner(message: String) {
         Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
             Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun UpdateBanner(
+    info: AppUpdateInfo,
+    status: UpdateStatus,
+    onDownload: () -> Unit,
+    onInstall: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.88f),
+    ) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.ArrowUpward, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "Update available: v${info.latestVersionName}",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
+                    Icon(Icons.Default.Close, contentDescription = "Dismiss update", tint = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.size(16.dp))
+                }
+            }
+            if (info.releaseNotes.isNotBlank()) {
+                Text(
+                    info.releaseNotes.take(150) + if (info.releaseNotes.length > 150) "…" else "",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.85f),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            when (status) {
+                is UpdateStatus.Downloading -> {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        LinearProgressIndicator(
+                            progress = { status.progress },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Text(
+                            "Downloading: ${(status.progress * 100).toInt()}%",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        )
+                    }
+                }
+                is UpdateStatus.ReadyToInstall -> {
+                    Button(
+                        onClick = onInstall,
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Install update")
+                    }
+                }
+                else -> {
+                    Button(
+                        onClick = onDownload,
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        val sizeStr = if (info.apkSize > 0) " (${info.apkSize / (1024 * 1024)} MB)" else ""
+                        Text("Update now$sizeStr")
+                    }
+                }
+            }
         }
     }
 }
@@ -1499,6 +1588,65 @@ private fun AgentSettingsSheet(state: AgentUiState, actions: AgentUiActions) {
                     Icon(Icons.Default.FolderOpen, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
                     Text("Open workspace files")
+                }
+            }
+
+            SettingsSection(title = "Updates", icon = Icons.Default.Refresh) {
+                StatusLine(
+                    title = "Version ${dev.androidagent.app.BuildConfig.VERSION_NAME}",
+                    detail = when (val s = state.updateStatus) {
+                        is UpdateStatus.Checking -> "Checking for updates…"
+                        is UpdateStatus.UpToDate -> "App is up to date (${s.currentVersion})"
+                        is UpdateStatus.Available -> "New version v${s.info.latestVersionName} available"
+                        is UpdateStatus.Downloading -> "Downloading update: ${(s.progress * 100).toInt()}%"
+                        is UpdateStatus.ReadyToInstall -> "Update downloaded and ready to install"
+                        is UpdateStatus.Error -> "Check failed: ${s.message}"
+                        UpdateStatus.Idle -> state.updateInfo?.let {
+                            if (it.isUpdateAvailable) "Update v${it.latestVersionName} available" else "Up to date"
+                        } ?: "Check GitHub for new releases"
+                    },
+                    color = when (state.updateStatus) {
+                        is UpdateStatus.Available, is UpdateStatus.ReadyToInstall -> MaterialTheme.colorScheme.secondary
+                        is UpdateStatus.Error -> MaterialTheme.colorScheme.error
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+                if (state.updateStatus is UpdateStatus.Downloading) {
+                    val dl = state.updateStatus as UpdateStatus.Downloading
+                    LinearProgressIndicator(
+                        progress = { dl.progress },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                if (state.updateStatus is UpdateStatus.ReadyToInstall) {
+                    Button(
+                        onClick = actions.onInstallUpdate,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Install update")
+                    }
+                } else if (state.updateStatus is UpdateStatus.Available || (state.updateInfo?.isUpdateAvailable == true && state.updateStatus !is UpdateStatus.Downloading)) {
+                    Button(
+                        onClick = actions.onDownloadUpdate,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Download update")
+                    }
+                }
+                OutlinedButton(
+                    onClick = actions.onCheckForUpdates,
+                    enabled = state.updateStatus !is UpdateStatus.Checking && state.updateStatus !is UpdateStatus.Downloading,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    if (state.updateStatus is UpdateStatus.Checking) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Checking…")
+                    } else {
+                        Icon(Icons.Default.Refresh, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Check for updates")
+                    }
                 }
             }
             Spacer(Modifier.height(12.dp))

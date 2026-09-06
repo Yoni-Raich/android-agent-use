@@ -1,5 +1,7 @@
 package dev.androidagent.app.ui
 
+import dev.androidagent.app.update.AppUpdateInfo
+import dev.androidagent.app.update.UpdateStatus
 import dev.androidagent.core.AccountStatus
 import dev.androidagent.core.AgentModel
 import dev.androidagent.core.AdbEndpoint
@@ -81,6 +83,9 @@ data class AgentUiState(
     val workspaceError: String? = null,
     val errorMessage: String? = null,
     val infoMessage: String? = null,
+    val updateStatus: UpdateStatus = UpdateStatus.Idle,
+    val updateInfo: AppUpdateInfo? = null,
+    val isUpdateBannerVisible: Boolean = true,
 )
 
 /**
@@ -118,6 +123,11 @@ data class AgentUiActions(
     val onOpenWorkspaceFiles: () -> Unit = {},
     val onOpenWorkspaceFile: (WorkspaceFileItem) -> Unit = {},
     val onApproval: (requestId: String, allow: Boolean) -> Unit = { _, _ -> },
+    val onCheckForUpdates: () -> Unit = {},
+    val onDownloadUpdate: () -> Unit = {},
+    val onInstallUpdate: () -> Unit = {},
+    val onDismissUpdateBanner: () -> Unit = {},
+    val onOpenInstallPermission: () -> Unit = {},
 )
 
 internal fun EngineEvent.Approval.detailsText(): String = details.toString().removeSurrounding("{", "}")

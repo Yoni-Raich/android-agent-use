@@ -79,6 +79,11 @@ class MainActivity : ComponentActivity() {
         onOpenWorkspaceFiles = { model.listFiles() },
         onOpenWorkspaceFile = { item -> openFile(item) },
         onApproval = { _, allow -> model.graph.coordinator.approve(allow) },
+        onCheckForUpdates = { model.checkForUpdates(manual = true) },
+        onDownloadUpdate = { model.downloadUpdate() },
+        onInstallUpdate = { model.installUpdate() },
+        onDismissUpdateBanner = { model.dismissUpdateBanner() },
+        onOpenInstallPermission = { model.openInstallPermission() },
     )
     private fun openFile(item: WorkspaceFileItem) {
         runCatching {

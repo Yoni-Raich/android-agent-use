@@ -6,6 +6,7 @@ import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.androidagent.app.ui.*
+import dev.androidagent.app.update.*
 import dev.androidagent.core.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -14,6 +15,7 @@ import java.util.UUID
 
 class AgentViewModel(application: Application) : AndroidViewModel(application) {
     val graph = (application as AgentApplication).graph
+    val updateManager = AppUpdateManager(application)
     private val preferences = application.getSharedPreferences("ui", 0)
     private val current = MutableStateFlow<String?>(null)
     private val mutable = MutableStateFlow(
@@ -26,6 +28,9 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     private var setupJob: Job? = null
 
     init {
+        viewModelScope.launch {
+            try { checkForUpdates(manual = false) } catch (_: Exception) {}
+        }
         viewModelScope.launch {
             graph.sessions.sessions.collect { list ->
                 mutable.update { it.copy(sessions = list) }
@@ -230,6 +235,67 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         return file
     }
     fun error(message: String) { mutable.update { it.copy(errorMessage = message) } }
+    fun checkForUpdates(manual: Boolean = true) = task {
+        mutable.update { it.copy(updateStatus = UpdateStatus.Checking) }
+        try {
+            val info = updateManager.checkForUpdates()
+            if (info.isUpdateAvailable) {
+                val dismissedTag = preferences.getString("dismissed_update_tag", null)
+                val isDismissed = dismissedTag == info.latestTag
+                mutable.update { it.copy(updateStatus = UpdateStatus.Available(info), updateInfo = info, isUpdateBannerVisible = !isDismissed) }
+            } else {
+                mutable.update { it.copy(updateStatus = UpdateStatus.UpToDate(info.latestVersionName), updateInfo = info) }
+                if (manual) mutable.update { it.copy(infoMessage = "You have the latest version (${info.latestVersionName}).") }
+            }
+        } catch (e: Exception) {
+            if (manual) {
+                mutable.update { it.copy(updateStatus = UpdateStatus.Error(e.message ?: "Failed to check for updates")) }
+                error(e.message ?: "Failed to check for updates.")
+            } else {
+                // Background check stays silent on rate limit or network absence
+                mutable.update { it.copy(updateStatus = UpdateStatus.Idle) }
+            }
+        }
+    }
+    fun downloadUpdate() = task {
+        val info = mutable.value.updateInfo ?: return@task
+        mutable.update { it.copy(updateStatus = UpdateStatus.Downloading(0f, 0L, info.apkSize)) }
+        try {
+            val apk = updateManager.downloadUpdate(info) { progress, downloaded, total ->
+                mutable.update { it.copy(updateStatus = UpdateStatus.Downloading(progress, downloaded, total)) }
+            }
+            mutable.update { it.copy(updateStatus = UpdateStatus.ReadyToInstall(apk, info)) }
+        } catch (e: Exception) {
+            mutable.update { it.copy(updateStatus = UpdateStatus.Error(e.message ?: "Failed to download update")) }
+            error("Download failed: ${e.message}")
+        }
+    }
+    fun installUpdate() {
+        val status = mutable.value.updateStatus
+        val apk = (status as? UpdateStatus.ReadyToInstall)?.apkFile ?: return
+        val app = getApplication<Application>()
+        try {
+            if (!updateManager.canRequestPackageInstalls()) {
+                val intent = updateManager.createPermissionIntent()
+                app.startActivity(intent)
+                return
+            }
+            val intent = updateManager.createInstallIntent(apk)
+            app.startActivity(intent)
+        } catch (e: Exception) {
+            error("Could not start package installer: ${e.message}")
+        }
+    }
+    fun openInstallPermission() {
+        val app = getApplication<Application>()
+        runCatching { app.startActivity(updateManager.createPermissionIntent()) }
+            .onFailure { error("Could not open install settings: ${it.message}") }
+    }
+    fun dismissUpdateBanner() {
+        val tag = mutable.value.updateInfo?.latestTag
+        if (tag != null) preferences.edit().putString("dismissed_update_tag", tag).apply()
+        mutable.update { it.copy(isUpdateBannerVisible = false) }
+    }
     private fun parsePort(value: String): Int = value.trim().toIntOrNull()?.takeIf { it in 1..65535 } ?: kotlin.error("Enter a port from 1 to 65535.")
     private fun task(block: suspend () -> Unit): Job = viewModelScope.launch {
         try { block() } catch (cancelled: CancellationException) { throw cancelled }
