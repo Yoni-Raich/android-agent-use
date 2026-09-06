@@ -87,3 +87,10 @@ Record actual commands and results. Mark untested features explicitly. Do not re
   shows a short terminal state, then removes itself and opens Android Agent.
   Core coordinator and overlay presentation tests pass. Overlay permission and
   visual behavior on the physical Q8 device remain NOT TESTED.
+- 2026-09-06: Wireless ADB now remembers only the last successful connect port
+  in app-private preferences. The foreground service retries that port, then
+  falls back to the locally advertised `_adb-tls-connect._tcp` service with
+  bounded backoff; pairing endpoints are never used for reconnect. Empty NSD
+  results expose an explicit Wireless Debugging off/on-waiting status. ADB
+  policy tests pass. Reconnect on Q8 remains NOT TESTED because the device is
+  not connected.

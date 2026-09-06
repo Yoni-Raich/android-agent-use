@@ -1,6 +1,7 @@
 package dev.androidagent.adb
 
 import android.content.Context
+import android.provider.Settings
 import com.flyfishxu.kadb.Kadb
 import com.flyfishxu.kadb.cert.KadbCert
 import com.flyfishxu.kadb.shell.AdbShellPacket
@@ -10,10 +11,14 @@ import dev.androidagent.core.AdbTransport
 import dev.androidagent.core.CommandResult
 import dev.androidagent.core.ConnectionPhase
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -54,20 +59,53 @@ class AndroidAdbTransport(context: Context) : AdbTransport, AdbFileTransport {
     private var activeJob: Job? = null
     private var generation = 0L
     private var connectedPort: Int? = null
+    private val preferences = appContext.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
+    private val reconnectLock = Any()
+    private var reconnectJob: Job? = null
 
     override val status: StateFlow<AdbStatus> = _status.asStateFlow()
+
+    /**
+     * Keep the last successful connect port and rediscover it while the app's
+     * foreground service is alive. Discovery uses Android NSD only; it never
+     * probes arbitrary LAN addresses.
+     */
+    fun startAutoReconnect(scope: CoroutineScope) {
+        synchronized(reconnectLock) {
+            if (reconnectJob?.isActive == true) return
+            val job = scope.launch(Dispatchers.IO) { reconnectLoop() }
+            reconnectJob = job
+            job.invokeOnCompletion {
+                synchronized(reconnectLock) {
+                    if (reconnectJob === job) reconnectJob = null
+                }
+            }
+        }
+    }
+
+    fun stopAutoReconnect() {
+        synchronized(reconnectLock) {
+            reconnectJob?.cancel()
+            reconnectJob = null
+        }
+    }
 
     override suspend fun discover(): List<AdbEndpoint> {
         setStatus(ConnectionPhase.DISCOVERING, "Looking for Wireless Debugging services", null)
         return try {
             val services = AdbServiceDiscovery(appContext).discover()
-            services.map { AdbEndpoint(it.port, it.serviceNameTypeIsPairing(), LOOPBACK) }
+            services.map { AdbEndpoint(it.port, it.isPairingService(), LOOPBACK) }
                 .distinctBy { Triple(it.port, it.pairing, it.host) }
                 .sortedWith(compareBy<AdbEndpoint> { it.pairing }.thenBy { it.port })
                 .also {
                     val current = status.value
                     if (current.phase == ConnectionPhase.DISCOVERING) {
-                        setStatus(ConnectionPhase.DISCONNECTED, "Discovery complete", connectedPort)
+                        val message = if (it.isEmpty()) {
+                            AdbReconnectPolicy.noServiceMessage(wirelessDebuggingEnabled())
+                        } else {
+                            "Discovery complete"
+                        }
+                        setStatus(ConnectionPhase.DISCONNECTED, message, connectedPort)
                     }
                 }
         } catch (e: CancellationException) {
@@ -149,6 +187,7 @@ class AndroidAdbTransport(context: Context) : AdbTransport, AdbFileTransport {
                     client = newClient
                     connectedPort = port
                     _status.value = AdbStatus(ConnectionPhase.CONNECTED, "Connected to $LOOPBACK:$port", port)
+                    preferences.edit().putInt(KEY_CONNECT_PORT, port).apply()
                 }
                 newClient = null
             } catch (e: CancellationException) {
@@ -163,6 +202,100 @@ class AndroidAdbTransport(context: Context) : AdbTransport, AdbFileTransport {
             }
         }
     }
+
+    private suspend fun reconnectLoop() {
+        var attempt = 0
+        while (currentCoroutineContext().isActive) {
+            if (status.value.phase == ConnectionPhase.CONNECTED) {
+                attempt = 0
+                delay(RECONNECT_CONNECTED_DELAY_MS)
+                continue
+            }
+
+            val wirelessEnabled = wirelessDebuggingEnabled()
+            if (wirelessEnabled == false) {
+                setStatus(ConnectionPhase.DISCONNECTED, AdbReconnectPolicy.noServiceMessage(false), null)
+                attempt++
+                delay(AdbReconnectPolicy.retryDelayMs(attempt))
+                continue
+            }
+
+            // A new install must be paired by the user first. In particular,
+            // do not generate a fresh identity just because NSD advertises a
+            // connect port; that would also make Forget Pairing ineffective
+            // while this loop is between discovery and connect.
+            if (!hasStoredIdentity()) {
+                setStatus(ConnectionPhase.DISCONNECTED, "Pair this phone once to enable automatic reconnect", null)
+                attempt = 0
+                delay(RECONNECT_CONNECTED_DELAY_MS)
+                continue
+            }
+
+            val savedPort = savedConnectPort()
+            var connected = false
+            if (savedPort != null) {
+                connected = tryReconnect(savedPort)
+            }
+            if (!connected && currentCoroutineContext().isActive) {
+                val endpoints = discover()
+                val target = if (savedPort == null) {
+                    AdbReconnectPolicy.preferredConnectPort(null, endpoints)
+                } else {
+                    AdbReconnectPolicy.fallbackConnectPort(savedPort, endpoints)
+                }
+                if (target != null) {
+                    connected = tryReconnect(target)
+                }
+            }
+            if (connected) {
+                attempt = 0
+                continue
+            }
+
+            setStatus(
+                ConnectionPhase.DISCONNECTED,
+                AdbReconnectPolicy.noServiceMessage(wirelessDebuggingEnabled()),
+                savedPort,
+            )
+            delay(AdbReconnectPolicy.retryDelayMs(attempt))
+            attempt++
+        }
+    }
+
+    private suspend fun tryReconnect(port: Int): Boolean {
+        if (!hasStoredIdentity()) return false
+        return try {
+            connect(port)
+            true
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun savedConnectPort(): Int? =
+        preferences.getInt(KEY_CONNECT_PORT, -1).takeIf { AdbServiceDiscovery.isValidAdbPort(it) }
+
+    private fun hasStoredIdentity(): Boolean {
+        val directory = identityDirectory()
+        return File(directory, CERTIFICATE_FILE).isFile &&
+            File(directory, PRIVATE_KEY_FILE).isFile &&
+            File(directory, CERTIFICATE_FILE).length() > 0 &&
+            File(directory, PRIVATE_KEY_FILE).length() > 0
+    }
+
+    private fun wirelessDebuggingEnabled(): Boolean? = runCatching {
+        Settings.Global.getString(appContext.contentResolver, WIRELESS_DEBUGGING_SETTING)
+            ?.trim()
+            ?.let { value ->
+                when (value) {
+                    "1", "true" -> true
+                    "0", "false" -> false
+                    else -> null
+                }
+            }
+    }.getOrNull()
 
     override suspend fun execute(command: String, timeoutMs: Long): CommandResult {
         requireCommand(command)
@@ -264,6 +397,7 @@ class AndroidAdbTransport(context: Context) : AdbTransport, AdbFileTransport {
                 clearKadbCertMemory()
                 identityReady = false
             }
+            preferences.edit().remove(KEY_CONNECT_PORT).apply()
         }
     }
 
@@ -415,12 +549,15 @@ class AndroidAdbTransport(context: Context) : AdbTransport, AdbFileTransport {
     private fun safeMessage(error: Throwable, fallback: String): String =
         error.message?.trim()?.takeIf { it.isNotEmpty() } ?: fallback
 
-    private fun DiscoveredAdbService.serviceNameTypeIsPairing(): Boolean =
-        serviceName.startsWith("pairing-", ignoreCase = true) ||
-            serviceName.contains("_adb-tls-pairing", ignoreCase = true)
+    private fun DiscoveredAdbService.isPairingService(): Boolean =
+        serviceType.trimEnd('.') == AdbServiceDiscovery.SERVICE_TYPE_PAIRING.trimEnd('.')
 
     companion object {
         const val DEFAULT_TIMEOUT_MS = 30_000L
+        private const val PREFERENCES_NAME = "adb_transport"
+        private const val KEY_CONNECT_PORT = "last_connect_port"
+        private const val WIRELESS_DEBUGGING_SETTING = "adb_wifi_enabled"
+        private const val RECONNECT_CONNECTED_DELAY_MS = 5_000L
         private const val MAX_TIMEOUT_MS = 120_000L
         private const val MAX_TEXT_CHARS = 1_000_000
         private const val MAX_BINARY_BYTES = 32 * 1024 * 1024

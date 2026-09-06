@@ -96,13 +96,25 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     fun model(value: String) { preferences.edit().putString("model", value).apply(); mutable.update { it.copy(selectedModel = value) } }
     fun discover() = task {
         mutable.update { it.copy(isDiscoveringAdb = true) }
-        try { val values = graph.adb.discover(); mutable.update { it.copy(discoveredEndpoints = values, infoMessage = if (values.isEmpty()) "Open Wireless Debugging in Android Settings, then try again." else null) } }
+        try {
+            val values = graph.adb.discover()
+            mutable.update {
+                it.copy(
+                    discoveredEndpoints = values,
+                    infoMessage = if (values.isEmpty()) graph.adb.status.value.message else null,
+                )
+            }
+        }
         finally { mutable.update { it.copy(isDiscoveringAdb = false) } }
     }
     fun pair(code: String, port: String) = task {
         check(!graph.coordinator.state.value.active) { "Stop the current run before changing the connection." }
         mutable.update { it.copy(isPairing = true) }
-        try { graph.adb.pair(parsePort(port), code.trim()); mutable.update { it.copy(infoMessage = "Paired. Connect using the main Wireless Debugging port.") }; discover() }
+        try {
+            graph.adb.pair(parsePort(port), code.trim())
+            mutable.update { it.copy(infoMessage = "Paired. Looking for the Wireless Debugging connect port…") }
+            discover()
+        }
         finally { mutable.update { it.copy(isPairing = false) } }
     }
     fun connect(port: String) = task {

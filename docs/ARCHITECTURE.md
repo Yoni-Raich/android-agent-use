@@ -17,6 +17,14 @@ A model change is configuration. An engine change replaces the engine adapter. R
 
 The MVP permits one active agent run per phone. A session has its own working directory; this is organization, not a claim of OS-level isolation. Stop revokes dispatch first and interrupts active work next. Unknown raw shell requests are visible device control. The overlay is shown from run startup and carries explicit Starting, Thinking, Running, Controlling, Stopping, Done, and Error states. It remains the only touchable surface over the controlled app and returns to MainActivity after a terminal state.
 
+Wireless ADB stores only the last successful local connect port in app-private
+preferences. The foreground service runs a bounded reconnect loop: it tries
+that port first, then uses Android NSD's `_adb-tls-connect._tcp` result and
+ignores pairing services. No arbitrary LAN scan is used. A missing service is
+reported as Wireless Debugging off/on-waiting when Android exposes that state;
+the loop stays idle until the app has a stored pairing identity, and pairing
+codes are never requested by reconnect.
+
 Codex app-server is preferred over parsing terminal UI output. The model remains a cloud service; the agent process and workspace live on the phone. The APK packages the official ARM64 and x86_64 Linux-musl app-server variants, and Android selects the matching native library directory. The x86_64 emulator now avoids ARM translation, but its app-process launch currently exits with `SIGSYS` (exit code 159), so emulator runtime support remains unproven.
 
 The Android APK stages the code-mode helper as `codex-code-mode-x.so`, because

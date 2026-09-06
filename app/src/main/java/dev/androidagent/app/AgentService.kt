@@ -15,6 +15,7 @@ class AgentService : Service() {
         super.onCreate()
         getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(CHANNEL, "Agent activity", NotificationManager.IMPORTANCE_LOW))
         startForeground(101, notification(RunState()))
+        graph.adb.startAutoReconnect(scope)
         scope.launch { graph.coordinator.state.collectLatest { getSystemService(NotificationManager::class.java).notify(101, notification(it)) } }
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -25,6 +26,7 @@ class AgentService : Service() {
     override fun onTaskRemoved(rootIntent: Intent?) { graph.coordinator.stop(); stopSelf() }
     override fun onDestroy() {
         graph.coordinator.stop()
+        graph.adb.stopAutoReconnect()
         graph.scope.launch { runCatching { graph.engine.close() }; runCatching { graph.adb.disconnect() } }
         graph.overlay.hide()
         scope.cancel()
