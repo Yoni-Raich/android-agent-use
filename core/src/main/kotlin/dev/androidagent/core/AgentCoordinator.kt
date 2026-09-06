@@ -72,6 +72,9 @@ class AgentCoordinator(
         model: String?,
     ) {
         try {
+            // Keep the control surface visible for the whole active run. This
+            // also checks overlay permission before Codex can request a device action.
+            overlay.showState(OverlayState(OverlayPhase.STARTING))
             sessions.append(message(sessionId, "user", prompt, attachments = images.map { it.absolutePath }))
             val session = sessions.getSession(sessionId) ?: error("Chat no longer exists")
             if (session.title == "New chat") sessions.rename(sessionId, prompt.take(48).ifBlank { "Image chat" })
@@ -100,6 +103,7 @@ class AgentCoordinator(
                 ensureCurrentLocked(token)
                 mutableState.value = state.value.copy(phase = RunPhase.THINKING, status = "Thinking")
             }
+            overlay.updateState(OverlayState(OverlayPhase.THINKING))
             beginTurn(token)
             val startedTurn = engine.startTurn(openedThread, prompt, images)
             if (!activateTurn(token, startedTurn)) return
@@ -183,7 +187,7 @@ class AgentCoordinator(
             result
         }
         tools.revoke()
-        overlay.hide()
+        runCatching { overlay.updateState(OverlayState(OverlayPhase.STOPPING)) }
         context.runJob?.cancel()
         scope.launch {
             withContext(NonCancellable) {
@@ -221,6 +225,7 @@ class AgentCoordinator(
                         mutableState.value = RunState(sessionId = context.snapshot.sessionId, status = "Stopped")
                     }
                 }
+                runCatching { overlay.finish(OverlayState(OverlayPhase.DONE, "Stopped")) }
             }
         }
     }
@@ -357,6 +362,11 @@ class AgentCoordinator(
                         val visible = tools.needsControl(event.name)
                         val capture = event.name == "read_ui" || event.name == "screenshot"
                         val status = event.name.replace('_', ' ')
+                        val overlayState = if (visible) {
+                            OverlayState(OverlayPhase.CONTROLLING, status)
+                        } else {
+                            OverlayState(OverlayPhase.RUNNING, status)
+                        }
                         var captureHidden = false
                         var result: ToolResult
                         try {
@@ -366,13 +376,15 @@ class AgentCoordinator(
                             }
                             if (visible) {
                                 val takeover = synchronized(lifecycleLock) { controlTakeover }
-                                if (takeover) overlay.update(status)
+                                if (takeover) overlay.updateState(overlayState)
                                 else {
-                                    overlay.show(status)
+                                    overlay.showState(overlayState)
                                     synchronized(lifecycleLock) {
                                         if (isCurrentTurnLocked(token, event.threadId.orEmpty(), event.turnId.orEmpty())) controlTakeover = true
                                     }
                                 }
+                            } else {
+                                overlay.updateState(overlayState)
                             }
                             ensureCurrentTurn(token, event.threadId.orEmpty(), event.turnId.orEmpty())
                             synchronized(lifecycleLock) {
@@ -388,6 +400,7 @@ class AgentCoordinator(
                             synchronized(lifecycleLock) {
                                 if (isCurrentTurnLocked(token, event.threadId.orEmpty(), event.turnId.orEmpty())) {
                                     mutableState.value = state.value.copy(phase = RunPhase.THINKING, controlling = false, status = "Thinking")
+                                    overlay.updateState(OverlayState(OverlayPhase.THINKING))
                                 }
                             }
                         }
@@ -399,11 +412,17 @@ class AgentCoordinator(
                 }
             }
             is EngineEvent.Activity -> synchronized(lifecycleLock) {
-                if (isCurrentLocked(epoch.get()) && !state.value.controlling) mutableState.value = state.value.copy(status = event.text)
+                if (isCurrentLocked(epoch.get()) && !state.value.controlling) {
+                    mutableState.value = state.value.copy(status = event.text)
+                    overlay.updateState(OverlayState(OverlayPhase.RUNNING, event.text))
+                }
             }
             is EngineEvent.Approval -> {
                 if (approvalMatches(event)) {
-                    synchronized(lifecycleLock) { mutableState.value = state.value.copy(approval = event, status = "Waiting for your approval") }
+                    synchronized(lifecycleLock) {
+                        mutableState.value = state.value.copy(approval = event, status = "Waiting for your approval")
+                        overlay.updateState(OverlayState(OverlayPhase.RUNNING, "Waiting for approval"))
+                    }
                 } else {
                     runCatching { engine.answerApproval(event.requestId, false) }
                 }
@@ -486,11 +505,17 @@ class AgentCoordinator(
         } ?: return
         final.flush?.let { job -> runCatching { withTimeout(1_000) { job.join() } } }
         runCatching { tools.revoke() }
-        runCatching { overlay.hide() }
         runCatching { overlay.setCaptureHidden(false) }
         final.id?.let { id ->
             runCatching {
                 assistantFlushLock.withLock { sessions.updateMessage(id, final.text, final.outcome) }
+            }
+        }
+        val terminalOverlay = synchronized(lifecycleLock) {
+            when {
+                state.value.phase == RunPhase.ERROR -> OverlayState(OverlayPhase.ERROR, state.value.status)
+                final.outcome == "interrupted" -> OverlayState(OverlayPhase.DONE, "Interrupted")
+                else -> OverlayState(OverlayPhase.DONE)
             }
         }
         synchronized(lifecycleLock) {
@@ -511,6 +536,7 @@ class AgentCoordinator(
                 completion = null
             }
         }
+        runCatching { overlay.finish(terminalOverlay) }
     }
 
     private fun launchControl(block: suspend CoroutineScope.() -> Unit): Job {

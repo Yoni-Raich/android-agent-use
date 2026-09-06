@@ -22,6 +22,7 @@ class AgentCoordinatorTest {
         rig.coordinator.stop()
         assertTrue(rig.tools.revoked)
         assertEquals(RunPhase.STOPPING, rig.coordinator.state.value.phase)
+        assertTrue(rig.overlay.states.any { it.phase == OverlayPhase.STOPPING })
         rig.overlay.waitForShow!!.complete(Unit)
         runCurrent()
         assertEquals(0, rig.tools.executions)
@@ -29,6 +30,7 @@ class AgentCoordinatorTest {
         runCurrent()
         assertTrue(rig.engine.closed)
         assertFalse(rig.coordinator.state.value.active)
+        assertEquals(OverlayPhase.DONE, rig.overlay.finished.last().phase)
         rig.close()
     }
 
@@ -63,14 +65,30 @@ class AgentCoordinatorTest {
         val rig = Rig(this)
         rig.coordinator.send("one", "Read and tap")
         runCurrent()
+        assertEquals(1, rig.overlay.shown)
+        assertTrue(rig.overlay.states.any { it.phase == OverlayPhase.THINKING })
         rig.engine.emit(EngineEvent.ToolCall("read", "read_ui", buildJsonObject {}, "thread", "turn"))
         runCurrent()
-        assertEquals(0, rig.overlay.shown)
+        assertTrue(rig.overlay.states.any { it.phase == OverlayPhase.RUNNING && it.detail == "read ui" })
         rig.engine.emit(EngineEvent.ToolCall("tap", "tap", buildJsonObject {}, "thread", "turn"))
         runCurrent()
-        assertEquals(1, rig.overlay.shown)
+        assertTrue(rig.overlay.states.any { it.phase == OverlayPhase.CONTROLLING && it.detail == "tap" })
         assertEquals(listOf("read_ui", "tap"), rig.tools.names)
         assertTrue(rig.tools.controlWasVisible)
+        rig.close()
+    }
+
+    @Test fun completedRunShowsDoneThenReleasesOverlay() = runTest {
+        val rig = Rig(this)
+        rig.coordinator.send("one", "Finish this")
+        runCurrent()
+        rig.engine.emit(EngineEvent.TurnFinished("completed", threadId = "thread", turnId = "turn"))
+        runCurrent()
+
+        assertTrue(rig.overlay.states.any { it.phase == OverlayPhase.STARTING })
+        assertTrue(rig.overlay.states.any { it.phase == OverlayPhase.THINKING })
+        assertEquals(OverlayPhase.DONE, rig.overlay.finished.last().phase)
+        assertFalse(rig.overlay.visible)
         rig.close()
     }
 
@@ -82,7 +100,8 @@ class AgentCoordinatorTest {
         rig.engine.emit(EngineEvent.ToolCall("tap", "tap", buildJsonObject {}, "thread", "turn"))
         runCurrent()
         assertEquals(0, rig.tools.executions)
-        assertFalse(rig.engine.answers.last().success)
+        assertEquals(RunPhase.ERROR, rig.coordinator.state.value.phase)
+        assertEquals(OverlayPhase.ERROR, rig.overlay.finished.last().phase)
         rig.close()
     }
 
@@ -152,8 +171,13 @@ class AgentCoordinatorTest {
         var shown = 0
         var visible = false
         var fail = false
+        val states = mutableListOf<OverlayState>()
+        val finished = mutableListOf<OverlayState>()
         override suspend fun show(status: String) { if (fail) error("Overlay permission required"); waitForShow?.await(); shown++; visible = true }
         override fun update(status: String) = Unit
+        override suspend fun showState(state: OverlayState) { states += state; show(state.label) }
+        override fun updateState(state: OverlayState) { states += state; update(state.label) }
+        override fun finish(state: OverlayState) { finished += state; updateState(state); hide() }
         override fun hide() { visible = false }
     }
 }

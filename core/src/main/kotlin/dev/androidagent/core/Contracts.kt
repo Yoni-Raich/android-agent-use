@@ -82,6 +82,14 @@ enum class RunPhase { IDLE, STARTING, THINKING, TOOL, CONTROLLING, STOPPING, ERR
 data class RunState(val phase: RunPhase = RunPhase.IDLE, val sessionId: String? = null, val status: String = "Ready", val controlling: Boolean = false, val approval: EngineEvent.Approval? = null) {
     val active: Boolean get() = phase !in setOf(RunPhase.IDLE, RunPhase.ERROR)
 }
+enum class OverlayPhase { STARTING, THINKING, RUNNING, CONTROLLING, STOPPING, DONE, ERROR }
+data class OverlayState(val phase: OverlayPhase, val detail: String? = null) {
+    val label: String
+        get() = detail?.trim()?.takeIf { it.isNotEmpty() }?.let { "${phase.title} · $it" } ?: phase.title
+
+    private val OverlayPhase.title: String
+        get() = name.lowercase().replaceFirstChar { it.uppercase() }
+}
 interface DeviceToolGateway {
     val definitions: List<ToolDefinition>
     fun beginRun(runId: String, workspace: File)
@@ -94,6 +102,12 @@ interface ControlOverlay {
     suspend fun show(status: String)
     fun update(status: String)
     fun hide()
+    /** Show one explicit lifecycle state. Implementations may reuse an existing card. */
+    suspend fun showState(state: OverlayState) { show(state.label) }
+    /** Update the lifecycle state without changing which window owns the card. */
+    fun updateState(state: OverlayState) { update(state.label) }
+    /** Display the terminal state, then release the overlay. */
+    fun finish(state: OverlayState) { updateState(state); hide() }
     /** Move the compact control card away from a planned device coordinate. */
     fun avoidTouch(x: Int, y: Int) {}
     /** Temporarily removes the overlay from screenshots/UI hierarchy capture. */

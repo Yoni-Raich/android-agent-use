@@ -75,3 +75,15 @@ Record actual commands and results. Mark untested features explicitly. Do not re
   installation, and direct helper `--help` execution passed. The full
   x86_64 app-server still exits with `SIGSYS` on the TV emulator, and the
   ARM64 phone path remains unverified until Q8 is connected.
+- 2026-09-06: Unicode IME input now waits for Android to select the bundled
+  input method and expose an editor connection through `dumpsys input_method`.
+  The broadcast is retried only a bounded number of times and succeeds only
+  on result code 1; missing focus/IME state returns setup guidance and never
+  reports text as sent. Device-tools unit tests pass. Hebrew input on the
+  physical Q8 device remains NOT TESTED because it is not connected.
+- 2026-09-06: Floating control now starts at run startup and reports explicit
+  Starting, Thinking, Running, Controlling, Stopping, Done, and Error states.
+  The card keeps Stop and steering available, changes its status dot by phase,
+  shows a short terminal state, then removes itself and opens Android Agent.
+  Core coordinator and overlay presentation tests pass. Overlay permission and
+  visual behavior on the physical Q8 device remain NOT TESTED.

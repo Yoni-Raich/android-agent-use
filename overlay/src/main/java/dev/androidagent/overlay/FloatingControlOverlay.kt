@@ -30,6 +30,7 @@ import android.widget.TextView
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import dev.androidagent.core.ControlOverlay
+import dev.androidagent.core.OverlayState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -37,7 +38,7 @@ import kotlinx.coroutines.withTimeout
 import kotlin.coroutines.resume
 
 /**
- * Native floating controls used while an agent run has visible device control.
+ * Native floating controls used for the full lifetime of an agent run.
  *
  * The full-screen glow is a separate non-touchable window. The small card is
  * the only touchable area, so other apps keep receiving their own input.
@@ -62,11 +63,13 @@ class FloatingControlOverlay(
     private var inputView: EditText? = null
     private var controlParams: WindowManager.LayoutParams? = null
     private var glowParams: WindowManager.LayoutParams? = null
+    private var statusDot: View? = null
     private var configCallbacks: ComponentCallbacks? = null
     private var attachListener: View.OnAttachStateChangeListener? = null
     private var showing = false
     private var inputFocusEnabled = false
     private var captureHidden = false
+    private var finishRunnable: Runnable? = null
 
     override suspend fun show(status: String) {
         requireOverlayPermission()
@@ -76,7 +79,9 @@ class FloatingControlOverlay(
             requireOverlayPermission()
             val existing = controlRoot
             if (showing && existing != null) {
-                statusView?.text = status.ifBlank { "Ready" }
+                finishRunnable?.let(mainHandler::removeCallbacks)
+                finishRunnable = null
+                applyStatus(status)
                 glowRoot?.invalidate()
                 return@withContext
             }
@@ -105,8 +110,29 @@ class FloatingControlOverlay(
 
     override fun update(status: String) {
         runOnMain {
-            statusView?.text = status.ifBlank { "Ready" }
+            applyStatus(status)
             glowRoot?.invalidate()
+        }
+    }
+
+    override fun finish(state: OverlayState) {
+        runOnMain {
+            finishRunnable?.let(mainHandler::removeCallbacks)
+            finishRunnable = null
+            applyStatus(state.label)
+            glowRoot?.invalidate()
+            if (!showing) {
+                removeViews()
+                onOpenApp()
+                return@runOnMain
+            }
+            val callback = Runnable {
+                finishRunnable = null
+                removeViews()
+                onOpenApp()
+            }
+            finishRunnable = callback
+            mainHandler.postDelayed(callback, FINISH_DISPLAY_MS)
         }
     }
 
@@ -223,6 +249,7 @@ class FloatingControlOverlay(
             isClickable = false
             isFocusable = false
         }
+        statusDot = dot
         val title = TextView(appContext).apply {
             text = "Android Agent"
             setTextColor(onCard)
@@ -307,7 +334,7 @@ class FloatingControlOverlay(
         card.addView(row)
         root.addView(
             card,
-            FrameLayout.LayoutParams(dp(300), FrameLayout.LayoutParams.WRAP_CONTENT),
+            FrameLayout.LayoutParams(dp(320), FrameLayout.LayoutParams.WRAP_CONTENT),
         )
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
             val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
@@ -518,6 +545,8 @@ class FloatingControlOverlay(
     }
 
     private fun removeViews() {
+        finishRunnable?.let(mainHandler::removeCallbacks)
+        finishRunnable = null
         hideKeyboard()
         disableInputFocus()
         configCallbacks?.let {
@@ -537,6 +566,7 @@ class FloatingControlOverlay(
         controlRoot = null
         glowRoot = null
         statusView = null
+        statusDot = null
         inputView = null
         controlParams = null
         glowParams = null
@@ -599,6 +629,22 @@ class FloatingControlOverlay(
         if (Looper.myLooper() == Looper.getMainLooper()) action() else mainHandler.post(action)
     }
 
+    private fun applyStatus(status: String) {
+        val value = status.ifBlank { "Ready" }
+        statusView?.text = value
+        statusDot?.background = dotDrawable(statusColor(value))
+    }
+
+    private fun statusColor(status: String): Int {
+        return when (overlayTone(status)) {
+            OverlayTone.STOPPING -> Color.parseColor("#F2A65A")
+            OverlayTone.DONE -> Color.parseColor("#6EDC9A")
+            OverlayTone.ERROR -> Color.parseColor("#FF7188")
+            OverlayTone.CONTROLLING -> Color.parseColor("#B8C3FF")
+            OverlayTone.ACTIVE -> Color.parseColor("#9AA9FF")
+        }
+    }
+
     // ---------- small visual helpers ----------
 
     private fun isDark(): Boolean =
@@ -629,6 +675,10 @@ class FloatingControlOverlay(
         value,
         appContext.resources.displayMetrics,
     )
+
+    private companion object {
+        const val FINISH_DISPLAY_MS = 350L
+    }
 
     private class EdgeGlowView(context: Context, dark: Boolean) : View(context) {
         private val accent = if (dark) Color.rgb(106, 128, 255) else Color.rgb(65, 105, 225)
