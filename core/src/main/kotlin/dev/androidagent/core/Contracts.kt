@@ -110,6 +110,9 @@ data class VoiceState(
     val active: Boolean get() = phase !in setOf(VoicePhase.IDLE, VoicePhase.ERROR)
 }
 
+/** Transport used by a realtime voice session. WebRTC is the account-auth path. */
+enum class RealtimeTransport { WEBRTC, WEBSOCKET }
+
 /** PCM audio chunk used by the voice contract. The engine owns protocol encoding. */
 data class RealtimeAudioChunk(
     val data: ByteArray,
@@ -137,6 +140,9 @@ sealed interface VoiceEvent {
         val version: String? = null,
     ) : VoiceEvent
 
+    /** Remote SDP answer emitted by app-server for a WebRTC session. */
+    data class SdpAnswer(val threadId: String, val sdp: String) : VoiceEvent
+
     data class TranscriptDelta(val threadId: String, val role: String, val delta: String) : VoiceEvent
     data class TranscriptDone(val threadId: String, val role: String, val text: String) : VoiceEvent
     data class OutputAudio(val threadId: String, val audio: RealtimeAudioChunk) : VoiceEvent
@@ -149,7 +155,12 @@ interface RealtimeVoiceEngine {
     val voiceEvents: Flow<VoiceEvent>
     val voiceState: StateFlow<VoiceState>
 
-    suspend fun startVoice(threadId: String, model: String? = null)
+    suspend fun startVoice(
+        threadId: String,
+        model: String? = null,
+        transport: RealtimeTransport = RealtimeTransport.WEBSOCKET,
+        offerSdp: String? = null,
+    )
     suspend fun appendAudio(audio: RealtimeAudioChunk)
     suspend fun appendText(text: String, role: String = "user")
     suspend fun appendSpeech(text: String)

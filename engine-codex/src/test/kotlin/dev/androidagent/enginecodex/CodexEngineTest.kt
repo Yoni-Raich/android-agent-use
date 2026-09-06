@@ -88,7 +88,7 @@ class CodexEngineTest {
         assertFalse(automatic.containsKey("effort"))
     }
 
-    @Test fun realtimeStartUsesAudioAndLeavesTransportToAppServer() {
+    @Test fun realtimeStartUsesWebSocketV2ByDefault() {
         val params = CodexEngine.realtimeStartParams("thread-1", "voice-model")
 
         assertEquals("thread-1", params["threadId"]?.jsonPrimitive?.content)
@@ -97,6 +97,71 @@ class CodexEngineTest {
         assertEquals("true", params["flushTranscriptTailOnSessionEnd"]?.jsonPrimitive?.content)
         assertEquals("voice-model", params["model"]?.jsonPrimitive?.content)
         assertFalse(params.containsKey("transport"))
+    }
+
+    @Test fun realtimeStartUsesWebRtcV1AndSdpOffer() {
+        val params = CodexEngine.realtimeStartParams(
+            "thread-1",
+            null,
+            dev.androidagent.core.RealtimeTransport.WEBRTC,
+            "v=0\\r\\n...offer",
+        )
+
+        assertEquals("audio", params["outputModality"]?.jsonPrimitive?.content)
+        assertEquals("v1", params["version"]?.jsonPrimitive?.content)
+        assertEquals("webrtc", params["transport"]?.jsonObject?.get("type")?.jsonPrimitive?.content)
+        assertEquals("v=0\\r\\n...offer", params["transport"]?.jsonObject?.get("sdp")?.jsonPrimitive?.content)
+        assertFalse(params.containsKey("model"))
+    }
+
+    @Test fun realtimeStartRejectsMissingWebRtcOffer() {
+        try {
+            CodexEngine.realtimeStartParams(
+                "thread-1",
+                null,
+                dev.androidagent.core.RealtimeTransport.WEBRTC,
+                " ",
+            )
+            throw AssertionError("expected a missing WebRTC offer to be rejected")
+        } catch (_: IllegalArgumentException) {
+            // expected
+        }
+    }
+
+    @Test fun realtimeStartRejectsSdpOnWebSocketFallback() {
+        try {
+            CodexEngine.realtimeStartParams(
+                "thread-1",
+                null,
+                dev.androidagent.core.RealtimeTransport.WEBSOCKET,
+                "v=0",
+            )
+            throw AssertionError("expected WebSocket SDP to be rejected")
+        } catch (_: IllegalArgumentException) {
+            // expected
+        }
+    }
+
+    @Test fun realtimeSdpNotificationMapsToAnswerEvent() {
+        val event = CodexEngine.parseRealtimeSdp(
+            Json.parseToJsonElement(
+                """{"threadId":"thread-1","sdp":"v=0\\r\\n...answer"}"""
+            ).jsonObject
+        )
+
+        assertEquals("thread-1", event.threadId)
+        assertEquals("v=0\\r\\n...answer", event.sdp)
+    }
+
+    @Test fun realtimeSdpNotificationRejectsMissingAnswer() {
+        try {
+            CodexEngine.parseRealtimeSdp(
+                Json.parseToJsonElement("""{"threadId":"thread-1"}""").jsonObject
+            )
+            throw AssertionError("expected a missing SDP answer to be rejected")
+        } catch (_: IllegalArgumentException) {
+            // expected
+        }
     }
 
     @Test fun realtimeAudioParamsEncodeBytesAndParserRoundTripsThem() {

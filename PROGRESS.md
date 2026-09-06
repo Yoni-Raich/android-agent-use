@@ -277,3 +277,28 @@ Record actual commands and results. Mark untested features explicitly. Do not re
   - APK Signature Scheme v3 verified with local Android debug key.
   - Git tag: `v0.3.1`.
 
+## WebRTC realtime voice - 2026-09-07
+- Added the default native WebRTC voice transport for the pinned Codex
+  app-server. Android now creates a peer connection with a local microphone
+  track and `oai-events` data channel, sends a V1
+  `thread/realtime/start` request with the local SDP offer, and applies the
+  `thread/realtime/sdp` answer notification.
+- The existing app-server WebSocket PCM path remains available only through
+  explicit `RealtimeTransport.WEBSOCKET` selection. It stays on protocol V2
+  and keeps its API-key limitation; the app default is now WebRTC.
+- WebRTC uses the bundled native audio device module for microphone and
+  speaker media. It waits for the started event, SDP answer, and ICE
+  connection before enabling audio. Stop and startup failure paths mute and
+  close the media session and restore audio focus state.
+- Added protocol tests for WebRTC request shape, SDP notification mapping,
+  missing SDP rejection, and WebSocket/SDP mismatch rejection.
+- PASS: `./gradlew.bat test assembleDevDebugAndroidTest assembleDevDebug
+  :voice:lintDebug --no-daemon` (472 actionable tasks, 121 executed).
+- PASS: the built debug APK contains `libjingle_peerconnection_so.so` for
+  `arm64-v8a` and `x86_64`.
+- `:voice:lintDebug` reports only two existing dependency-update warnings.
+  Project-wide app lint was not run in this pass.
+- NOT TESTED: signed-in WebRTC negotiation, physical Q8 microphone/speaker
+  capture, latency, interruption, transcript accuracy, or voice device-tool
+  E2E. No install, visual check, commit, push, or release was made.
+

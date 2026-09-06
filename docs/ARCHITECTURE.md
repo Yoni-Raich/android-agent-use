@@ -74,10 +74,15 @@ Codex. They do not establish real runtime, device-control, or network success.
 
 Voice is isolated behind `RealtimeVoiceEngine` and the separate `voice` module.
 The pinned Codex 0.153.4 app-server remains the single JSON-RPC stdio process.
-The app starts `thread/realtime/start` with protocol V2 and lets app-server own
-its upstream WebSocket; Android does not connect directly to the OpenAI Realtime
-endpoint. WebRTC can be added later as another transport without changing chat,
-the coordinator, or Android audio capture.
+The default app path creates an Android WebRTC peer connection with a local
+microphone track and the `oai-events` data channel, then starts
+`thread/realtime/start` with `outputModality: "audio"`, protocol V1, and
+`transport: { type: "webrtc", sdp: "..." }`. App-server returns the remote
+answer through `thread/realtime/sdp`; the Android WebRTC audio device module
+handles the negotiated microphone and speaker media. V2 WebSocket voice remains
+available only as an explicit `RealtimeTransport.WEBSOCKET` fallback; it still
+needs API-key auth on the pinned app-server and does not fix the ChatGPT-account
+error.
 
 Realtime is enabled in the app-private `CODEX_HOME/config.toml` through a small
 startup migration. It adds only `[features] realtime_conversation = true`,
@@ -86,12 +91,14 @@ migration also repairs the comment-only config created by older builds. The
 app-server is restarted before a new voice thread is created; existing threads
 created while the feature was disabled are not retrofitted.
 
-Android records and plays signed PCM16, 24 kHz, mono audio. Capture uses bounded
-20 ms chunks and drops old queued audio under backpressure instead of growing
-memory. Recording starts only after `thread/realtime/started`. Echo cancellation,
-noise suppression, gain control, audio focus, and foreground microphone service
-state are used when Android supports them. Raw microphone audio is never saved;
-only finalized user and assistant transcripts enter the session store.
+The WebRTC path uses the bundled native WebRTC audio device module for live
+microphone capture and speaker playback, with hardware echo cancellation and
+noise suppression enabled when supported. It waits for `thread/realtime/started`,
+the SDP answer, and ICE connection before enabling the microphone. The explicit
+WebSocket fallback records and plays signed PCM16, 24 kHz, mono audio in bounded
+20 ms chunks. Both paths use audio focus and foreground microphone service state.
+Raw microphone audio and SDP are never saved or logged; only finalized user and
+assistant transcripts enter the session store.
 
 Realtime turns still pass through `AgentCoordinator`. A matching realtime turn
 may use the same device-tool gateway as typed chat. Local stop first revokes new

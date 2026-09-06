@@ -16,6 +16,7 @@ import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
 import androidx.core.content.ContextCompat
 import dev.androidagent.core.RealtimeAudioChunk
+import dev.androidagent.core.RealtimeTransport
 import dev.androidagent.core.RealtimeVoiceEngine
 import dev.androidagent.core.VoiceEvent
 import dev.androidagent.core.VoicePhase
@@ -46,6 +47,7 @@ class AndroidRealtimeVoiceController(
     context: Context,
     private val engine: RealtimeVoiceEngine,
     private val scope: CoroutineScope,
+    private val webRtcSessionFactory: (Context) -> RealtimeMediaSession = { WebRtcRealtimeAudioSession(it) },
 ) {
     private val app = context.applicationContext
     private val audioManager = app.getSystemService(AudioManager::class.java)
@@ -68,6 +70,11 @@ class AndroidRealtimeVoiceController(
     private var outputFrames: Channel<RealtimeAudioChunk>? = null
     private var focusRequest: AudioFocusRequest? = null
     private var startedSignal: CompletableDeferred<Unit>? = null
+    private var sdpSignal: CompletableDeferred<String>? = null
+    private var webRtcSession: RealtimeMediaSession? = null
+    private var activeTransport: RealtimeTransport = RealtimeTransport.WEBRTC
+    private var previousAudioMode: Int? = null
+    private var previousSpeakerphoneState: Boolean? = null
 
     init {
         scope.launch {
@@ -75,76 +82,113 @@ class AndroidRealtimeVoiceController(
         }
     }
 
-    suspend fun start(threadId: String, model: String? = null) {
-        val ready = lifecycle.withLock {
-            check(!state.value.active) { "A voice conversation is already active." }
-            check(
-                ContextCompat.checkSelfPermission(app, Manifest.permission.RECORD_AUDIO) ==
-                    PackageManager.PERMISSION_GRANTED
-            ) { "Microphone permission is required for voice." }
-
-            mutableState.value = VoiceState(VoicePhase.STARTING, "Connecting voice", threadId)
-            activeThreadId = threadId
-            requestAudioFocus()
-            val audioRecord = createRecorder()
-            recorder = audioRecord
-            enableInputEffects(audioRecord.audioSessionId)
-
-            val outgoing = Channel<RealtimeAudioChunk>(
-                capacity = FRAME_QUEUE_CAPACITY,
-                onBufferOverflow = BufferOverflow.DROP_OLDEST,
-            )
-            val incoming = Channel<RealtimeAudioChunk>(
-                capacity = FRAME_QUEUE_CAPACITY * 2,
-                onBufferOverflow = BufferOverflow.DROP_OLDEST,
-            )
-            inputFrames = outgoing
-            outputFrames = incoming
-            CompletableDeferred<Unit>().also { startedSignal = it }
-        }
+    suspend fun start(
+        threadId: String,
+        model: String? = null,
+        transport: RealtimeTransport = RealtimeTransport.WEBRTC,
+    ) {
+        val started = CompletableDeferred<Unit>()
+        val answer = if (transport == RealtimeTransport.WEBRTC) CompletableDeferred<String>() else null
+        var mediaSession: RealtimeMediaSession? = null
+        var remoteStarted = false
 
         try {
-            // V2 uses the app-server managed realtime WebSocket. This keeps the
-            // transport replaceable and avoids exposing account credentials.
-            engine.startVoice(threadId, model)
-            // The start RPC only means "accepted". Audio must wait for the
-            // separate thread/realtime/started notification.
-            withTimeout(VOICE_START_TIMEOUT_MS) { ready.await() }
             lifecycle.withLock {
-                check(activeThreadId == threadId && state.value.phase != VoicePhase.STOPPING) {
-                    "Voice start was cancelled."
-                }
-                val audioRecord = checkNotNull(recorder)
-                val outgoing = checkNotNull(inputFrames)
-                val incoming = checkNotNull(outputFrames)
-                audioRecord.startRecording()
-                check(audioRecord.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
-                    "Android could not start the microphone."
-                }
+                check(!state.value.active) { "A voice conversation is already active." }
+                check(
+                    ContextCompat.checkSelfPermission(app, Manifest.permission.RECORD_AUDIO) ==
+                        PackageManager.PERMISSION_GRANTED
+                ) { "Microphone permission is required for voice." }
 
-                senderJob = scope.launch(Dispatchers.IO) {
-                    try {
-                        for (chunk in outgoing) engine.appendAudio(chunk)
-                    } catch (cancelled: CancellationException) {
-                        throw cancelled
-                    } catch (error: Exception) {
-                        fail(threadId, error.message ?: "Could not send microphone audio.")
-                    }
+                mutableState.value = VoiceState(VoicePhase.STARTING, "Connecting voice", threadId)
+                activeThreadId = threadId
+                activeTransport = transport
+                requestAudioFocus()
+                startedSignal = started
+                sdpSignal = answer
+
+                if (transport == RealtimeTransport.WEBSOCKET) {
+                    val audioRecord = createRecorder()
+                    recorder = audioRecord
+                    enableInputEffects(audioRecord.audioSessionId)
+
+                    inputFrames = Channel(
+                        capacity = FRAME_QUEUE_CAPACITY,
+                        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+                    )
+                    outputFrames = Channel(
+                        capacity = FRAME_QUEUE_CAPACITY * 2,
+                        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+                    )
+                } else {
+                    mediaSession = webRtcSessionFactory(app)
+                    webRtcSession = mediaSession
                 }
-                captureJob = scope.launch(Dispatchers.IO) { capture(audioRecord, outgoing) }
-                playbackJob = scope.launch(Dispatchers.IO) {
-                    try {
-                        for (chunk in incoming) play(chunk)
-                    } catch (cancelled: CancellationException) {
-                        throw cancelled
-                    } catch (error: Exception) {
-                        fail(threadId, error.message ?: "Could not play voice audio.")
+            }
+
+            val offerSdp = if (transport == RealtimeTransport.WEBRTC) {
+                checkNotNull(mediaSession).createOffer()
+            } else {
+                null
+            }
+            engine.startVoice(threadId, model, transport, offerSdp)
+            remoteStarted = true
+
+            // The start RPC only means "accepted". Audio waits for the
+            // separate started notification and, for WebRTC, the SDP answer.
+            withTimeout(VOICE_START_TIMEOUT_MS) { started.await() }
+            if (transport == RealtimeTransport.WEBRTC) {
+                val remoteSdp = withTimeout(VOICE_START_TIMEOUT_MS) { checkNotNull(answer).await() }
+                checkNotNull(mediaSession).setRemoteAnswer(remoteSdp)
+                checkNotNull(mediaSession).awaitConnected()
+                lifecycle.withLock {
+                    check(activeThreadId == threadId && state.value.phase != VoicePhase.STOPPING) {
+                        "Voice start was cancelled."
                     }
+                    checkNotNull(mediaSession).startAudio()
+                    mutableState.value = VoiceState(VoicePhase.LISTENING, "Listening", threadId)
+                    startedSignal = null
+                    sdpSignal = null
                 }
-                mutableState.value = VoiceState(VoicePhase.LISTENING, "Listening", threadId)
-                startedSignal = null
+            } else {
+                lifecycle.withLock {
+                    check(activeThreadId == threadId && state.value.phase != VoicePhase.STOPPING) {
+                        "Voice start was cancelled."
+                    }
+                    val audioRecord = checkNotNull(recorder)
+                    val outgoing = checkNotNull(inputFrames)
+                    val incoming = checkNotNull(outputFrames)
+                    audioRecord.startRecording()
+                    check(audioRecord.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                        "Android could not start the microphone."
+                    }
+
+                    senderJob = scope.launch(Dispatchers.IO) {
+                        try {
+                            for (chunk in outgoing) engine.appendAudio(chunk)
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (error: Exception) {
+                            fail(threadId, error.message ?: "Could not send microphone audio.")
+                        }
+                    }
+                    captureJob = scope.launch(Dispatchers.IO) { capture(audioRecord, outgoing) }
+                    playbackJob = scope.launch(Dispatchers.IO) {
+                        try {
+                            for (chunk in incoming) play(chunk)
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (error: Exception) {
+                            fail(threadId, error.message ?: "Could not play voice audio.")
+                        }
+                    }
+                    mutableState.value = VoiceState(VoicePhase.LISTENING, "Listening", threadId)
+                    startedSignal = null
+                    sdpSignal = null
+                }
             }
         } catch (error: Exception) {
+            if (remoteStarted) runCatching { engine.stopVoice() }
             lifecycle.withLock {
                 if (activeThreadId == threadId) {
                     val wasStopping = state.value.phase == VoicePhase.STOPPING
@@ -190,11 +234,20 @@ class AndroidRealtimeVoiceController(
         when (event) {
             is VoiceEvent.Started -> if (event.threadId == activeThreadId) {
                 startedSignal?.complete(Unit)
-                mutableState.value = VoiceState(VoicePhase.LISTENING, "Listening", event.threadId)
+                if (activeTransport == RealtimeTransport.WEBSOCKET) {
+                    mutableState.value = VoiceState(VoicePhase.LISTENING, "Listening", event.threadId)
+                } else {
+                    mutableState.value = VoiceState(VoicePhase.STARTING, "Negotiating voice", event.threadId)
+                }
+            }
+            is VoiceEvent.SdpAnswer -> if (
+                event.threadId == activeThreadId && activeTransport == RealtimeTransport.WEBRTC
+            ) {
+                sdpSignal?.complete(event.sdp)
             }
             is VoiceEvent.OutputAudio -> if (event.threadId == activeThreadId) {
                 mutableState.value = VoiceState(VoicePhase.SPEAKING, "Codex is speaking", event.threadId)
-                outputFrames?.trySend(event.audio)
+                if (activeTransport == RealtimeTransport.WEBSOCKET) outputFrames?.trySend(event.audio)
                 speakingResetJob?.cancel()
                 speakingResetJob = scope.launch {
                     delay(SPEAKING_IDLE_MS)
@@ -343,6 +396,9 @@ class AndroidRealtimeVoiceController(
     }
 
     private fun requestAudioFocus() {
+        previousAudioMode = audioManager.mode
+        @Suppress("DEPRECATION")
+        run { previousSpeakerphoneState = audioManager.isSpeakerphoneOn }
         val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -354,10 +410,13 @@ class AndroidRealtimeVoiceController(
         focusRequest = request
         audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
         audioManager.requestAudioFocus(request)
+        @Suppress("DEPRECATION")
+        run { audioManager.isSpeakerphoneOn = true }
     }
 
     private fun stopCapture() {
         runCatching { recorder?.stop() }
+        if (activeTransport == RealtimeTransport.WEBRTC) runCatching { webRtcSession?.stopAudio() }
         captureJob?.cancel()
         senderJob?.cancel()
         inputFrames?.close()
@@ -385,13 +444,21 @@ class AndroidRealtimeVoiceController(
         gainControl = null
         recorder?.release()
         recorder = null
+        webRtcSession?.close()
+        webRtcSession = null
+        sdpSignal?.cancel()
+        sdpSignal = null
         player?.runCatching { stop() }
         player?.release()
         player = null
         playerFormat = null
         focusRequest?.let(audioManager::abandonAudioFocusRequest)
         focusRequest = null
-        audioManager.mode = AudioManager.MODE_NORMAL
+        @Suppress("DEPRECATION")
+        previousSpeakerphoneState?.let { speakerphone -> audioManager.isSpeakerphoneOn = speakerphone }
+        previousSpeakerphoneState = null
+        previousAudioMode?.let { audioManager.mode = it }
+        previousAudioMode = null
     }
 
     companion object {

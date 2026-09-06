@@ -142,17 +142,26 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
         return result["turn"]?.jsonObject?.string("id")?.takeIf { it.isNotBlank() } ?: error("Codex returned no turn ID")
     }
 
-    override suspend fun startVoice(threadId: String, model: String?) = voiceLock.withLock {
+    override suspend fun startVoice(
+        threadId: String,
+        model: String?,
+        transport: RealtimeTransport,
+        offerSdp: String?,
+    ) = voiceLock.withLock {
         require(threadId.isNotBlank()) { "threadId must not be blank" }
         if (mutableVoiceState.value.active) error("A voice session is already active")
+        if (transport == RealtimeTransport.WEBRTC) {
+            require(!offerSdp.isNullOrBlank()) { "WebRTC voice requires a local SDP offer" }
+        } else {
+            require(offerSdp.isNullOrBlank()) { "A WebSocket voice session cannot include an SDP offer" }
+        }
 
         voiceThreadId = threadId
         voiceClosedSignal = CompletableDeferred()
         mutableVoiceState.value = VoiceState(VoicePhase.STARTING, "Starting voice", threadId)
         try {
             connect()
-            // The app-server owns the websocket transport when `transport` is omitted.
-            request("thread/realtime/start", realtimeStartParams(threadId, model))
+            request("thread/realtime/start", realtimeStartParams(threadId, model, transport, offerSdp))
             Unit
         } catch (error: CancellationException) {
             throw error
@@ -303,6 +312,10 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
                 val activeThreadId = voiceThreadId ?: threadId
                 mutableVoiceState.value = VoiceState(VoicePhase.LISTENING, "Listening", activeThreadId)
                 voiceStream.emit(VoiceEvent.Started(activeThreadId.orEmpty(), sessionId, version))
+            }
+            method == "thread/realtime/sdp" -> {
+                val answer = parseRealtimeSdp(params)
+                voiceStream.emit(answer)
             }
             method == "thread/realtime/transcript/delta" -> {
                 val threadId = params.string("threadId")
@@ -497,16 +510,44 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
             if (!reasoningEffort.isNullOrBlank()) put("effort", reasoningEffort)
         }
 
-        /** Build the v0.153.4 thread/realtime/start request. Transport is intentionally omitted. */
-        internal fun realtimeStartParams(threadId: String, model: String?): JsonObject = buildJsonObject {
+        /** Build the v0.153.4 thread/realtime/start request. */
+        internal fun realtimeStartParams(threadId: String, model: String?): JsonObject =
+            realtimeStartParams(threadId, model, RealtimeTransport.WEBSOCKET, null)
+
+        internal fun realtimeStartParams(
+            threadId: String,
+            model: String?,
+            transport: RealtimeTransport,
+            offerSdp: String?,
+        ): JsonObject = buildJsonObject {
+            if (transport == RealtimeTransport.WEBRTC) {
+                require(!offerSdp.isNullOrBlank()) { "WebRTC voice requires a local SDP offer" }
+            } else {
+                require(offerSdp.isNullOrBlank()) { "A WebSocket voice session cannot include an SDP offer" }
+            }
             put("threadId", threadId)
             put("outputModality", "audio")
             // Do not lose the final recognized words when the user taps Stop.
             put("flushTranscriptTailOnSessionEnd", true)
-            // V2 is the Realtime Voice API path that supports app-server managed
-            // WebSocket audio. WebRTC is intentionally a later transport option.
-            put("version", "v2")
+            // The pinned app-server rejects Realtime Voice V2 over WebRTC. V1 is
+            // the account-authenticated AVAS path that accepts a client SDP offer.
+            put("version", if (transport == RealtimeTransport.WEBRTC) "v1" else "v2")
+            if (transport == RealtimeTransport.WEBRTC) {
+                put("transport", buildJsonObject {
+                    put("type", "webrtc")
+                    put("sdp", offerSdp)
+                })
+            }
             if (!model.isNullOrBlank()) put("model", model)
+        }
+
+        /** Map the pinned thread/realtime/sdp notification without retaining SDP. */
+        internal fun parseRealtimeSdp(params: JsonObject): VoiceEvent.SdpAnswer {
+            val threadId = params.string("threadId")
+            require(threadId.isNotBlank()) { "Realtime SDP threadId is missing" }
+            val sdp = params.string("sdp")
+            require(sdp.isNotBlank()) { "Realtime SDP answer is missing" }
+            return VoiceEvent.SdpAnswer(threadId, sdp)
         }
 
         internal fun realtimeAppendAudioParams(threadId: String, audio: RealtimeAudioChunk): JsonObject = buildJsonObject {

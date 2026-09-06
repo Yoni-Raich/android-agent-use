@@ -431,7 +431,7 @@ Provide a clear, helpful overview of what you can do on this device."""
                 synchronized(pendingVoiceTexts) { pendingVoiceTexts.clear() }
                 mutable.update { it.copy(voiceTranscript = "", voiceTranscriptRole = null) }
             }
-            is VoiceEvent.Started, is VoiceEvent.OutputAudio -> Unit
+            is VoiceEvent.Started, is VoiceEvent.SdpAnswer, is VoiceEvent.OutputAudio -> Unit
         }
     }
     private fun task(block: suspend () -> Unit): Job = viewModelScope.launch {
