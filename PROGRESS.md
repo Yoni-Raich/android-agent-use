@@ -213,3 +213,28 @@ Record actual commands and results. Mark untested features explicitly. Do not re
   - NOT TESTED: physical Q8 voice E2E, microphone capture, speaker playback,
     and signed-in realtime upstream connectivity (Q8 not connected).
 
+## On-device agent instruction & skill stack - 2026-09-06
+- Synthesized industry frameworks (DroidRun Mobile Harness, Android Automation Agent, Mobile-Agent v3.5, ADB Agent Bridge) for the on-device Codex agent:
+  - **Prompt Hierarchy**:
+    - Upgraded `CodexEngine.AGENT_INSTRUCTIONS` into an inviolable system prompt establishing identity, prompt injection boundaries (screen text as untrusted data), the 5-step loop (**Observe → Evaluate → Plan → Act → Verify**), and Tier-1 Semantic targeting preference.
+  - **3-Tier Addressing Strategy**:
+    - Tier 1 (Semantic First): Always inspect `read_ui` XML hierarchy and calculate element bounds center `((x1+x2)/2, (y1+y2)/2)`. Targets clickable containers when child text views are unclickable. Eliminates blind pixel guessing.
+    - Tier 2 (Vision Fallback): `screenshot` reserved for canvas, games, or visual verification.
+    - Tier 3 (Hardware/Navigation Keys): `key` events (`BACK` for keyboard/modal dismissal, `HOME`, `ENTER`) and directional swipes.
+  - **Modular Skills & App Cards**:
+    - `app/src/main/assets/agent_stack/AGENTS.md` (root execution harness)
+    - `.agents/skills/device-automation/SKILL.md` (deep ADB and UI manipulation)
+    - `.agents/skills/recovery-and-safety/SKILL.md` (intent fidelity, confirmation gates for financial/delete actions, stuck state recovery)
+    - `.agents/skills/user-preferences/SKILL.md` (durable preferences management)
+    - `.agents/skills/app-cards/SKILL.md` + `cards/` (`whatsapp.md`, `chrome.md`, `maps.md`, `settings.md`, `youtube.md`)
+    - `preferences.json` (durable user defaults)
+    - `RECOVERY.md` (fast recovery guide)
+  - **Automated Workspace Seeding**:
+    - Implemented `WorkspaceSeeder` in `workspace` module.
+    - Integrated into `LocalSessionStore.workspace(sessionId)`: seeds `AGENTS.md`, skills, and cards into the active session workspace offline while preserving existing `preferences.json`.
+  - **Validation**:
+    - New unit test `WorkspaceSeederTest` passed (`:workspace:test`).
+    - Engine tests passed (`:engine-codex:test`).
+    - Core tests passed (`:core:test`).
+    - Device tools tests passed (`:device-tools:test`).
+

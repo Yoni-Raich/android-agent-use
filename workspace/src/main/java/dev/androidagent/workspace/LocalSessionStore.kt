@@ -17,6 +17,7 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 class LocalSessionStore(context: Context) : SessionStore {
+    private val appContext = context.applicationContext
     private val base = File(context.filesDir, "sessions").apply { mkdirs() }
     private val db = Database(context).writableDatabase
     private val lock = Mutex()
@@ -62,7 +63,9 @@ class LocalSessionStore(context: Context) : SessionStore {
     }
     override fun workspace(sessionId: String): File {
         require(runCatching { UUID.fromString(sessionId).toString() == sessionId }.getOrDefault(false)) { "Invalid session ID" }
-        return File(base, "$sessionId/workspace").apply { mkdirs() }
+        val ws = File(base, "$sessionId/workspace").apply { mkdirs() }
+        WorkspaceSeeder.seed(ws, appContext)
+        return ws
     }
     private suspend fun <T> mutate(block: () -> T): T = withContext(Dispatchers.IO) { lock.withLock { block() } }
     private fun refresh(sessionId: String? = null) { sessionStream.value = loadSessions(); sessionId?.let { streams[it]?.value = loadMessages(it) } }

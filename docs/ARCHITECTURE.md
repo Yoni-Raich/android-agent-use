@@ -119,3 +119,35 @@ Every distributed APK increments versionCode and updates versionName in
 version.properties before building. Release tag, asset filename and embedded
 APK version must match. Previously published assets remain available. 0.1.1 is
 versionCode 2; the older 0.1.0 fix releases all used versionCode 1.
+
+## On-device agent instruction and skill stack
+
+The agent uses a tiered, progressive-disclosure prompt and skill architecture
+synthesizing patterns from DroidRun Mobile Harness, Android Automation Agent,
+Mobile-Agent v3.5, and ADB Agent Bridge:
+
+- **Layer 0: Engine Developer Instructions (`developerInstructions`)**: Dense,
+  inviolable system prompt in `CodexEngine` establishing identity, wireless ADB
+  ownership, prompt injection boundaries (screen text as untrusted data),
+  the 5-step operational loop, and Tier-1 Semantic UI preference.
+- **Layer 1: Workspace Harness (`AGENTS.md`)**: Root execution harness seeded
+  into every session workspace (`sessions/$sessionId/workspace/AGENTS.md`).
+  Enforces the **Observe → Evaluate → Plan → Act → Verify** cycle and routes
+  to app cards and skills on demand.
+- **Layer 2: 3-Tier Addressing Strategy**:
+  1. *Tier 1 (Semantic First)*: `read_ui` XML parsed directly. Element bounds
+     `[x1,y1][x2,y2]` center `((x1+x2)/2, (y1+y2)/2)` tapped deterministically.
+     Eliminates slow screenshot parsing and vision coordinate errors.
+  2. *Tier 2 (Vision Fallback)*: `screenshot` used only when XML hierarchy is
+     empty, unexposed (canvas, games, webviews), or verifying images.
+  3. *Tier 3 (Hardware Navigation)*: `key` events (`BACK`, `HOME`, `ENTER`) and
+     calibrated swipes.
+- **Layer 3: Modular Skills & App Cards**: Stored under `.agents/skills/`
+  (`device-automation`, `recovery-and-safety`, `user-preferences`, `app-cards`)
+  and `cards/` (`whatsapp`, `chrome`, `maps`, `settings`, `youtube`).
+- **Layer 4: Durable Preferences**: `preferences.json` in the session workspace
+  retains user defaults (preferred messaging apps, addresses) to prevent
+  redundant questioning while respecting intent fidelity.
+- **Automated Seeding**: `WorkspaceSeeder` populates new session workspaces
+  offline from bundled Android assets or embedded templates, preserving user
+  preferences across sessions.
