@@ -8,7 +8,11 @@ import dev.androidagent.core.ToolDefinition
 import dev.androidagent.core.ToolResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -231,10 +235,22 @@ class AndroidDeviceTools(
             switched = true
 
             checkActive()
+            awaitImeReady(component, timeout)
             val payload = encodeImePayload(text)
-            val broadcast = userExecute(buildImeBroadcastCommand(component, payload), timeout)
-            check(broadcast.exitCode == 0 && broadcastCommitted(broadcast.output)) {
-                "Unicode text was not committed; the input field or IME is unavailable"
+            var committed = false
+            repeat(IME_COMMIT_ATTEMPTS) { attempt ->
+                checkActive()
+                val broadcast = userExecute(buildImeBroadcastCommand(component, payload), timeout)
+                if (broadcast.exitCode == 0 && broadcastCommitted(broadcast.output)) {
+                    committed = true
+                    return@repeat
+                }
+                if (attempt + 1 < IME_COMMIT_ATTEMPTS) delay(IME_COMMIT_RETRY_MS)
+            }
+            check(committed) {
+                "Unicode text was not committed; the target text field or Unicode IME is unavailable. " +
+                    "Focus a text field, keep the keyboard visible, and select Android Agent as the active keyboard in system settings, then retry. " +
+                    "Text was not sent."
             }
 
             if (submit) {
@@ -257,6 +273,47 @@ class AndroidDeviceTools(
         }
     }
 
+    /**
+     * Selecting an IME is asynchronous on Android. The input service can be
+     * alive while its currentInputConnection is still null, so wait for both
+     * the selected component and an editor connection before broadcasting.
+     */
+    private suspend fun awaitImeReady(component: String, timeout: Long) {
+        var selected = false
+        var connection: Boolean? = null
+        try {
+            withTimeout(timeout.coerceAtMost(IME_READY_WAIT_MS).coerceAtLeast(IME_READY_POLL_MS)) {
+                while (true) {
+                    checkActive()
+                    selected = imeSelectionMatches(queryDefaultIme(IME_STATUS_TIMEOUT_MS), component)
+                    val dump = try {
+                        userExecute("dumpsys input_method", IME_STATUS_TIMEOUT_MS)
+                            .takeIf { it.exitCode == 0 }?.output
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (_: Exception) {
+                        null
+                    }
+                    connection = dump?.let { imeDumpConnectionReady(it, component) }
+                    if (selected && connection == true) return@withTimeout
+                    delay(IME_READY_POLL_MS)
+                }
+            }
+        } catch (error: TimeoutCancellationException) {
+            val reason = when {
+                !selected -> "the Unicode IME did not become active"
+                connection == false -> "the target text field is not focused"
+                else -> "Android did not expose an active input connection"
+            }
+            throw IllegalStateException(
+                "Unicode text was not committed because $reason. " +
+                    "Focus a text field, keep the keyboard visible, and select Android Agent as the active keyboard in system settings, then retry. " +
+                    "Text was not sent.",
+                error,
+            )
+        }
+    }
+
     private suspend fun queryDefaultIme(timeout: Long): String? {
         checkActive()
         val result = userExecute("settings get secure default_input_method", timeout)
@@ -270,9 +327,7 @@ class AndroidDeviceTools(
     }
 
     private fun broadcastCommitted(output: String): Boolean {
-        val result = Regex("\\bresult=(-?\\d+)").find(output)
-            ?.groupValues?.getOrNull(1)?.toIntOrNull()
-        return result == IME_RESULT_SUCCESS
+        return imeBroadcastCommitted(output)
     }
 
     private suspend fun pressKey(arguments: JsonObject): ToolResult {
@@ -462,6 +517,11 @@ class AndroidDeviceTools(
         private const val IME_EXTRA_PAYLOAD = "payload_base64"
         private const val IME_RESULT_SUCCESS = 1
         private const val MAX_IME_TEXT_BYTES = 16 * 1024
+        private const val IME_READY_WAIT_MS = 2_500L
+        private const val IME_READY_POLL_MS = 100L
+        private const val IME_STATUS_TIMEOUT_MS = 2_000L
+        private const val IME_COMMIT_ATTEMPTS = 4
+        private const val IME_COMMIT_RETRY_MS = 150L
 
         /** POSIX single-quote escaping. Public for unit tests. */
         fun shellQuote(arg: String): String = "'" + arg.replace("'", "'\\''") + "'"
@@ -516,6 +576,63 @@ class AndroidDeviceTools(
         fun encodeImePayload(text: String): String {
             validateImeText(text)
             return Base64.getEncoder().encodeToString(text.toByteArray(Charsets.UTF_8))
+        }
+
+        /** The secure setting should exactly match the component we selected. */
+        internal fun imeSelectionMatches(current: String?, requested: String): Boolean =
+            current?.trim()?.let { normalizedComponent(it) } == normalizedComponent(requested)
+
+        /**
+         * Parse the stable fields printed by `dumpsys input_method` without
+         * exposing the dump (which can include unrelated package details).
+         * Null means that this Android build uses an unknown dump format.
+         */
+        internal fun imeDumpConnectionReady(output: String, requested: String): Boolean? {
+            if (output.isBlank()) return null
+            val lines = output.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+            val current = lines.asSequence()
+                .mapNotNull { line ->
+                    Regex("\\b(?:mCurId|mCurMethodId|mSelectedMethodId)\\s*=\\s*([^,\\s}]+)").find(line)
+                        ?.groupValues?.getOrNull(1)
+                }
+                .firstOrNull()
+            val selected = current?.let { imeSelectionMatches(it, requested) }
+            if (selected == false) return false
+
+            val connectionLine = lines.firstOrNull { line ->
+                line.contains("mServedInputConnection", ignoreCase = true) ||
+                    line.contains("mCurrentInputConnection", ignoreCase = true)
+            }
+            val editorLine = lines.firstOrNull { line ->
+                line.contains("mCurAttribute", ignoreCase = true) ||
+                    line.contains("mServedInputContext", ignoreCase = true)
+            }
+            val connection = when {
+                connectionLine?.substringAfter('=')?.trim()?.equals("null", ignoreCase = true) == true -> false
+                connectionLine != null -> true
+                editorLine?.substringAfter('=')?.trim()?.equals("null", ignoreCase = true) == true -> false
+                editorLine != null -> true
+                else -> null
+            }
+            return when {
+                connection == false -> false
+                selected == true && connection == true -> true
+                else -> null
+            }
+        }
+
+        /** Only result=1 means the IME actually called commitText successfully. */
+        internal fun imeBroadcastCommitted(output: String): Boolean =
+            Regex("\\bresult=(-?\\d+)").find(output)
+                ?.groupValues?.getOrNull(1)?.toIntOrNull() == IME_RESULT_SUCCESS
+
+        private fun normalizedComponent(value: String): String {
+            val clean = value.trim().trimEnd(',', ';')
+            val slash = clean.indexOf('/')
+            if (slash <= 0 || slash == clean.lastIndex) return clean
+            val pkg = clean.substring(0, slash)
+            val cls = clean.substring(slash + 1)
+            return "$pkg/${if (cls.startsWith('.')) pkg + cls else cls}"
         }
 
         /**

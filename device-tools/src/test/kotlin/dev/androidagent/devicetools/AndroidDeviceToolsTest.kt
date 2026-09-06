@@ -113,6 +113,66 @@ class AndroidDeviceToolsTest {
         assertFalse(command.contains("O'Reilly"))
     }
 
+    @Test fun imeReadinessRequiresSelectedComponentAndEditorConnection() {
+        val component = "dev.androidagent.app/dev.androidagent.app.ime.AgentInputMethodService"
+        val readyDump = """
+            mCurMethodId=$component
+            mCurAttribute=EditorInfo{packageName=com.whatsapp}
+            mServedInputConnection=android.view.inputmethod.InputConnectionWrapper@123
+        """.trimIndent()
+        val noFieldDump = """
+            mCurMethodId=$component
+            mCurAttribute=null
+            mServedInputConnection=null
+        """.trimIndent()
+
+        assertTrue(AndroidDeviceTools.imeSelectionMatches(component, component))
+        assertTrue(AndroidDeviceTools.imeSelectionMatches(
+            "dev.androidagent.app/.ime.AgentInputMethodService",
+            component,
+        ))
+        assertFalse(AndroidDeviceTools.imeSelectionMatches("com.android.inputmethod/.LatinIME", component))
+        assertEquals(true, AndroidDeviceTools.imeDumpConnectionReady(readyDump, component))
+        assertEquals(false, AndroidDeviceTools.imeDumpConnectionReady(noFieldDump, component))
+        assertEquals(null, AndroidDeviceTools.imeDumpConnectionReady("mCurMethodId=$component", component))
+    }
+
+    @Test fun imeBroadcastOnlyConfirmsARealCommitResult() {
+        assertTrue(AndroidDeviceTools.imeBroadcastCommitted("Broadcast completed: result=1 data=ok"))
+        assertFalse(AndroidDeviceTools.imeBroadcastCommitted("Broadcast completed: result=4 data=error"))
+        assertFalse(AndroidDeviceTools.imeBroadcastCommitted("Broadcast completed"))
+    }
+
+    @Test fun imeWaitsForTheEditorConnectionBeforeSendingUnicode() = runBlocking {
+        val component = "dev.androidagent.app/dev.androidagent.app.ime.AgentInputMethodService"
+        val adb = ImeFakeAdb(component, readyAfterDump = 2, commitResult = 1)
+        val tools = AndroidDeviceTools(adb, component)
+        tools.beginRun("ime", Files.createTempDirectory("ws").toFile())
+
+        val result = tools.invoke("type_text", buildJsonObject { put("text", "שלום") })
+
+        assertTrue(result.success)
+        assertTrue(adb.commands.any { it == "dumpsys input_method" })
+        assertTrue(adb.commands.any { it.startsWith("am broadcast") })
+        assertTrue(adb.commands.indexOfFirst { it.startsWith("am broadcast") } > adb.commands.indexOf("dumpsys input_method"))
+    }
+
+    @Test fun imeCommitFailureReturnsGuidanceAndNeverClaimsSuccess() = runBlocking {
+        val component = "dev.androidagent.app/dev.androidagent.app.ime.AgentInputMethodService"
+        val adb = ImeFakeAdb(component, readyAfterDump = 1, commitResult = 4)
+        val tools = AndroidDeviceTools(adb, component)
+        tools.beginRun("ime", Files.createTempDirectory("ws").toFile())
+
+        try {
+            tools.invoke("type_text", buildJsonObject { put("text", "שלום") })
+            fail("expected the IME commit to be rejected")
+        } catch (error: IllegalStateException) {
+            assertTrue(error.message!!.contains("text was not sent", ignoreCase = true))
+            assertTrue(error.message!!.contains("text field", ignoreCase = true))
+        }
+        assertTrue(adb.commands.count { it.startsWith("am broadcast") } >= 2)
+    }
+
     @Test fun coordinatesAndKeysValidated() {
         val tools = AndroidDeviceTools(FakeAdb())
         val ws = Files.createTempDirectory("ws").toFile()
@@ -183,6 +243,49 @@ class AndroidDeviceToolsTest {
                 0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x01,
             )
         }
+        override suspend fun cancelActive() = Unit
+        override suspend fun disconnect() = Unit
+        override suspend fun forgetPairing() = Unit
+    }
+
+    private class ImeFakeAdb(
+        private val component: String,
+        private val readyAfterDump: Int,
+        private val commitResult: Int,
+    ) : AdbTransport {
+        private val state = MutableStateFlow(AdbStatus(ConnectionPhase.CONNECTED, "ok", 1))
+        override val status: StateFlow<AdbStatus> = state.asStateFlow()
+        val commands = mutableListOf<String>()
+        private var settingsReads = 0
+        private var dumpReads = 0
+
+        override suspend fun discover(): List<AdbEndpoint> = emptyList()
+        override suspend fun pair(port: Int, code: String) = Unit
+        override suspend fun connect(port: Int) = Unit
+        override suspend fun execute(command: String, timeoutMs: Long): CommandResult {
+            commands += command
+            return when {
+                command == "settings get secure default_input_method" -> {
+                    settingsReads++
+                    CommandResult(if (settingsReads == 1) "com.android.inputmethod/.LatinIME" else "$component\n", 0)
+                }
+                command == "dumpsys input_method" -> {
+                    dumpReads++
+                    val connection = if (dumpReads >= readyAfterDump) {
+                        "android.view.inputmethod.InputConnectionWrapper@123"
+                    } else {
+                        "null"
+                    }
+                    CommandResult(
+                        "mCurMethodId=$component\nmCurAttribute=EditorInfo{packageName=com.whatsapp}\nmServedInputConnection=$connection",
+                        0,
+                    )
+                }
+                command.startsWith("am broadcast") -> CommandResult("Broadcast completed: result=$commitResult data=ok", 0)
+                else -> CommandResult("ok", 0)
+            }
+        }
+        override suspend fun executeBytes(command: String, timeoutMs: Long): ByteArray = ByteArray(0)
         override suspend fun cancelActive() = Unit
         override suspend fun disconnect() = Unit
         override suspend fun forgetPairing() = Unit
