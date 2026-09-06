@@ -1039,9 +1039,12 @@ private fun InfoBanner(message: String) {
 private fun AgentComposer(state: AgentUiState, actions: AgentUiActions) {
     var draft by rememberSaveable(state.activeSessionId) { mutableStateOf("") }
     var modelMenu by remember { mutableStateOf(false) }
+    var reasoningMenu by remember { mutableStateOf(false) }
     val active = state.runState.active
     val stopping = state.runState.phase == RunPhase.STOPPING
     val canSend = state.activeSessionId != null && draft.isNotBlank() && !state.isLoadingMessages && !stopping
+    val selectedModel = state.modelCatalog.firstOrNull { it.id == state.selectedModel }
+    val reasoningOptions = selectedModel?.reasoningEfforts.orEmpty()
     Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background)
         .navigationBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp)) {
         Surface(shape = RoundedCornerShape(28.dp), color = MaterialTheme.colorScheme.surface,
@@ -1084,6 +1087,50 @@ private fun AgentComposer(state: AgentUiState, actions: AgentUiActions) {
                                 DropdownMenuItem(text = { Text(model) }, onClick = {
                                     actions.onModelSelected(model); modelMenu = false
                                 })
+                            }
+                        }
+                    }
+                    Box {
+                        TextButton(
+                            onClick = { reasoningMenu = true },
+                            enabled = !active && reasoningOptions.isNotEmpty(),
+                            modifier = Modifier
+                                .widthIn(max = 110.dp)
+                                .semantics { contentDescription = "Choose reasoning effort" },
+                        ) {
+                            Text(
+                                state.selectedReasoningEffort ?: "Default",
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                style = MaterialTheme.typography.labelMedium,
+                            )
+                            Icon(Icons.Default.ExpandMore, null, Modifier.size(16.dp))
+                        }
+                        DropdownMenu(expanded = reasoningMenu, onDismissRequest = { reasoningMenu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Default") },
+                                trailingIcon = if (state.selectedReasoningEffort == null) ({ Icon(Icons.Default.Check, contentDescription = null) }) else null,
+                                onClick = {
+                                    reasoningMenu = false
+                                    actions.onReasoningEffortSelected(null)
+                                },
+                            )
+                            reasoningOptions.forEach { option ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Column {
+                                            Text(option.value)
+                                            if (option.description.isNotBlank()) {
+                                                Text(option.description, style = MaterialTheme.typography.labelSmall)
+                                            }
+                                        }
+                                    },
+                                    trailingIcon = if (option.value == state.selectedReasoningEffort) ({ Icon(Icons.Default.Check, contentDescription = null) }) else null,
+                                    onClick = {
+                                        reasoningMenu = false
+                                        actions.onReasoningEffortSelected(option.value)
+                                    },
+                                )
                             }
                         }
                     }

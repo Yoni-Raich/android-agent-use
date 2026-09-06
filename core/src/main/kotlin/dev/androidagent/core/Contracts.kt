@@ -52,6 +52,17 @@ interface RuntimeHost {
 data class ToolDefinition(val name: String, val description: String, val inputSchema: JsonObject)
 data class ToolResult(val text: String, val imageBase64: String? = null, val success: Boolean = true)
 data class AccountStatus(val signedIn: Boolean, val label: String, val loginUrl: String? = null, val userCode: String? = null)
+
+/** A reasoning effort advertised by the connected engine for one model. */
+data class ReasoningEffortOption(val value: String, val description: String = "")
+
+/** Model metadata returned by the connected engine's model catalog. */
+data class AgentModel(
+    val id: String,
+    val displayName: String = id,
+    val reasoningEfforts: List<ReasoningEffortOption> = emptyList(),
+    val defaultReasoningEffort: String? = null,
+)
 sealed interface EngineEvent {
     data class TurnStarted(val threadId: String, val turnId: String) : EngineEvent
     data class TextDelta(val text: String, val threadId: String? = null, val turnId: String? = null) : EngineEvent
@@ -69,8 +80,17 @@ interface AgentEngine {
     suspend fun login(): AccountStatus
     suspend fun logout()
     suspend fun models(): List<String>
+    /**
+     * Return model metadata when the engine can provide it. The default keeps
+     * older engine implementations usable while exposing a catalog to newer
+     * clients.
+     */
+    suspend fun modelCatalog(): List<AgentModel> = models().map { AgentModel(id = it) }
     suspend fun openSession(workspace: File, threadId: String?, model: String?, tools: List<ToolDefinition>): String
     suspend fun startTurn(threadId: String, prompt: String, images: List<File> = emptyList()): String
+    /** Start a turn with an optional model-advertised reasoning effort. */
+    suspend fun startTurn(threadId: String, prompt: String, images: List<File> = emptyList(), reasoningEffort: String?): String =
+        startTurn(threadId, prompt, images)
     suspend fun steer(threadId: String, turnId: String, prompt: String)
     suspend fun interrupt(threadId: String, turnId: String)
     suspend fun answerTool(requestId: String, result: ToolResult)

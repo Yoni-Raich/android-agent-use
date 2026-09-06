@@ -5,10 +5,8 @@ import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.PixelFormat
-import android.graphics.Shader
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
@@ -40,8 +38,8 @@ import kotlin.coroutines.resume
 /**
  * Native floating controls used for the full lifetime of an agent run.
  *
- * The full-screen glow is a separate non-touchable window. The small card is
- * the only touchable area, so other apps keep receiving their own input.
+ * The small glass pill is the only touchable window, so other apps keep
+ * receiving their own input outside its bounds.
  * There is no AccessibilityService dependency here; device actions stay in
  * the core ADB gateway.
  */
@@ -58,11 +56,9 @@ class FloatingControlOverlay(
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private var controlRoot: FrameLayout? = null
-    private var glowRoot: EdgeGlowView? = null
     private var statusView: TextView? = null
     private var inputView: EditText? = null
     private var controlParams: WindowManager.LayoutParams? = null
-    private var glowParams: WindowManager.LayoutParams? = null
     private var statusDot: View? = null
     private var configCallbacks: ComponentCallbacks? = null
     private var attachListener: View.OnAttachStateChangeListener? = null
@@ -70,6 +66,9 @@ class FloatingControlOverlay(
     private var inputFocusEnabled = false
     private var captureHidden = false
     private var finishRunnable: Runnable? = null
+    private var appForeground = false
+    private var runActive = false
+    private var currentStatus = "Ready"
 
     override suspend fun show(status: String) {
         requireOverlayPermission()
@@ -77,29 +76,21 @@ class FloatingControlOverlay(
             // Check again on the UI thread immediately before addView. This
             // keeps permission denial ahead of any visible/device action.
             requireOverlayPermission()
-            val existing = controlRoot
-            if (showing && existing != null) {
-                finishRunnable?.let(mainHandler::removeCallbacks)
-                finishRunnable = null
-                applyStatus(status)
-                glowRoot?.invalidate()
+            currentStatus = status.ifBlank { "Ready" }
+            runActive = true
+            if (appForeground) {
+                // The app owns the foreground surface, so keep the run state
+                // without placing a window over the app. It will be rebuilt
+                // when the user leaves the app.
+                removeViews()
                 return@withContext
             }
 
-            removeViews()
-            buildViews(status)
-            val glow = glowRoot ?: error("Overlay glow was not created")
+            finishRunnable?.let(mainHandler::removeCallbacks)
+            finishRunnable = null
+            addViewsIfNeeded()
             val control = controlRoot ?: error("Overlay controls were not created")
-            val glowLayout = glowParams ?: error("Overlay glow parameters were not created")
-            val controlLayout = controlParams ?: error("Overlay control parameters were not created")
             try {
-                // Add the non-touchable layer first so the tint never sits over
-                // the card's touchable window.
-                windowManager.addView(glow, glowLayout)
-                windowManager.addView(control, controlLayout)
-                showing = true
-                registerConfigurationCallbacks()
-                waitForAttach(glow)
                 waitForAttach(control)
             } catch (error: Throwable) {
                 removeViews()
@@ -110,8 +101,8 @@ class FloatingControlOverlay(
 
     override fun update(status: String) {
         runOnMain {
-            applyStatus(status)
-            glowRoot?.invalidate()
+            currentStatus = status.ifBlank { "Ready" }
+            applyStatus(currentStatus)
         }
     }
 
@@ -119,17 +110,22 @@ class FloatingControlOverlay(
         runOnMain {
             finishRunnable?.let(mainHandler::removeCallbacks)
             finishRunnable = null
-            applyStatus(state.label)
-            glowRoot?.invalidate()
+            currentStatus = state.label
+            runActive = false
+            if (appForeground) {
+                removeViews()
+                return@runOnMain
+            }
+            applyStatus(currentStatus)
             if (!showing) {
                 removeViews()
-                onOpenApp()
+                openAppAfterFinish()
                 return@runOnMain
             }
             val callback = Runnable {
                 finishRunnable = null
                 removeViews()
-                onOpenApp()
+                openAppAfterFinish()
             }
             finishRunnable = callback
             mainHandler.postDelayed(callback, FINISH_DISPLAY_MS)
@@ -137,27 +133,57 @@ class FloatingControlOverlay(
     }
 
     override fun hide() {
-        runOnMain { removeViews() }
+        runOnMain {
+            runActive = false
+            removeViews()
+        }
     }
 
     /**
-     * Temporarily removes both overlay layers from the captured view without
+     * Keeps the run alive while the app owns the foreground window. The
+     * contract has a default implementation in core so other overlays can
+     * ignore this lifecycle hint.
+     */
+    fun setAppForeground(foreground: Boolean) {
+        runOnMain {
+            if (appForeground == foreground) return@runOnMain
+            appForeground = foreground
+            if (foreground) {
+                // Removing the window makes the foreground app completely
+                // unobstructed and also removes it from capture surfaces.
+                removeViews()
+            } else if (runActive) {
+                // A run may have started from the app while this flag was
+                // true. Restore the latest status as soon as another app is
+                // visible. Lifecycle callbacks must not crash the process if
+                // permission was revoked while the app was away.
+                runCatching {
+                    requireOverlayPermission()
+                    addViewsIfNeeded()
+                }.onFailure { removeViews() }
+            }
+        }
+    }
+
+    /**
+     * Temporarily removes the overlay from the captured view without
      * clearing the edit text. Core can restore them after a screenshot/read.
      */
     override suspend fun setCaptureHidden(hidden: Boolean) {
         withContext(Dispatchers.Main.immediate) {
-            val glow = glowRoot ?: return@withContext
             val control = controlRoot ?: return@withContext
-            if (!glow.isAttachedToWindow || !control.isAttachedToWindow) {
-                waitForAttach(glow)
-                waitForAttach(control)
-            }
+            if (!control.isAttachedToWindow) waitForAttach(control)
             if (captureHidden == hidden) return@withContext
+            if (hidden) {
+                // Device actions must not leave the overlay IME focused while
+                // the card is hidden from the captured surface.
+                disableInputFocus()
+                hideKeyboard()
+            }
             captureHidden = hidden
             val visibility = if (hidden) View.INVISIBLE else View.VISIBLE
             // Visibility preserves EditText contents and the current focus
-            // state while making both windows absent from a screenshot.
-            glow.visibility = visibility
+            // state while making the window absent from a screenshot.
             control.visibility = visibility
             if (!hidden) clampPosition()
         }
@@ -170,8 +196,8 @@ class FloatingControlOverlay(
             val lp = controlParams ?: return@runOnMain
             if (!control.isAttachedToWindow || captureHidden) return@runOnMain
 
-            val width = control.width.takeIf { it > 0 } ?: dp(300)
-            val height = control.height.takeIf { it > 0 } ?: dp(150)
+            val width = control.width.takeIf { it > 0 } ?: panelWidthPx()
+            val height = control.height.takeIf { it > 0 } ?: dp(72)
             val bounds = screenBounds()
             if (!pointInside(lp.x, lp.y, width, height, x, y)) return@runOnMain
 
@@ -199,108 +225,110 @@ class FloatingControlOverlay(
 
     // ---------- view construction; main thread only ----------
 
+    private fun addViewsIfNeeded() {
+        if (showing && controlRoot != null) {
+            applyStatus(currentStatus)
+            return
+        }
+        if (controlRoot != null || controlParams != null) removeViews()
+        buildViews(currentStatus)
+        val control = controlRoot ?: error("Overlay controls were not created")
+        val controlLayout = controlParams ?: error("Overlay control parameters were not created")
+        try {
+            windowManager.addView(control, controlLayout)
+            showing = true
+            registerConfigurationCallbacks()
+            applyStatus(currentStatus)
+        } catch (error: Throwable) {
+            removeViews()
+            throw error
+        }
+    }
+
     private fun buildViews(status: String) {
         val dark = isDark()
-        val accent = Color.parseColor(if (dark) "#AEBBFF" else "#4169E1")
-        val cardColor = Color.parseColor(if (dark) "#F21B1E2A" else "#F7FFFFFF")
-        val onCard = Color.parseColor(if (dark) "#EEF0F8" else "#1B1C22")
-        val secondary = Color.parseColor(if (dark) "#BEC3D0" else "#505362")
-        val hint = Color.parseColor(if (dark) "#A2A8BA" else "#676A78")
-
-        val glow = EdgeGlowView(appContext, dark).apply {
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            isClickable = false
-            isFocusable = false
-            isFocusableInTouchMode = false
-        }
-        glowRoot = glow
+        val accent = Color.parseColor(if (dark) "#B9C2FF" else "#4169E1")
+        val onCard = Color.parseColor(if (dark) "#F3F4FB" else "#1B1C22")
+        val hintColor = Color.parseColor(if (dark) "#989EAF" else "#676A78")
 
         val root = FrameLayout(appContext).apply {
             setPadding(dp(2), dp(2), dp(2), dp(2))
+            clipChildren = false
+            clipToPadding = false
             isClickable = false
             isFocusable = false
             isFocusableInTouchMode = false
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
         }
 
-        val cardBackground = roundedBackground(
-            fill = cardColor,
-            stroke = if (dark) Color.parseColor("#42FFFFFF") else Color.parseColor("#30000000"),
-            radius = 18f,
-        )
+        val cardBackground = glassBackground(dark)
         val card = LinearLayout(appContext).apply {
-            orientation = LinearLayout.VERTICAL
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
             background = cardBackground
-            setPadding(dp(10), dp(8), dp(10), dp(8))
+            setPadding(dp(8), dp(5), dp(8), dp(5))
+            elevation = dpF(8f)
             isClickable = true
             isFocusable = false
         }
 
-        val header = LinearLayout(appContext).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+        val handle = DragHandleView(appContext, dark).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(24), dp(46))
+            contentDescription = "Drag agent controls"
             isClickable = true
             isFocusable = false
-            contentDescription = "Drag agent controls"
         }
         val dot = View(appContext).apply {
             background = dotDrawable(accent)
-            layoutParams = LinearLayout.LayoutParams(dp(8), dp(8))
+            layoutParams = LinearLayout.LayoutParams(dp(8), dp(8)).apply {
+                setMargins(dp(2), 0, dp(7), 0)
+            }
             isClickable = false
             isFocusable = false
         }
         statusDot = dot
-        val title = TextView(appContext).apply {
-            text = "Android Agent"
-            setTextColor(onCard)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-            setPadding(dp(8), 0, dp(6), 0)
+        val center = LinearLayout(appContext).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        val openButton = actionButton("Open", "Open Android Agent", onCard, accent) {
-            onOpenApp()
-        }
-        header.addView(dot)
-        header.addView(title)
-        header.addView(openButton)
-
-        val statusLabel = TextView(appContext).apply {
-            text = status.ifBlank { "Ready" }
-            setTextColor(secondary)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            maxLines = 3
-            ellipsize = android.text.TextUtils.TruncateAt.END
-            setPadding(0, dp(4), 0, dp(5))
+            minimumWidth = dp(112)
             isClickable = false
             isFocusable = false
         }
-        statusView = statusLabel
-
-        val row = LinearLayout(appContext).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+        val statusLabel = TextView(appContext).apply {
+            text = status.ifBlank { "Ready" }
+            setTextColor(onCard)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+            includeFontPadding = false
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            isClickable = false
+            isFocusable = false
         }
+        this.statusView = statusLabel
         val input = EditText(appContext).apply {
             this.hint = "Steer or reply"
-            setHintTextColor(hint)
+            setHintTextColor(hintColor)
             setTextColor(onCard)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-            inputType = InputType.TYPE_CLASS_TEXT or
-                InputType.TYPE_TEXT_FLAG_MULTI_LINE or
-                InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            includeFontPadding = false
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
             imeOptions = EditorInfo.IME_ACTION_SEND
-            maxLines = 4
-            minLines = 1
-            isSingleLine = false
+            maxLines = 1
+            isSingleLine = true
             isFocusable = true
             isFocusableInTouchMode = true
             background = roundedBackground(
-                fill = if (dark) Color.parseColor("#241F2331") else Color.parseColor("#0C000000"),
-                stroke = if (dark) Color.parseColor("#3EFFFFFF") else Color.parseColor("#28000000"),
-                radius = 12f,
+                fill = if (dark) Color.argb(35, 255, 255, 255) else Color.argb(18, 0, 0, 0),
+                stroke = if (dark) Color.argb(45, 255, 255, 255) else Color.argb(35, 0, 0, 0),
+                radius = 10f,
             )
-            setPadding(dp(10), dp(4), dp(10), dp(4))
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            setPadding(dp(8), 0, dp(8), 0)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(28),
+            ).apply { topMargin = dp(3) }
+            contentDescription = "Steer or reply"
             setOnTouchListener { _, event ->
                 if (event.actionMasked == MotionEvent.ACTION_DOWN) enableInputFocus()
                 false
@@ -315,26 +343,34 @@ class FloatingControlOverlay(
             }
         }
         inputView = input
+        center.addView(statusLabel)
+        center.addView(input)
 
-        val sendButton = actionButton("Send", "Send message", onCard, accent) {
+        val sendButton = actionButton("↑", "Send message", onCard, accent) {
             sendFromInput()
         }
-        val stopButton = actionButton("Stop", "Stop run", onCard, Color.parseColor("#D14D61")) {
+        val stopButton = actionButton("■", "Stop run", onCard, Color.parseColor("#D14D61")) {
             // Release any IME focus before the immediate local stop callback.
             disableInputFocus()
             hideKeyboard()
             onStop()
         }
-        row.addView(input)
-        row.addView(sendButton)
-        row.addView(stopButton)
+        val openButton = actionButton("↗", "Open Android Agent", onCard, accent) {
+            // Release focus before handing control back to the app window.
+            disableInputFocus()
+            hideKeyboard()
+            onOpenApp()
+        }
 
-        card.addView(header)
-        card.addView(statusLabel)
-        card.addView(row)
+        card.addView(handle)
+        card.addView(dot)
+        card.addView(center)
+        card.addView(sendButton)
+        card.addView(stopButton)
+        card.addView(openButton)
         root.addView(
             card,
-            FrameLayout.LayoutParams(dp(320), FrameLayout.LayoutParams.WRAP_CONTENT),
+            FrameLayout.LayoutParams(panelWidthPx(), FrameLayout.LayoutParams.WRAP_CONTENT),
         )
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
             val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
@@ -343,7 +379,7 @@ class FloatingControlOverlay(
             insets
         }
 
-        attachDrag(header)
+        attachDrag(handle)
         controlRoot = root
         inputFocusEnabled = false
         captureHidden = false
@@ -359,27 +395,11 @@ class FloatingControlOverlay(
         ).apply {
             gravity = Gravity.TOP or Gravity.START
             x = dp(12)
-            y = dp(160)
+            y = dp(112)
             softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or
                 WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN
             token = null
             this.title = "AndroidAgentControl"
-        }
-        // Android 12 touch obscuring rules do not apply to this layer as a
-        // touch target: it is explicitly non-touchable and kept below 0.8f.
-        glowParams = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT,
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            alpha = 0.10f
-            token = null
-            this.title = "AndroidAgentGlow"
         }
     }
 
@@ -393,18 +413,18 @@ class FloatingControlOverlay(
         this.text = text
         this.contentDescription = description
         setTextColor(textColor)
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
         setAllCaps(false)
-        minWidth = 0
-        minimumWidth = 0
-        minHeight = dp(42)
-        minimumHeight = dp(42)
-        setPadding(dp(7), 0, dp(7), 0)
+        minWidth = dp(34)
+        minimumWidth = dp(34)
+        minHeight = dp(38)
+        minimumHeight = dp(38)
+        setPadding(dp(2), 0, dp(2), 0)
         background = roundedBackground(
             fill = Color.argb(35, Color.red(accent), Color.green(accent), Color.blue(accent)),
             stroke = Color.argb(100, Color.red(accent), Color.green(accent), Color.blue(accent)),
-            radius = 12f,
+            radius = 11f,
         )
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
         isFocusable = false
         isFocusableInTouchMode = false
         setOnClickListener { action() }
@@ -558,20 +578,20 @@ class FloatingControlOverlay(
         configCallbacks = null
         attachListener?.let { listener ->
             controlRoot?.removeOnAttachStateChangeListener(listener)
-            glowRoot?.removeOnAttachStateChangeListener(listener)
         }
         attachListener = null
         removeWindow(controlRoot)
-        removeWindow(glowRoot)
         controlRoot = null
-        glowRoot = null
         statusView = null
         statusDot = null
         inputView = null
         controlParams = null
-        glowParams = null
         showing = false
         captureHidden = false
+    }
+
+    private fun openAppAfterFinish() {
+        if (!appForeground) onOpenApp()
     }
 
     private fun removeWindow(view: View?) {
@@ -612,8 +632,8 @@ class FloatingControlOverlay(
 
     private fun clampPosition(lp: WindowManager.LayoutParams) {
         val root = controlRoot
-        val width = root?.width?.takeIf { it > 0 } ?: dp(300)
-        val height = root?.height?.takeIf { it > 0 } ?: dp(150)
+        val width = root?.width?.takeIf { it > 0 } ?: panelWidthPx()
+        val height = root?.height?.takeIf { it > 0 } ?: dp(72)
         val bounds = screenBounds()
         val margin = dp(8)
         lp.x = lp.x.coerceIn(margin, (bounds.width() - width - margin).coerceAtLeast(margin))
@@ -621,6 +641,11 @@ class FloatingControlOverlay(
     }
 
     private fun screenBounds() = windowManager.currentWindowMetrics.bounds
+
+    private fun panelWidthPx(): Int = minOf(
+        dp(PANEL_WIDTH_DP),
+        (screenBounds().width() - dp(16)).coerceAtLeast(dp(280)),
+    )
 
     private fun pointInside(left: Int, top: Int, width: Int, height: Int, x: Int, y: Int): Boolean =
         x >= left && x <= left + width && y >= top && y <= top + height
@@ -659,6 +684,28 @@ class FloatingControlOverlay(
             setStroke(dp(1), stroke)
         }
 
+    /** Translucent gradient fallback that reads like glass on API 30+. */
+    private fun glassBackground(dark: Boolean): GradientDrawable {
+        val colors = if (dark) {
+            intArrayOf(
+                Color.argb(232, 43, 47, 66),
+                Color.argb(208, 22, 25, 37),
+            )
+        } else {
+            intArrayOf(
+                Color.argb(244, 250, 251, 255),
+                Color.argb(226, 227, 231, 242),
+            )
+        }
+        return GradientDrawable(GradientDrawable.Orientation.TL_BR, colors).apply {
+            cornerRadius = dpF(24f)
+            setStroke(
+                dp(1),
+                if (dark) Color.argb(78, 255, 255, 255) else Color.argb(70, 25, 28, 40),
+            )
+        }
+    }
+
     private fun dotDrawable(color: Int): GradientDrawable = GradientDrawable().apply {
         shape = GradientDrawable.OVAL
         setColor(color)
@@ -677,60 +724,27 @@ class FloatingControlOverlay(
     )
 
     private companion object {
+        const val PANEL_WIDTH_DP = 348
         const val FINISH_DISPLAY_MS = 350L
     }
 
-    private class EdgeGlowView(context: Context, dark: Boolean) : View(context) {
-        private val accent = if (dark) Color.rgb(106, 128, 255) else Color.rgb(65, 105, 225)
-        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private class DragHandleView(context: Context, dark: Boolean) : View(context) {
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = if (dark) Color.argb(190, 224, 228, 244) else Color.argb(170, 75, 80, 95)
+            style = Paint.Style.FILL
+        }
 
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
-            val edge = dp(84).toFloat()
-            val w = width.toFloat()
-            val h = height.toFloat()
-            if (w <= 0f || h <= 0f) return
-            paint.shader = LinearGradient(
-                0f,
-                0f,
-                edge,
-                0f,
-                Color.argb(130, Color.red(accent), Color.green(accent), Color.blue(accent)),
-                Color.TRANSPARENT,
-                Shader.TileMode.CLAMP,
-            )
-            canvas.drawRect(0f, 0f, edge, h, paint)
-            paint.shader = LinearGradient(
-                w,
-                0f,
-                w - edge,
-                0f,
-                Color.argb(130, Color.red(accent), Color.green(accent), Color.blue(accent)),
-                Color.TRANSPARENT,
-                Shader.TileMode.CLAMP,
-            )
-            canvas.drawRect(w - edge, 0f, w, h, paint)
-            paint.shader = LinearGradient(
-                0f,
-                0f,
-                0f,
-                edge,
-                Color.argb(88, Color.red(accent), Color.green(accent), Color.blue(accent)),
-                Color.TRANSPARENT,
-                Shader.TileMode.CLAMP,
-            )
-            canvas.drawRect(0f, 0f, w, edge, paint)
-            paint.shader = LinearGradient(
-                0f,
-                h,
-                0f,
-                h - edge,
-                Color.argb(88, Color.red(accent), Color.green(accent), Color.blue(accent)),
-                Color.TRANSPARENT,
-                Shader.TileMode.CLAMP,
-            )
-            canvas.drawRect(0f, h - edge, w, h, paint)
-            paint.shader = null
+            val centerX = width / 2f
+            val centerY = height / 2f
+            val spacing = dp(6).toFloat()
+            val radius = dp(1.5f)
+            for (row in -1..1) {
+                val y = centerY + row * spacing
+                canvas.drawCircle(centerX - spacing / 2f, y, radius, paint)
+                canvas.drawCircle(centerX + spacing / 2f, y, radius, paint)
+            }
         }
 
         private fun dp(value: Int): Int = TypedValue.applyDimension(
@@ -738,5 +752,11 @@ class FloatingControlOverlay(
             value.toFloat(),
             resources.displayMetrics,
         ).toInt()
+
+        private fun dp(value: Float): Float = TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_DIP,
+            value,
+            resources.displayMetrics,
+        )
     }
 }

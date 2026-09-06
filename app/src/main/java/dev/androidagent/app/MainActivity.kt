@@ -36,6 +36,16 @@ class MainActivity : ComponentActivity() {
         model.prepare()
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
+    override fun onStart() {
+        super.onStart()
+        // The app owns the foreground surface. Keep the run state in the
+        // overlay, but remove its window until another app is visible.
+        model.graph.overlay.setAppForeground(true)
+    }
+    override fun onStop() {
+        model.graph.overlay.setAppForeground(false)
+        super.onStop()
+    }
     override fun onResume() { super.onResume(); model.refreshAccount() }
     private fun ensureService() { runCatching { ContextCompat.startForegroundService(this, Intent(this, AgentService::class.java)) }.onFailure { model.error("Could not start the agent service: ${it.message}") } }
     private fun actions() = AgentUiActions(
@@ -61,6 +71,7 @@ class MainActivity : ComponentActivity() {
         onConnect = { model.connect(it) },
         onDiscover = { model.discover() },
         onModelSelected = model::model,
+        onReasoningEffortSelected = model::reasoningEffort,
         onRenameSession = { id, title -> model.rename(id, title) },
         onDeleteSession = { model.delete(it) },
         onRetry = { model.prepare() },

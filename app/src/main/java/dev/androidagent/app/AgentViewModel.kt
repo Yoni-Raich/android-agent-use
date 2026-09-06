@@ -16,7 +16,12 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     val graph = (application as AgentApplication).graph
     private val preferences = application.getSharedPreferences("ui", 0)
     private val current = MutableStateFlow<String?>(null)
-    private val mutable = MutableStateFlow(AgentUiState(selectedModel = preferences.getString("model", null)))
+    private val mutable = MutableStateFlow(
+        AgentUiState(
+            selectedModel = preferences.getString("model", null),
+            selectedReasoningEffort = preferences.getString("reasoningEffort", null),
+        )
+    )
     val ui: StateFlow<AgentUiState> = mutable.asStateFlow()
     private var setupJob: Job? = null
 
@@ -66,7 +71,14 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         val images = attachments.filter { it.mimeType?.startsWith("image/") == true }.mapNotNull { it.path?.let(::File) }
         val otherFiles = paths.filter { it !in images }
         val prompt = if (otherFiles.isEmpty()) text else text + "\n\nAttached files in this session:\n" + otherFiles.joinToString("\n") { it.absolutePath }
-        graph.coordinator.send(id, prompt, images, mutable.value.selectedModel)
+        val snapshot = mutable.value
+        graph.coordinator.send(
+            id,
+            prompt,
+            images,
+            snapshot.selectedModel,
+            selectedReasoningEffort(snapshot),
+        )
         mutable.update { it.copy(attachments = emptyList(), errorMessage = null) }
     }
     fun stop() = graph.coordinator.stop()
@@ -90,10 +102,61 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     fun refreshAccount() = task { if (graph.runtime.status.value.phase in setOf(RuntimePhase.READY, RuntimePhase.RUNNING)) { val account = graph.engine.account(); mutable.update { it.copy(accountStatus = account) } } }
     private suspend fun loadModels() {
         mutable.update { it.copy(isLoadingModels = true) }
-        try { val models = graph.engine.models(); mutable.update { it.copy(availableModels = models) } }
+        try {
+            val catalog = graph.engine.modelCatalog()
+            val models = catalog.map { it.id }
+            mutable.update { current ->
+                if (catalog.isEmpty()) {
+                    current.copy(availableModels = models, modelCatalog = catalog)
+                } else {
+                    val selectedModel = current.selectedModel?.takeIf { it in models }
+                    val selectedEffort = selectedModel
+                        ?.let { id -> catalog.firstOrNull { it.id == id } }
+                        ?.let { normalizeReasoningEffort(it, current.selectedReasoningEffort) }
+                    persistModelAndEffort(selectedModel, selectedEffort)
+                    current.copy(
+                        availableModels = models,
+                        modelCatalog = catalog,
+                        selectedModel = selectedModel,
+                        selectedReasoningEffort = selectedEffort,
+                    )
+                }
+            }
+        }
         finally { mutable.update { it.copy(isLoadingModels = false) } }
     }
-    fun model(value: String) { preferences.edit().putString("model", value).apply(); mutable.update { it.copy(selectedModel = value) } }
+    fun model(value: String) {
+        val model = mutable.value.modelCatalog.firstOrNull { it.id == value }
+        val effort = model?.let { normalizeReasoningEffort(it, mutable.value.selectedReasoningEffort) }
+        persistModelAndEffort(value, effort)
+        mutable.update { it.copy(selectedModel = value, selectedReasoningEffort = effort) }
+    }
+    fun reasoningEffort(value: String?) {
+        val current = mutable.value
+        val model = current.selectedModel?.let { id -> current.modelCatalog.firstOrNull { it.id == id } } ?: return
+        val selected = value?.takeIf { effort -> model.reasoningEfforts.any { it.value == effort } }
+        persistModelAndEffort(current.selectedModel, selected)
+        mutable.update { it.copy(selectedReasoningEffort = selected) }
+    }
+    private fun selectedReasoningEffort(state: AgentUiState): String? {
+        val model = state.selectedModel?.let { id -> state.modelCatalog.firstOrNull { it.id == id } } ?: return null
+        return state.selectedReasoningEffort
+            ?.takeIf { value -> model.reasoningEfforts.any { it.value == value } }
+            ?: model.defaultReasoningEffort?.takeIf { value -> model.reasoningEfforts.any { it.value == value } }
+    }
+    private fun normalizeReasoningEffort(model: AgentModel, requested: String?): String? {
+        if (model.reasoningEfforts.isEmpty()) return null
+        // Keep Auto as the initial choice so the server can apply its own
+        // advertised default. A stale explicit choice is cleared on model
+        // changes instead of guessing a level that may not be supported.
+        return requested?.takeIf { value -> model.reasoningEfforts.any { it.value == value } }
+    }
+    private fun persistModelAndEffort(model: String?, effort: String?) {
+        preferences.edit().apply {
+            if (model.isNullOrBlank()) remove("model") else putString("model", model)
+            if (effort.isNullOrBlank()) remove("reasoningEffort") else putString("reasoningEffort", effort)
+        }.apply()
+    }
     fun discover() = task {
         mutable.update { it.copy(isDiscoveringAdb = true) }
         try {

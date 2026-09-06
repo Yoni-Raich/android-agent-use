@@ -109,32 +109,19 @@ class AndroidDeviceToolsTest {
         assertTrue(command.contains("dev.androidagent.app.INPUT_TEXT"))
         assertTrue(command.contains("payload_base64"))
         assertTrue(command.contains(AndroidDeviceTools.shellQuote(payload)))
+        assertFalse(command.contains("--receiver-permission"))
         assertFalse(command.contains(text))
         assertFalse(command.contains("O'Reilly"))
     }
 
-    @Test fun imeReadinessRequiresSelectedComponentAndEditorConnection() {
+    @Test fun imeSelectionNormalizesAndroidComponentNames() {
         val component = "dev.androidagent.app/dev.androidagent.app.ime.AgentInputMethodService"
-        val readyDump = """
-            mCurMethodId=$component
-            mCurAttribute=EditorInfo{packageName=com.whatsapp}
-            mServedInputConnection=android.view.inputmethod.InputConnectionWrapper@123
-        """.trimIndent()
-        val noFieldDump = """
-            mCurMethodId=$component
-            mCurAttribute=null
-            mServedInputConnection=null
-        """.trimIndent()
-
         assertTrue(AndroidDeviceTools.imeSelectionMatches(component, component))
         assertTrue(AndroidDeviceTools.imeSelectionMatches(
             "dev.androidagent.app/.ime.AgentInputMethodService",
             component,
         ))
         assertFalse(AndroidDeviceTools.imeSelectionMatches("com.android.inputmethod/.LatinIME", component))
-        assertEquals(true, AndroidDeviceTools.imeDumpConnectionReady(readyDump, component))
-        assertEquals(false, AndroidDeviceTools.imeDumpConnectionReady(noFieldDump, component))
-        assertEquals(null, AndroidDeviceTools.imeDumpConnectionReady("mCurMethodId=$component", component))
     }
 
     @Test fun imeBroadcastOnlyConfirmsARealCommitResult() {
@@ -152,9 +139,10 @@ class AndroidDeviceToolsTest {
         val result = tools.invoke("type_text", buildJsonObject { put("text", "שלום") })
 
         assertTrue(result.success)
-        assertTrue(adb.commands.any { it == "dumpsys input_method" })
+        assertTrue(adb.commands.any { it.contains("INPUT_PROBE") })
         assertTrue(adb.commands.any { it.startsWith("am broadcast") })
-        assertTrue(adb.commands.indexOfFirst { it.startsWith("am broadcast") } > adb.commands.indexOf("dumpsys input_method"))
+        assertEquals(1, adb.commands.count { it.contains("INPUT_TEXT") })
+        assertTrue(adb.commands.indexOfFirst { it.contains("INPUT_TEXT") } > adb.commands.indexOfFirst { it.contains("INPUT_PROBE") })
     }
 
     @Test fun imeCommitFailureReturnsGuidanceAndNeverClaimsSuccess() = runBlocking {
@@ -167,10 +155,24 @@ class AndroidDeviceToolsTest {
             tools.invoke("type_text", buildJsonObject { put("text", "שלום") })
             fail("expected the IME commit to be rejected")
         } catch (error: IllegalStateException) {
-            assertTrue(error.message!!.contains("text was not sent", ignoreCase = true))
-            assertTrue(error.message!!.contains("text field", ignoreCase = true))
+            assertTrue(error.message!!.contains("No Enter key was sent", ignoreCase = true))
+            assertTrue(error.message!!.contains("editor", ignoreCase = true))
         }
         assertTrue(adb.commands.count { it.startsWith("am broadcast") } >= 2)
+    }
+
+    @Test fun ambiguousCommitIsNeverRetriedOrSubmitted() = runBlocking {
+        val component = "dev.androidagent.app/.ime.AgentInputMethodService"
+        val adb = ImeFakeAdb(component, 1, 5)
+        val tools = AndroidDeviceTools(adb, component)
+        tools.beginRun("ime", Files.createTempDirectory("ws").toFile())
+        try {
+            tools.invoke("type_text", buildJsonObject { put("text", "שלום"); put("submit", true) })
+            fail("expected ambiguous commit failure")
+        } catch (_: IllegalStateException) { }
+        assertEquals(1, adb.commands.count { it.contains("INPUT_TEXT") })
+        assertFalse(adb.commands.any { it == "input keyevent 66" })
+        assertTrue(adb.commands.last().startsWith("ime set"))
     }
 
     @Test fun coordinatesAndKeysValidated() {
@@ -269,17 +271,9 @@ class AndroidDeviceToolsTest {
                     settingsReads++
                     CommandResult(if (settingsReads == 1) "com.android.inputmethod/.LatinIME" else "$component\n", 0)
                 }
-                command == "dumpsys input_method" -> {
+                command.contains("INPUT_PROBE") -> {
                     dumpReads++
-                    val connection = if (dumpReads >= readyAfterDump) {
-                        "android.view.inputmethod.InputConnectionWrapper@123"
-                    } else {
-                        "null"
-                    }
-                    CommandResult(
-                        "mCurMethodId=$component\nmCurAttribute=EditorInfo{packageName=com.whatsapp}\nmServedInputConnection=$connection",
-                        0,
-                    )
+                    CommandResult("Broadcast completed: result=${if (dumpReads >= readyAfterDump) 1 else 4}", 0)
                 }
                 command.startsWith("am broadcast") -> CommandResult("Broadcast completed: result=$commitResult data=ok", 0)
                 else -> CommandResult("ok", 0)

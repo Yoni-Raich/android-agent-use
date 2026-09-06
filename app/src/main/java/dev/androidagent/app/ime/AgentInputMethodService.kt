@@ -19,7 +19,7 @@ import java.nio.charset.StandardCharsets
  *
  * The receiver is registered only while the input method is alive, is scoped
  * to this package's action, and requires the platform DUMP permission. On
- * Android versions that expose the sender UID, only the shell UID is accepted.
+ * Android versions that expose the sender UID, only shell or unavailable identity is accepted; DUMP remains mandatory.
  * The payload is UTF-8 encoded Base64 so shell argument quoting cannot alter
  * the text. No text or payload is logged.
  */
@@ -34,10 +34,19 @@ class AgentInputMethodService : InputMethodService() {
         super.onCreate()
         inputReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
-                if (intent.action != inputAction) return
+                if (intent.action !in setOf(inputAction, "$packageName$PROBE_SUFFIX")) return
 
-                    if (Build.VERSION.SDK_INT >= 34 && intentSenderUid() != Process.SHELL_UID) {
+                    if (Build.VERSION.SDK_INT >= 34 && intentSenderUid() !in setOf(Process.SHELL_UID, Process.INVALID_UID)) {
                         setFailure(RESULT_UNAUTHORIZED)
+                        return
+                    }
+                    // DUMP is enforced on the sender by registerReceiver. Android may
+                    // hide shell identity unless the sender opts into sharing it.
+                    if (intent.action == "$packageName$PROBE_SUFFIX") {
+                        val ready = currentInputConnection != null && currentInputEditorInfo != null &&
+                            currentInputEditorInfo.inputType != 0
+                        setResultCode(if (ready) RESULT_SUCCESS else RESULT_NO_INPUT_CONNECTION)
+                        setResultData(if (ready) RESULT_DATA_OK else RESULT_DATA_ERROR)
                         return
                     }
                     val encoded = intent.getStringExtra(EXTRA_PAYLOAD)
@@ -69,7 +78,7 @@ class AgentInputMethodService : InputMethodService() {
                         return
                     }
                     val connection = currentInputConnection
-                    if (connection == null) {
+                    if (connection == null || currentInputEditorInfo == null || currentInputEditorInfo.inputType == 0) {
                         setFailure(RESULT_NO_INPUT_CONNECTION)
                         return
                     }
@@ -95,7 +104,7 @@ class AgentInputMethodService : InputMethodService() {
             }
         }
 
-        val filter = IntentFilter(inputAction)
+        val filter = IntentFilter(inputAction).apply { addAction("$packageName$PROBE_SUFFIX") }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(
                 inputReceiver,
@@ -126,6 +135,7 @@ class AgentInputMethodService : InputMethodService() {
 
     companion object {
         const val ACTION_SUFFIX = ".INPUT_TEXT"
+        const val PROBE_SUFFIX = ".INPUT_PROBE"
         const val EXTRA_PAYLOAD = "payload_base64"
         const val RESULT_SUCCESS = 1
         const val RESULT_UNAUTHORIZED = 2

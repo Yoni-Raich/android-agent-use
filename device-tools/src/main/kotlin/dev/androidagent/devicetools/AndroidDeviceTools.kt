@@ -10,6 +10,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -238,19 +240,23 @@ class AndroidDeviceTools(
             awaitImeReady(component, timeout)
             val payload = encodeImePayload(text)
             var committed = false
-            repeat(IME_COMMIT_ATTEMPTS) { attempt ->
+            var lastCode: Int? = null
+            for (attempt in 0 until IME_COMMIT_ATTEMPTS) {
                 checkActive()
                 val broadcast = userExecute(buildImeBroadcastCommand(component, payload), timeout)
-                if (broadcast.exitCode == 0 && broadcastCommitted(broadcast.output)) {
+                lastCode = imeBroadcastResult(broadcast.output)
+                if (broadcast.exitCode == 0 && lastCode == IME_RESULT_SUCCESS) {
                     committed = true
-                    return@repeat
+                    break
                 }
+                // Only explicit no-delivery/no-connection responses are safe to retry.
+                // A missing acknowledgement can mean that text was already inserted.
+                if (broadcast.exitCode != 0 || lastCode !in listOf(0, 4)) break
                 if (attempt + 1 < IME_COMMIT_ATTEMPTS) delay(IME_COMMIT_RETRY_MS)
             }
             check(committed) {
-                "Unicode text was not committed; the target text field or Unicode IME is unavailable. " +
-                    "Focus a text field, keep the keyboard visible, and select Android Agent as the active keyboard in system settings, then retry. " +
-                    "Text was not sent."
+                "Unicode input failed: ${imeFailureReason(lastCode)}. " +
+                    "No Enter key was sent. Check the text field before retrying."
             }
 
             if (submit) {
@@ -273,42 +279,26 @@ class AndroidDeviceTools(
         }
     }
 
-    /**
-     * Selecting an IME is asynchronous on Android. The input service can be
-     * alive while its currentInputConnection is still null, so wait for both
-     * the selected component and an editor connection before broadcasting.
-     */
+    /** Ask the selected IME itself; dumpsys formats differ between Android versions. */
     private suspend fun awaitImeReady(component: String, timeout: Long) {
-        var selected = false
-        var connection: Boolean? = null
+        var lastCode: Int? = null
         try {
             withTimeout(timeout.coerceAtMost(IME_READY_WAIT_MS).coerceAtLeast(IME_READY_POLL_MS)) {
                 while (true) {
                     checkActive()
-                    selected = imeSelectionMatches(queryDefaultIme(IME_STATUS_TIMEOUT_MS), component)
-                    val dump = try {
-                        userExecute("dumpsys input_method", IME_STATUS_TIMEOUT_MS)
-                            .takeIf { it.exitCode == 0 }?.output
-                    } catch (error: CancellationException) {
-                        throw error
-                    } catch (_: Exception) {
-                        null
+                    if (imeSelectionMatches(queryDefaultIme(IME_STATUS_TIMEOUT_MS), component)) {
+                        val probe = userExecute(buildImeProbeCommand(component), IME_STATUS_TIMEOUT_MS)
+                        lastCode = imeBroadcastResult(probe.output)
+                        if (probe.exitCode == 0 && lastCode == IME_RESULT_SUCCESS) return@withTimeout
+                        check(lastCode !in listOf(2, 3)) { "Unicode IME probe rejected: ${imeFailureReason(lastCode)}" }
                     }
-                    connection = dump?.let { imeDumpConnectionReady(it, component) }
-                    if (selected && connection == true) return@withTimeout
                     delay(IME_READY_POLL_MS)
                 }
             }
         } catch (error: TimeoutCancellationException) {
-            val reason = when {
-                !selected -> "the Unicode IME did not become active"
-                connection == false -> "the target text field is not focused"
-                else -> "Android did not expose an active input connection"
-            }
+            currentCoroutineContext().ensureActive()
             throw IllegalStateException(
-                "Unicode text was not committed because $reason. " +
-                    "Focus a text field, keep the keyboard visible, and select Android Agent as the active keyboard in system settings, then retry. " +
-                    "Text was not sent.",
+                "Unicode IME not ready: ${imeFailureReason(lastCode)}. Focus the target text field and retry. No text was inserted.",
                 error,
             )
         }
@@ -324,10 +314,6 @@ class AndroidDeviceTools(
             .map { it.trim() }
             .firstOrNull { it.isNotEmpty() && it != "null" && it != "none" }
             ?.also { requireValidImeComponent(it) }
-    }
-
-    private fun broadcastCommitted(output: String): Boolean {
-        return imeBroadcastCommitted(output)
     }
 
     private suspend fun pressKey(arguments: JsonObject): ToolResult {
@@ -582,49 +568,26 @@ class AndroidDeviceTools(
         internal fun imeSelectionMatches(current: String?, requested: String): Boolean =
             current?.trim()?.let { normalizedComponent(it) } == normalizedComponent(requested)
 
-        /**
-         * Parse the stable fields printed by `dumpsys input_method` without
-         * exposing the dump (which can include unrelated package details).
-         * Null means that this Android build uses an unknown dump format.
-         */
-        internal fun imeDumpConnectionReady(output: String, requested: String): Boolean? {
-            if (output.isBlank()) return null
-            val lines = output.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
-            val current = lines.asSequence()
-                .mapNotNull { line ->
-                    Regex("\\b(?:mCurId|mCurMethodId|mSelectedMethodId)\\s*=\\s*([^,\\s}]+)").find(line)
-                        ?.groupValues?.getOrNull(1)
-                }
-                .firstOrNull()
-            val selected = current?.let { imeSelectionMatches(it, requested) }
-            if (selected == false) return false
+        internal fun imeBroadcastResult(output: String): Int? =
+            Regex("\\bresult=(-?\\d+)").find(output)?.groupValues?.getOrNull(1)?.toIntOrNull()
 
-            val connectionLine = lines.firstOrNull { line ->
-                line.contains("mServedInputConnection", ignoreCase = true) ||
-                    line.contains("mCurrentInputConnection", ignoreCase = true)
-            }
-            val editorLine = lines.firstOrNull { line ->
-                line.contains("mCurAttribute", ignoreCase = true) ||
-                    line.contains("mServedInputContext", ignoreCase = true)
-            }
-            val connection = when {
-                connectionLine?.substringAfter('=')?.trim()?.equals("null", ignoreCase = true) == true -> false
-                connectionLine != null -> true
-                editorLine?.substringAfter('=')?.trim()?.equals("null", ignoreCase = true) == true -> false
-                editorLine != null -> true
-                else -> null
-            }
-            return when {
-                connection == false -> false
-                selected == true && connection == true -> true
-                else -> null
-            }
+        internal fun imeBroadcastCommitted(output: String): Boolean = imeBroadcastResult(output) == IME_RESULT_SUCCESS
+
+        internal fun imeFailureReason(code: Int?): String = when (code) {
+            0 -> "IME receiver did not respond"
+            2 -> "IME rejected the sender identity"
+            3 -> "IME rejected the text payload"
+            4 -> "IME has no active target editor"
+            5 -> "editor did not confirm the text commit"
+            else -> "commit acknowledgement unavailable"
         }
 
-        /** Only result=1 means the IME actually called commitText successfully. */
-        internal fun imeBroadcastCommitted(output: String): Boolean =
-            Regex("\\bresult=(-?\\d+)").find(output)
-                ?.groupValues?.getOrNull(1)?.toIntOrNull() == IME_RESULT_SUCCESS
+        fun buildImeProbeCommand(component: String): String {
+            requireValidImeComponent(component)
+            val packageName = component.substringBefore('/')
+            return "am broadcast --user current --receiver-foreground -p ${shellQuote(packageName)} " +
+                "-a ${shellQuote(packageName + ".INPUT_PROBE") }"
+        }
 
         private fun normalizedComponent(value: String): String {
             val clean = value.trim().trimEnd(',', ';')
@@ -648,7 +611,6 @@ class AndroidDeviceTools(
             val action = packageName + IME_ACTION_SUFFIX
             return "am broadcast --user current --receiver-foreground " +
                 "-p ${shellQuote(packageName)} " +
-                "--receiver-permission android.permission.DUMP " +
                 "-a ${shellQuote(action)} " +
                 "--es ${shellQuote(IME_EXTRA_PAYLOAD)} ${shellQuote(payload)}"
         }

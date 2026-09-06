@@ -61,6 +61,14 @@ class AgentCoordinatorTest {
         rig.close()
     }
 
+    @Test fun selectedReasoningEffortIsPassedToTheEngine() = runTest {
+        val rig = Rig(this)
+        rig.coordinator.send("one", "Think carefully", reasoningEffort = "high")
+        runCurrent()
+        assertEquals("high", rig.engine.reasoningEffort)
+        rig.close()
+    }
+
     @Test fun uiControlWaitsForOverlayAndBackendReadsDoNotShowIt() = runTest {
         val rig = Rig(this)
         rig.coordinator.send("one", "Read and tap")
@@ -119,6 +127,7 @@ class AgentCoordinatorTest {
         private val stream = MutableSharedFlow<EngineEvent>(extraBufferCapacity = 16)
         override val events = stream.asSharedFlow()
         var turns = 0
+        var reasoningEffort: String? = null
         var closed = false
         var waitForInterrupt: CompletableDeferred<Unit>? = null
         val answers = mutableListOf<ToolResult>()
@@ -130,6 +139,10 @@ class AgentCoordinatorTest {
         override suspend fun models() = listOf("test")
         override suspend fun openSession(workspace: File, threadId: String?, model: String?, tools: List<ToolDefinition>) = "thread"
         override suspend fun startTurn(threadId: String, prompt: String, images: List<File>): String { turns++; return "turn" }
+        override suspend fun startTurn(threadId: String, prompt: String, images: List<File>, reasoningEffort: String?): String {
+            this.reasoningEffort = reasoningEffort
+            return startTurn(threadId, prompt, images)
+        }
         override suspend fun steer(threadId: String, turnId: String, prompt: String) = Unit
         override suspend fun interrupt(threadId: String, turnId: String) { waitForInterrupt?.await() }
         override suspend fun answerTool(requestId: String, result: ToolResult) { answers.add(result) }

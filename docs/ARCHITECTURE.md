@@ -15,7 +15,7 @@ One Android project, with replaceable modules and small core contracts.
 
 A model change is configuration. An engine change replaces the engine adapter. Runtime packaging must not affect chat or ADB APIs. The UI observes app events, never raw Codex JSON.
 
-The MVP permits one active agent run per phone. A session has its own working directory; this is organization, not a claim of OS-level isolation. Stop revokes dispatch first and interrupts active work next. Unknown raw shell requests are visible device control. The overlay is shown from run startup and carries explicit Starting, Thinking, Running, Controlling, Stopping, Done, and Error states. It remains the only touchable surface over the controlled app and returns to MainActivity after a terminal state.
+The MVP permits one active agent run per phone. A session has its own working directory; this is organization, not a claim of OS-level isolation. Stop revokes dispatch first and interrupts active work next. Unknown raw shell requests are visible device control. The overlay tracks Starting, Thinking, Running, Controlling, Stopping, Done, and Error states for the entire run. MainActivity visibility hides its window inside the app and restores it outside the app until the run ends, including between tool calls. Its translucent pill provides local Stop and steering; it releases input focus before device actions and returns to MainActivity after a terminal state.
 
 Wireless ADB stores only the last successful local connect port in app-private
 preferences. The foreground service runs a bounded reconnect loop: it tries
@@ -68,3 +68,24 @@ Stop remains reachable while a steering draft exists; STOPPING blocks dispatch
 and preserves that draft. Terminal formatting is removed before display.
 Compose fixture tests exercise UI callbacks without starting or authenticating
 Codex. They do not establish real runtime, device-control, or network success.
+
+## Unicode input
+
+Device tools temporarily select the bundled IME and probe its actual editor
+connection through a package-scoped broadcast. Android enforces DUMP permission
+on the sender via receiver registration. The outgoing broadcast must not set
+receiver-permission DUMP, because the receiving app does not hold it. A hidden
+sender UID on Android 14+ is accepted only behind that platform permission gate;
+known non-shell UIDs are rejected. No text payloads are logged.
+
+The gateway stops immediately after an acknowledged commit. Only explicit
+no-delivery/no-editor responses can retry. Missing or ambiguous acknowledgements
+fail without sending Enter. Cleanup restores the user's previous IME. Runtime
+probe responses replace device-specific dumpsys parsing.
+
+## Release versioning
+
+Every distributed APK increments versionCode and updates versionName in
+version.properties before building. Release tag, asset filename and embedded
+APK version must match. Previously published assets remain available. 0.1.1 is
+versionCode 2; the older 0.1.0 fix releases all used versionCode 1.

@@ -5,7 +5,9 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.test.platform.app.InstrumentationRegistry
+import dev.androidagent.core.AgentModel
 import dev.androidagent.core.ChatMessage
+import dev.androidagent.core.ReasoningEffortOption
 import dev.androidagent.core.RunPhase
 import dev.androidagent.core.RunState
 import org.junit.Assert.assertEquals
@@ -18,6 +20,16 @@ class ChatUiTest {
     private val fixture = AgentUiState(
         activeSessionId = "ui-fixture", activeSessionTitle = "תכנון היום",
         selectedModel = "gpt-5.6-luna", availableModels = listOf("gpt-5.6-luna"),
+        modelCatalog = listOf(
+            AgentModel(
+                id = "gpt-5.6-luna",
+                reasoningEfforts = listOf(
+                    ReasoningEffortOption("low", "Fast"),
+                    ReasoningEffortOption("high", "Deep"),
+                ),
+                defaultReasoningEffort = "low",
+            )
+        ),
         messages = listOf(
             ChatMessage("user", "ui-fixture", "user", "עזור לי לתכנן את היום שלי", 1),
             ChatMessage("assistant", "ui-fixture", "assistant",
@@ -65,6 +77,18 @@ class ChatUiTest {
         compose.onNodeWithContentDescription("Steer agent").assertIsNotEnabled()
         compose.onNodeWithContentDescription("Stop agent").assertIsNotEnabled()
         compose.onNodeWithContentDescription("Message input").assertTextContains("Keep this draft")
+    }
+    @Test fun reasoningSelectorUsesAdvertisedOptions() {
+        var selected: String? = null
+        compose.setContent {
+            AndroidAgentScreen(
+                fixture,
+                AgentUiActions(onReasoningEffortSelected = { selected = it }),
+            )
+        }
+        compose.onNodeWithContentDescription("Choose reasoning effort").performClick()
+        compose.onNodeWithText("high").performClick()
+        compose.runOnIdle { assertEquals("high", selected) }
     }
     @Test fun markdownAndCopyControlAreVisible() {
         compose.setContent { AndroidAgentScreen(fixture.copy(messages = listOf(

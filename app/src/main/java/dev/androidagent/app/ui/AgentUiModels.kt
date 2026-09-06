@@ -1,6 +1,7 @@
 package dev.androidagent.app.ui
 
 import dev.androidagent.core.AccountStatus
+import dev.androidagent.core.AgentModel
 import dev.androidagent.core.AdbEndpoint
 import dev.androidagent.core.AdbStatus
 import dev.androidagent.core.ChatMessage
@@ -63,7 +64,9 @@ data class AgentUiState(
     val runtimeStatus: RuntimeStatus = RuntimeStatus(),
     val accountStatus: AccountStatus? = null,
     val availableModels: List<String> = emptyList(),
+    val modelCatalog: List<AgentModel> = emptyList(),
     val selectedModel: String? = null,
+    val selectedReasoningEffort: String? = null,
     val isDrawerOpen: Boolean = false,
     val isSettingsOpen: Boolean = false,
     val isLoadingSessions: Boolean = false,
@@ -107,6 +110,7 @@ data class AgentUiActions(
     val onDisconnect: () -> Unit = {},
     val onForgetPairing: () -> Unit = {},
     val onModelSelected: (String) -> Unit = {},
+    val onReasoningEffortSelected: (String?) -> Unit = {},
     val onRenameSession: (sessionId: String, title: String) -> Unit = { _, _ -> },
     val onDeleteSession: (String) -> Unit = {},
     val onRetry: () -> Unit = {},

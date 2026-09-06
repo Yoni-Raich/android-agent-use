@@ -39,7 +39,13 @@ class AgentCoordinator(
 
     init { scope.launch { engine.events.collect(::handleEvent) } }
 
-    fun send(sessionId: String, prompt: String, images: List<File> = emptyList(), model: String? = null) {
+    fun send(
+        sessionId: String,
+        prompt: String,
+        images: List<File> = emptyList(),
+        model: String? = null,
+        reasoningEffort: String? = null,
+    ) {
         if (prompt.isBlank() && images.isEmpty()) return
         synchronized(lifecycleLock) {
             if (state.value.active) {
@@ -59,7 +65,7 @@ class AgentCoordinator(
             awaitingTurn = false
             startupEvents.clear()
             textRevision = 0L
-            runJob = scope.launch { run(token, runCompletion, sessionId, prompt, images, model) }
+            runJob = scope.launch { run(token, runCompletion, sessionId, prompt, images, model, reasoningEffort) }
         }
     }
 
@@ -70,6 +76,7 @@ class AgentCoordinator(
         prompt: String,
         images: List<File>,
         model: String?,
+        reasoningEffort: String?,
     ) {
         try {
             // Keep the control surface visible for the whole active run. This
@@ -105,7 +112,7 @@ class AgentCoordinator(
             }
             overlay.updateState(OverlayState(OverlayPhase.THINKING))
             beginTurn(token)
-            val startedTurn = engine.startTurn(openedThread, prompt, images)
+            val startedTurn = engine.startTurn(openedThread, prompt, images, reasoningEffort)
             if (!activateTurn(token, startedTurn)) return
             ensureCurrent(token)
             runCompletion.await()

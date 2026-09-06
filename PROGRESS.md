@@ -94,3 +94,14 @@ Record actual commands and results. Mark untested features explicitly. Do not re
   results expose an explicit Wireless Debugging off/on-waiting status. ADB
   policy tests pass. Reconnect on Q8 remains NOT TESTED because the device is
   not connected.
+- 2026-09-06: Release v0.1.1 published (versionCode 2, versionName 0.1.1).
+  Added reasoning effort selection in the UI composer and turn start params.
+  Replaced dumpsys parsing with direct package-scoped INPUT_PROBE broadcast
+  for Unicode IME readiness. Polished floating control overlay lifecycle and
+  in-app hide/restore behavior.
+  Validation:
+  - Unit tests: all modules passed (:adb, :core, :device-tools, :engine-codex, :overlay, :runtime, :workspace).
+  - Runtime staging tests: test_prepare_runtime passed with 2 tests.
+  - Android test compilation: assembleDevDebugAndroidTest passed.
+  - APK: artifacts/android-agent-0.1.1.apk (SHA-256: D8940A057866E3DBC4B7AC09EA7441F37BFB4974A4ADFEBC41F21E9D506C5154).
+
