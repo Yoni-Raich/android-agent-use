@@ -22,14 +22,16 @@ object NetDiagnostics {
 
     /**
      * Minimal CONNECT allowlist. auth.openai.com is the verified device-auth
-     * endpoint. api.openai.com is the Codex Responses API base used by the
-     * pinned app-server (rust-v0.153.4). Any further host may only be added
-     * after it is observed in CONNECT metadata (host:port only) and recorded
-     * here with its justification; an unrestricted open proxy is never used.
+     * endpoint. api.openai.com serves API-key sessions; chatgpt.com serves
+     * ChatGPT sessions, including models and responses. Verified against
+     * rust-v0.153.4/codex-rs/model-provider-info/src/lib.rs
+     * (CHATGPT_CODEX_BASE_URL and to_api_provider). Further hosts require
+     * observed CONNECT metadata or a verified upstream route.
      */
     val defaultAllowedHosts: Set<String> = setOf(
         "auth.openai.com",
-        "api.openai.com"
+        "api.openai.com",
+        "chatgpt.com"
     )
 
     /** Only TLS is tunnelled. Plain HTTP through the proxy is never allowed. */
@@ -130,6 +132,7 @@ object NetDiagnostics {
         env["http_proxy"] = proxyUrl
         env["NO_PROXY"] = NO_PROXY_VALUE
         env["no_proxy"] = NO_PROXY_VALUE
+        env["NO_COLOR"] = "1"
         if (!caFileAbsolutePath.isNullOrBlank()) {
             env["SSL_CERT_FILE"] = caFileAbsolutePath
             env["CODEX_CA_CERTIFICATE"] = caFileAbsolutePath

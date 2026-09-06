@@ -18,6 +18,10 @@ enum class NetErrorCategory { DNS, TLS, TIMEOUT, AUTH, HTTP, CONNECTION, UNKNOWN
  */
 object SecretRedactor {
 
+    // Remove terminal color/control sequences before redaction and UI display.
+    private val ansiCsiPattern = Regex("\u001B\\[[0-?]*[ -/]*[@-~]")
+    private val colorRemainderPattern = Regex("""\[(?:\d{1,3};)*\d{1,3}m""")
+
     private val bearerPattern = Regex("""(?i)\bBearer\s+[A-Za-z0-9\-._~+/=]{8,}""")
     private val apiKeyPattern = Regex("""\bsk-[A-Za-z0-9\-_]{8,}""")
     private val jwtPattern = Regex("""\beyJ[A-Za-z0-9\-_]{10,}\.[A-Za-z0-9\-_]{10,}[A-Za-z0-9\-_.]*""")
@@ -33,7 +37,7 @@ object SecretRedactor {
 
     /** Removes secrets from [raw] while keeping the useful classification text. */
     fun redact(raw: String): String {
-        var out = raw
+        var out = colorRemainderPattern.replace(ansiCsiPattern.replace(raw, ""), "")
         out = cookieHeaderPattern.replace(out, "Cookie: [REDACTED]")
         out = bearerPattern.replace(out, "Bearer [REDACTED]")
         out = jwtPattern.replace(out, "[REDACTED_JWT]")

@@ -11,7 +11,9 @@ android {
         versionCode = appVersion.getProperty("versionCode").toInt()
         versionName = appVersion.getProperty("versionName")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        ndk { abiFilters += "arm64-v8a" }
+        // Package native Codex binaries for both the ARM64 phone and the local
+        // x86_64 emulator so emulator tests do not use ARM translation.
+        ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
     flavorDimensions += "channel"
     productFlavors {
@@ -55,5 +57,8 @@ dependencies {
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
+    androidTestImplementation(platform("androidx.compose:compose-bom:2024.12.01"))
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
     testImplementation("junit:junit:4.13.2")
 }

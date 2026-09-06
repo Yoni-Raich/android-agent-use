@@ -43,11 +43,10 @@ import java.io.File
  * CodexPackageLayout::from_exe only recognises an executable inside a `bin/`
  * or `codex-resources/` directory next to codex-package.json. A renamed
  * lib*.so under nativeLibraryDir yields package_layout=None, so upstream falls
- * back to bare "rg" (PATH), a sibling "codex-code-mode-host" (PATH), and no
- * bundled zsh/bwrap. There is no upstream env/config override for the package
- * layout in this version, so helper resolution stays degraded until upstream
- * adds one or root proves app-UID exec behaviour on device. This host sets the
- * best-effort PATH and reports the exact failure; it never fakes discovery.
+ * back to bare "rg" (PATH) and no bundled zsh/bwrap. The staging step patches
+ * the helper lookup to the `.so` name Android can extract into
+ * nativeLibraryDir; the original package archive stays untouched and its hash
+ * remains recorded in the runtime manifest.
  *
  * Credentials stay app-private: this host only ensures CODEX_HOME exists and
  * writes a comment-only config.toml when none exists. It never reads
@@ -142,6 +141,16 @@ class AndroidRuntimeHost(private val appContext: Context) : RuntimeHost {
                         .start()
                 }
                 process = started
+                // Keep a small lifecycle trace for native launch failures. The
+                // app-server's own stderr remains redacted and bounded in the
+                // engine; this records only its exit code.
+                Thread({
+                    val exitCode = runCatching { started.waitFor() }.getOrNull() ?: return@Thread
+                    Log.w(TAG, "Codex app-server exited code=$exitCode")
+                }, "codex-app-server-watch").apply {
+                    isDaemon = true
+                    start()
+                }
                 setStatus(RuntimePhase.RUNNING, "Codex app-server running")
                 return started
             } catch (failure: Throwable) {
@@ -410,7 +419,7 @@ class AndroidRuntimeHost(private val appContext: Context) : RuntimeHost {
          */
         val PACKAGE_LINKS: List<Pair<String, String>> = listOf(
             "bin/codex-app-server" to "libcodex_app_server.so",
-            "bin/codex-code-mode-host" to "libcodex_code_mode_host.so",
+            "bin/codex-code-mode-host" to "codex-code-mode.so",
             "codex-path/rg" to "libcodex_rg.so",
             "codex-resources/bwrap" to "libcodex_bwrap.so",
             "codex-resources/zsh/bin/zsh" to "libcodex_zsh.so"

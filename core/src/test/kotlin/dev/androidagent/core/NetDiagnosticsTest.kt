@@ -5,6 +5,21 @@ import org.junit.Test
 
 class NetDiagnosticsTest {
     @Test
+    fun `ChatGPT model and response host is allowed without allowing lookalikes`() {
+        assertTrue(NetDiagnostics.checkConnectRequest("CONNECT chatgpt.com:443 HTTP/1.1\r\n\r\n") is NetDiagnostics.ConnectCheck.Allow)
+        listOf("chatgpt.com.evil.example", "evilchatgpt.com", "chatgpt.com@evil.example").forEach { host ->
+            assertTrue(NetDiagnostics.checkConnectRequest("CONNECT $host:443 HTTP/1.1\r\n\r\n") is NetDiagnostics.ConnectCheck.Deny)
+        }
+        assertTrue(NetDiagnostics.checkConnectRequest("CONNECT chatgpt.com:80 HTTP/1.1\r\n\r\n") is NetDiagnostics.ConnectCheck.Deny)
+    }
+
+    @Test
+    fun `stderr colors are removed while secrets remain redacted`() {
+        val safe = SecretRedactor.redactStderrLine("\u001B[31mERROR\u001B[0m [2mrequest failed[0m Bearer abcdefghijkl")
+        assertEquals("ERROR request failed Bearer [REDACTED]", safe)
+    }
+
+    @Test
     fun `only allowlisted tls connect is accepted`() {
         val allowed = NetDiagnostics.checkConnectRequest(
             "CONNECT AUTH.OPENAI.COM:443 HTTP/1.1\r\nHost: AUTH.OPENAI.COM\r\n\r\n"

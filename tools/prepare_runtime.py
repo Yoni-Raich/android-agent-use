@@ -2,12 +2,12 @@
 """Stage the official Codex app-server package for the Android APK.
 
 Pipeline (stdlib only, reproducible):
-  1. Verify SHA-256 of codex-package.tar.gz (official rust-v0.153.4 ARM64 musl).
-  2. Safely extract it to .codex-work/runtime/package (no absolute paths,
+  1. Verify SHA-256 of the official rust-v0.153.4 ARM64 and x86_64 musl packages.
+  2. Safely extract them to .codex-work/runtime/package-* (no absolute paths,
      no "..", no symlinks/hardlinks, no devices).
-  3. Copy native ELFs to app/build/generated/runtime/jniLibs/arm64-v8a/ as
-     lib*.so (targetSdk 35 can only execute APK nativeLibraryDir files).
-  4. Verify each staged .so is ELF64-LE AArch64 (e_machine == 183).
+  3. Copy native ELFs to app/build/generated/runtime/jniLibs/<abi>/ as .so
+     files (targetSdk 35 can only execute APK nativeLibraryDir files).
+  4. Verify each staged .so has the expected ELF machine for its ABI.
   5. Verify a pinned Mozilla CA PEM bundle and write it beside the runtime
      metadata (the app copies it to app-private storage before launch).
   6. Write app/build/generated/runtime/assets/runtime/ metadata
@@ -34,11 +34,17 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EXPECTED_SHA256 = "5673c5a8935ff2f85ca67b489e560fdd5e08fb0f0e2f7426f048ec7449aa4fdc"
 PACKAGE_VERSION = "0.153.4"
 PACKAGE_TARGET = "aarch64-unknown-linux-musl"
+X86_PACKAGE_TARGET = "x86_64-unknown-linux-musl"
 
 DEFAULT_PACKAGE = os.path.join(".codex-work", "runtime", "codex-package.tar.gz")
 DEFAULT_PACKAGE_DIR = os.path.join(".codex-work", "runtime", "package")
+DEFAULT_X86_PACKAGE = os.path.join(".codex-work", "runtime", "codex-package-x86_64.tar.gz")
+DEFAULT_X86_PACKAGE_DIR = os.path.join(".codex-work", "runtime", "package-x86_64")
 DEFAULT_JNILIBS = os.path.join(
     "app", "build", "generated", "runtime", "jniLibs", "arm64-v8a"
+)
+DEFAULT_X86_JNILIBS = os.path.join(
+    "app", "build", "generated", "runtime", "jniLibs", "x86_64"
 )
 DEFAULT_ASSETS = os.path.join(
     "app", "build", "generated", "runtime", "assets", "runtime"
@@ -54,14 +60,20 @@ CA_BUNDLE_SHA256 = "f66dff1bdf8f96060b8177976f8b7d9254bc89bc4db933d769f7384d2848
 # runtime/.../AndroidRuntimeHost.kt PACKAGE_LINKS; keep both in sync.
 LIB_MAPPING = {
     "bin/codex-app-server": "libcodex_app_server.so",
-    "bin/codex-code-mode-host": "libcodex_code_mode_host.so",
+    # Android's native-library packaging accepts .so files, but does not
+    # preserve an executable with no extension. The app-server is patched at
+    # staging time to request this exact name from nativeLibraryDir.
+    "bin/codex-code-mode-host": "codex-code-mode.so",
     "codex-path/rg": "libcodex_rg.so",
     "codex-resources/bwrap": "libcodex_bwrap.so",
     "codex-resources/zsh/bin/zsh": "libcodex_zsh.so",
 }
 
 EM_AARCH64 = 183
+EM_X86_64 = 62
 ELF_MAGIC = b"\x7fELF"
+CODE_MODE_HOST_NAME = b"codex-code-mode-host"
+CODE_MODE_HOST_ANDROID_NAME = b"codex-code-mode.so"
 
 
 def fail(message: str) -> "NoReturn":  # type: ignore[name-defined]
@@ -166,7 +178,7 @@ def validate_ca_pem(path: str) -> None:
     print("prepare_runtime: CA bundle ok certificates=%d sha256=%s" % (count, sha256_file(path)))
 
 
-def check_elf_aarch64(path: str) -> int:
+def check_elf(path: str, expected_machine: int, abi: str) -> int:
     with open(path, "rb") as handle:
         header = handle.read(64)
     if len(header) < 20 or header[0:4] != ELF_MAGIC:
@@ -177,12 +189,58 @@ def check_elf_aarch64(path: str) -> int:
             % (path, header[4], header[5])
         )
     _e_type, e_machine = struct.unpack_from("<HH", header, 16)
-    if e_machine != EM_AARCH64:
-        fail("not AArch64 (e_machine=%d): %s" % (e_machine, path))
+    if e_machine != expected_machine:
+        fail("not %s (e_machine=%d): %s" % (abi, e_machine, path))
     return e_machine
 
 
-def stage_libraries(package_dir: str, jnilibs: str) -> list[dict]:
+def patch_code_mode_host_lookup(path: str) -> None:
+    """Point the staged app-server at the Android-packaged helper name.
+
+    Codex 0.153.4 resolves the helper as a sibling named
+    ``codex-code-mode-host``. Android only extracts native-library entries
+    from the APK when they have a ``.so`` suffix, so the exact sibling cannot
+    exist in ``nativeLibraryDir``. The final occurrence is the compiled
+    install-context constant; the earlier occurrence is user-facing error
+    text and must remain unchanged. Fail closed if the pinned binary layout
+    changes instead of silently patching an unknown string.
+    """
+    data = bytearray(open(path, "rb").read())
+    positions: list[int] = []
+    start = 0
+    while True:
+        position = data.find(CODE_MODE_HOST_NAME, start)
+        if position < 0:
+            break
+        positions.append(position)
+        start = position + 1
+    if len(positions) != 2:
+        fail(
+            "expected two code-mode host strings in pinned app-server, found %d: %s"
+            % (len(positions), path)
+        )
+    if len(CODE_MODE_HOST_ANDROID_NAME) > len(CODE_MODE_HOST_NAME):
+        fail("Android code-mode host alias is longer than upstream name")
+    position = positions[-1]
+    replacement = CODE_MODE_HOST_ANDROID_NAME + b"\0" * (
+        len(CODE_MODE_HOST_NAME) - len(CODE_MODE_HOST_ANDROID_NAME)
+    )
+    data[position : position + len(CODE_MODE_HOST_NAME)] = replacement
+    with open(path, "wb") as handle:
+        handle.write(data)
+    print(
+        "prepare_runtime: patched app-server helper lookup %s -> %s"
+        % (CODE_MODE_HOST_NAME.decode(), CODE_MODE_HOST_ANDROID_NAME.decode())
+    )
+
+
+def stage_libraries(
+    package_dir: str,
+    jnilibs: str,
+    abi: str,
+    target: str,
+    expected_machine: int,
+) -> list[dict]:
     reset_output(jnilibs)
     staged: list[dict] = []
     for package_path in sorted(LIB_MAPPING):
@@ -195,21 +253,31 @@ def stage_libraries(package_dir: str, jnilibs: str) -> list[dict]:
         dest = os.path.join(jnilibs, lib_name)
         shutil.copyfile(src, dest)
         os.chmod(dest, 0o755)
-        check_elf_aarch64(dest)
+        if package_path == "bin/codex-app-server":
+            patch_code_mode_host_lookup(dest)
+        check_elf(dest, expected_machine, abi)
         staged.append(
             {
+                "abi": abi,
                 "package_path": package_path,
                 "lib_name": lib_name,
                 "size": os.path.getsize(dest),
                 "sha256": sha256_file(dest),
-                "elf_machine": EM_AARCH64,
+                "elf_machine": expected_machine,
+                "target": target,
             }
         )
         print("prepare_runtime: staged %s -> %s" % (package_path, lib_name))
     return staged
 
 
-def stage_assets(package_dir: str, assets: str, staged: list[dict], ca_bundle: str) -> None:
+def stage_assets(
+    package_dir: str,
+    assets: str,
+    staged: list[dict],
+    ca_bundle: str,
+    targets: list[str],
+) -> None:
     reset_output(assets)
     manifest_src = os.path.join(package_dir, "codex-package.json")
     with open(manifest_src, "r", encoding="utf-8") as handle:
@@ -220,6 +288,8 @@ def stage_assets(package_dir: str, assets: str, staged: list[dict], ca_bundle: s
         "version": package_manifest.get("version", PACKAGE_VERSION),
         "variant": package_manifest.get("variant", "codex-app-server"),
         "target": package_manifest.get("target", PACKAGE_TARGET),
+        "targets": targets,
+        "abis": sorted({item["abi"] for item in staged}),
         "package_sha256": EXPECTED_SHA256,
         "files": staged,
         "env_contract": {
@@ -236,10 +306,12 @@ def stage_assets(package_dir: str, assets: str, staged: list[dict], ca_bundle: s
             "launch": "<nativeLibraryDir>/libcodex_app_server.so --listen stdio://",
         },
         "notes": (
-            "Upstream rust-v0.153.4 discovers resources only from the exe path "
-            "(bin/ or codex-resources/ beside codex-package.json); renamed "
-            "lib*.so files lose automatic rg/zsh/bwrap/host discovery. No "
-            "device success is claimed by this script."
+            "The official rust-v0.153.4 app-server is staged with an in-place "
+            "helper-name patch: its final code-mode host lookup uses "
+            "codex-code-mode.so, the .so entry Android extracts into "
+            "nativeLibraryDir. The original package archive is unchanged; "
+            "rg/zsh/bwrap discovery remains best effort. No device success is "
+            "claimed by this script."
         ),
     }
     # Sort keys for reproducibility.
@@ -261,6 +333,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default="https://github.com/openai/codex/releases/download/rust-v0.153.4/codex-app-server-package-aarch64-unknown-linux-musl.tar.gz",
         help="Download the package from this URL when --package is missing.",
     )
+    parser.add_argument("--x86-package", default=DEFAULT_X86_PACKAGE)
+    parser.add_argument("--x86-package-dir", default=DEFAULT_X86_PACKAGE_DIR)
+    parser.add_argument(
+        "--x86-expected-sha256",
+        default="a5d37ff1fa6953ee6d317b7e69bfafd39f5f53350b631d790fa7531159f22420",
+    )
+    parser.add_argument(
+        "--x86-url",
+        default="https://github.com/openai/codex/releases/download/rust-v0.153.4/codex-app-server-package-x86_64-unknown-linux-musl.tar.gz",
+        help="Download the x86_64 package from this URL when --x86-package is missing.",
+    )
     parser.add_argument("--ca-bundle", default=DEFAULT_CA_BUNDLE)
     parser.add_argument("--ca-url", default=CA_BUNDLE_URL)
     parser.add_argument("--ca-sha256", default=CA_BUNDLE_SHA256)
@@ -275,17 +358,56 @@ def main(argv: list[str]) -> int:
     args = parse_args(argv)
     package = resolve(args.package)
     package_dir = resolve(args.package_dir)
+    x86_package = resolve(args.x86_package)
+    x86_package_dir = resolve(args.x86_package_dir)
     jnilibs = resolve(args.out_jnilibs)
+    x86_jnilibs = resolve(DEFAULT_X86_JNILIBS)
     assets = resolve(args.out_assets)
     ca_bundle = resolve(args.ca_bundle)
 
-    if not os.path.isfile(package):
-        if args.url:
-            download_package(args.url, package)
-        else:
-            fail("package not found: %s (pass --url to download)" % package)
+    variants = [
+        {
+            "abi": "arm64-v8a",
+            "target": PACKAGE_TARGET,
+            "package": package,
+            "package_dir": package_dir,
+            "jnilibs": jnilibs,
+            "url": args.url,
+            "sha256": args.expected_sha256,
+            "machine": EM_AARCH64,
+        },
+        {
+            "abi": "x86_64",
+            "target": X86_PACKAGE_TARGET,
+            "package": x86_package,
+            "package_dir": x86_package_dir,
+            "jnilibs": x86_jnilibs,
+            "url": args.x86_url,
+            "sha256": args.x86_expected_sha256,
+            "machine": EM_X86_64,
+        },
+    ]
+    staged: list[dict] = []
+    for variant in variants:
+        if not os.path.isfile(variant["package"]):
+            if variant["url"]:
+                download_package(variant["url"], variant["package"])
+            else:
+                fail("package not found: %s" % variant["package"])
+        verify_hash(variant["package"], variant["sha256"])
+        names = safe_extract(variant["package"], variant["package_dir"])
+        print("prepare_runtime: extracted %d %s entries" % (len(names), variant["abi"]))
+        check_required_layout(names)
+        staged.extend(
+            stage_libraries(
+                variant["package_dir"],
+                variant["jnilibs"],
+                variant["abi"],
+                variant["target"],
+                variant["machine"],
+            )
+        )
 
-    verify_hash(package, args.expected_sha256)
     if not os.path.isfile(ca_bundle):
         if args.ca_url:
             download_package(args.ca_url, ca_bundle)
@@ -293,13 +415,18 @@ def main(argv: list[str]) -> int:
             fail("CA bundle not found: %s" % ca_bundle)
     verify_hash(ca_bundle, args.ca_sha256)
     validate_ca_pem(ca_bundle)
-    names = safe_extract(package, package_dir)
-    print("prepare_runtime: extracted %d entries" % len(names))
-    check_required_layout(names)
-    staged = stage_libraries(package_dir, jnilibs)
-    stage_assets(package_dir, assets, staged, ca_bundle)
-    print("prepare_runtime: OK version=%s target=%s" % (PACKAGE_VERSION, PACKAGE_TARGET))
-    print("  jnilibs: " + os.path.relpath(jnilibs, REPO_ROOT))
+    stage_assets(
+        package_dir,
+        assets,
+        staged,
+        ca_bundle,
+        [PACKAGE_TARGET, X86_PACKAGE_TARGET],
+    )
+    print("prepare_runtime: OK version=%s targets=%s" % (
+        PACKAGE_VERSION,
+        ",".join([PACKAGE_TARGET, X86_PACKAGE_TARGET]),
+    ))
+    print("  jnilibs: " + os.path.relpath(os.path.dirname(jnilibs), REPO_ROOT))
     print("  assets:  " + os.path.relpath(assets, REPO_ROOT))
     return 0
 

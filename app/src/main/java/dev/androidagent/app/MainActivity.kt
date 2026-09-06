@@ -8,15 +8,13 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.webkit.MimeTypeMap
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.SystemBarStyle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -24,31 +22,21 @@ import dev.androidagent.app.ui.*
 
 class MainActivity : ComponentActivity() {
     private val model: AgentViewModel by viewModels()
-    private var overlayAllowed by mutableStateOf(false)
     private val filePicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(model::addAttachment) }
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        overlayAllowed = Settings.canDrawOverlays(this)
+        enableEdgeToEdge(statusBarStyle = SystemBarStyle.dark(android.graphics.Color.BLACK),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.BLACK))
         setContent {
             val state by model.ui.collectAsStateWithLifecycle()
-            MaterialTheme {
-                Column(Modifier.fillMaxSize()) {
-                    if (!overlayAllowed) Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
-                        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Allow floating screen controls", modifier = Modifier.weight(1f).padding(top = 12.dp), style = MaterialTheme.typography.bodySmall)
-                            TextButton(onClick = { startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))) }) { Text("Enable") }
-                        }
-                    }
-                    Box(Modifier.weight(1f)) { AndroidAgentScreen(state, actions()) }
-                }
-            }
+            AndroidAgentScreen(state, actions())
         }
         ensureService()
         model.prepare()
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
-    override fun onResume() { super.onResume(); overlayAllowed = Settings.canDrawOverlays(this); model.refreshAccount() }
+    override fun onResume() { super.onResume(); model.refreshAccount() }
     private fun ensureService() { runCatching { ContextCompat.startForegroundService(this, Intent(this, AgentService::class.java)) }.onFailure { model.error("Could not start the agent service: ${it.message}") } }
     private fun actions() = AgentUiActions(
         onDrawerChanged = { open -> model.editUi { it.copy(isDrawerOpen = open) } },
