@@ -237,4 +237,12 @@ Record actual commands and results. Mark untested features explicitly. Do not re
     - Engine tests passed (`:engine-codex:test`).
     - Core tests passed (`:core:test`).
     - Device tools tests passed (`:device-tools:test`).
+  - **Release Validation v0.3.0**:
+    - Bumped `versionCode=7`, `versionName=0.3.0` in `version.properties`.
+    - Build: `./gradlew.bat assembleDevRelease` passed.
+    - APK: `artifacts/android-agent-0.3.0.apk`, metadata `dev.androidagent.app.dev`, versionCode 7, versionName 0.3.0.
+    - SHA-256: `CE5B6ECD8ABBE5164EC31A7BE72993D445A34AB829131B62AB3E7E846F530DDC`.
+    - Zip alignment verified (4-byte alignment passed).
+    - APK Signature Scheme v3 verified with local Android debug key.
+    - Git tag: `v0.3.0`.
 
