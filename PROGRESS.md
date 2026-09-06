@@ -104,7 +104,8 @@ Record actual commands and results. Mark untested features explicitly. Do not re
   - Runtime staging tests: test_prepare_runtime passed with 2 tests.
   - Android test compilation: assembleDevDebugAndroidTest passed.
   - APK: artifacts/android-agent-0.1.1.apk (SHA-256: D8940A057866E3DBC4B7AC09EA7441F37BFB4974A4ADFEBC41F21E9D506C5154).
-- 2026-09-06: Added in-app automatic update checking and installation.
+- 2026-09-06: Release v0.1.2 published (versionCode 3, versionName 0.1.2).
+  - Added in-app automatic update checking and installation.
   - Implemented `AppUpdateManager` querying GitHub Releases API (`repos/Yoni-Raich/android-agent-use/releases/latest`).
   - Added semver comparison with pre-release support and APK asset discovery.
   - Implemented secure download with HTTPS enforcement, strict host allowlist (`github.com`, `githubusercontent.com`), relative redirect resolution, 200ms progress throttling, and path traversal protection.
@@ -115,4 +116,5 @@ Record actual commands and results. Mark untested features explicitly. Do not re
     - Muse (OpenCode `opencode/muse-spark-1.3-contributor-free`): Approved with DECISION: APPROVE after verifying strict host allowlist and filename sanitization.
   - Validation:
     - Unit tests: all modules passed (`./gradlew.bat test`), including `AppUpdateManagerTest`.
+    - APK: artifacts/android-agent-0.1.2.apk (SHA-256: 89FFB574F8E290B07F9B62B4CF7E9216DE7F693F6E7AB3D6D37FFD9D3DE86B96).
 
