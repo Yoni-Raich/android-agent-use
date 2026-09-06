@@ -142,4 +142,15 @@ Record actual commands and results. Mark untested features explicitly. Do not re
   - At the time of this implementation entry, changes were still local and no
     release had been published yet. The release result is recorded below after
     the validated main-branch build.
+- 2026-09-06: Release v0.2.0 prepared from merged `main`.
+  - `versionCode=4`, `versionName=0.2.0`.
+  - Full validation passed: `./gradlew.bat test assembleDevRelease
+    assembleDevDebugAndroidTest :voice:lintDebug` (624 tasks, 221 executed).
+  - APK metadata: `dev.androidagent.app.dev`, versionCode 4, versionName 0.2.0.
+  - Asset: `artifacts/android-agent-0.2.0.apk`.
+  - The matching SHA-256 is recorded in the GitHub Release body.
+  - APK alignment passed and APK Signature Scheme v3 verification passed with
+    the local Android debug keystore, matching the prior private test release.
+    This is installable for local testing, not production signing.
+  - Physical Q8 install and Voice E2E remain NOT TESTED.
 
