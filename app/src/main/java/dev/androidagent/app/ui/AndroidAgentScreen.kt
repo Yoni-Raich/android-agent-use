@@ -1125,6 +1125,65 @@ private fun UpdateBanner(
     }
 }
 
+private data class SlashSkillItem(
+    val command: String,
+    val title: String,
+    val description: String,
+)
+
+private val ALL_SLASH_SKILLS = listOf(
+    SlashSkillItem(
+        command = "/skills",
+        title = "Available Skills",
+        description = "List all on-device skills, tools, and capabilities",
+    ),
+    SlashSkillItem(
+        command = "/device-automation",
+        title = "Device Automation",
+        description = "Precise UI control: bounds clicks, gestures, typing, keys",
+    ),
+    SlashSkillItem(
+        command = "/recovery-and-safety",
+        title = "Recovery & Safety",
+        description = "Safety gates, confirmation rules, stuck-state recovery",
+    ),
+    SlashSkillItem(
+        command = "/app-cards",
+        title = "App Cards Directory",
+        description = "Interaction blueprints for WhatsApp, Chrome, Maps, Settings, YouTube",
+    ),
+    SlashSkillItem(
+        command = "/user-preferences",
+        title = "User Preferences",
+        description = "Durable user defaults and preferences (preferences.json)",
+    ),
+    SlashSkillItem(
+        command = "/whatsapp",
+        title = "WhatsApp",
+        description = "Send messages, search contacts, and navigate WhatsApp chats",
+    ),
+    SlashSkillItem(
+        command = "/chrome",
+        title = "Google Chrome",
+        description = "Browse the web, search queries, and open URLs",
+    ),
+    SlashSkillItem(
+        command = "/maps",
+        title = "Google Maps",
+        description = "Find places, navigate routes, and check directions",
+    ),
+    SlashSkillItem(
+        command = "/settings",
+        title = "Settings",
+        description = "Search and toggle Android device system settings",
+    ),
+    SlashSkillItem(
+        command = "/youtube",
+        title = "YouTube",
+        description = "Search videos and control playback",
+    ),
+)
+
 @Composable
 private fun AgentComposer(state: AgentUiState, actions: AgentUiActions) {
     var draft by rememberSaveable(state.activeSessionId) { mutableStateOf("") }
@@ -1141,8 +1200,108 @@ private fun AgentComposer(state: AgentUiState, actions: AgentUiActions) {
     val canSend = state.activeSessionId != null && draft.isNotBlank() && !state.isLoadingMessages && !stopping && !voiceStopping
     val selectedModel = state.modelCatalog.firstOrNull { it.id == state.selectedModel }
     val reasoningOptions = selectedModel?.reasoningEfforts.orEmpty()
+    val showSlashSuggestions = draft.startsWith("/") && !draft.contains(" ") && !draft.contains("\n")
+    val slashQuery = if (showSlashSuggestions) draft.removePrefix("/").trim() else ""
+    val matchingSkills = remember(showSlashSuggestions, slashQuery) {
+        if (!showSlashSuggestions) {
+            emptyList()
+        } else if (slashQuery.isEmpty()) {
+            ALL_SLASH_SKILLS
+        } else {
+            ALL_SLASH_SKILLS.filter {
+                it.command.removePrefix("/").contains(slashQuery, ignoreCase = true) ||
+                    it.title.contains(slashQuery, ignoreCase = true) ||
+                    it.description.contains(slashQuery, ignoreCase = true)
+            }
+        }
+    }
     Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background)
         .navigationBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp)) {
+        if (matchingSkills.isNotEmpty()) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp),
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, Color(0xFF383838)),
+                shadowElevation = 6.dp,
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "Skills & Commands",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            text = "${matchingSkills.size} available",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    HorizontalDivider(color = Color(0xFF333333), thickness = 0.5.dp)
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 220.dp),
+                    ) {
+                        items(matchingSkills, key = { it.command }) { skill ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        draft = if (skill.command == "/skills") "/skills" else "${skill.command} "
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = Color(0xFF282828),
+                                    border = BorderStroke(0.5.dp, Color(0xFF444444)),
+                                ) {
+                                    Text(
+                                        text = skill.command,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF83D9CA),
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                    )
+                                }
+                                Spacer(Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = skill.title,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                    Text(
+                                        text = skill.description,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         Surface(shape = RoundedCornerShape(28.dp), color = MaterialTheme.colorScheme.surface,
             border = BorderStroke(1.dp, Color(0xFF383838))) {
             Column(Modifier.padding(6.dp)) {

@@ -9,6 +9,7 @@ import dev.androidagent.enginecodex.CodexEngine
 import dev.androidagent.overlay.FloatingControlOverlay
 import dev.androidagent.runtime.AndroidRuntimeHost
 import dev.androidagent.workspace.LocalSessionStore
+import dev.androidagent.workspace.WorkspaceSeeder
 import dev.androidagent.voice.AndroidRealtimeVoiceController
 import kotlinx.coroutines.*
 
@@ -35,5 +36,10 @@ class AgentGraph(private val app: Application) {
     )
     val coordinator: AgentCoordinator
         get() = runCoordinator
-    init { runCoordinator = AgentCoordinator(scope, engine, sessions, tools, overlay) }
+    init {
+        runCoordinator = AgentCoordinator(scope, engine, sessions, tools, overlay)
+        runCatching {
+            WorkspaceSeeder.seedToCodexHome(runtime.codexHomeDirectory)
+        }
+    }
 }

@@ -41,6 +41,12 @@ class WorkspaceSeederTest {
         val appCardsSkill = File(ws, ".agents/skills/app-cards/SKILL.md")
         assertTrue("app-cards skill should exist", appCardsSkill.isFile)
 
+        val codexDeviceSkill = File(ws, ".codex/skills/device-automation/SKILL.md")
+        assertTrue(".codex device-automation skill should exist", codexDeviceSkill.isFile)
+
+        val codexRecoverySkill = File(ws, ".codex/skills/recovery-and-safety/SKILL.md")
+        assertTrue(".codex recovery-and-safety skill should exist", codexRecoverySkill.isFile)
+
         val whatsappCard = File(ws, "cards/whatsapp.md")
         assertTrue("whatsapp.md card should exist", whatsappCard.isFile)
         assertTrue(whatsappCard.readText().contains("com.whatsapp"))
@@ -60,6 +66,25 @@ class WorkspaceSeederTest {
         val prefs = File(ws, "preferences.json")
         assertTrue("preferences.json should exist", prefs.isFile)
         assertTrue("preferences.json should have default structure", prefs.readText().contains("\"messaging\": \"WhatsApp\""))
+    }
+
+    @Test
+    fun seedToCodexHomePopulatesSkills() {
+        val codexHome = tempFolder.newFolder("codex_home")
+        WorkspaceSeeder.seedToCodexHome(codexHome)
+
+        val deviceSkill = File(codexHome, "skills/device-automation/SKILL.md")
+        assertTrue(deviceSkill.isFile)
+        assertTrue(deviceSkill.readText().contains("name: device-automation"))
+
+        val recoverySkill = File(codexHome, "skills/recovery-and-safety/SKILL.md")
+        assertTrue(recoverySkill.isFile)
+
+        val userPrefsSkill = File(codexHome, "skills/user-preferences/SKILL.md")
+        assertTrue(userPrefsSkill.isFile)
+
+        val appCardsSkill = File(codexHome, "skills/app-cards/SKILL.md")
+        assertTrue(appCardsSkill.isFile)
     }
 
     @Test

@@ -65,6 +65,9 @@ class LocalSessionStore(context: Context) : SessionStore {
         require(runCatching { UUID.fromString(sessionId).toString() == sessionId }.getOrDefault(false)) { "Invalid session ID" }
         val ws = File(base, "$sessionId/workspace").apply { mkdirs() }
         WorkspaceSeeder.seed(ws, appContext)
+        runCatching {
+            WorkspaceSeeder.seedToCodexHome(File(appContext.filesDir, "runtime/home/.codex"))
+        }
         return ws
     }
     private suspend fun <T> mutate(block: () -> T): T = withContext(Dispatchers.IO) { lock.withLock { block() } }

@@ -246,3 +246,34 @@ Record actual commands and results. Mark untested features explicitly. Do not re
     - APK Signature Scheme v3 verified with local Android debug key.
     - Git tag: `v0.3.0`.
 
+## Slash command ('/') skills menu & on-device skill discovery fix - 2026-09-07
+- Addressed skill discovery root cause on device:
+  - Fixed `WorkspaceSeeder`: embedded harness, skills, and app cards are now always seeded regardless of asset directory extraction.
+  - Added multi-root seeding: seeds both `.agents/skills/` and `.codex/skills/` into the session workspace.
+  - Added `WorkspaceSeeder.seedToCodexHome`: seeds on-device skills directly into `$CODEX_HOME/skills/` (`device-automation`, `recovery-and-safety`, `user-preferences`, `app-cards`) so Codex app-server discovers them during indexing.
+  - Updated `CodexEngine.AGENT_INSTRUCTIONS` to explicitly declare the 4 on-device skills, prohibit listing cloud developer skills (`imagegen`, `openai-docs`, `plugin-creator`, etc.), and mandate reporting on-device skills and device tools.
+  - Staged non-dot asset directory `app/src/main/assets/agent_stack/skills/` so AAPT does not strip skill files during APK build.
+- Interactive Composer Slash ('/') Menu:
+  - Added real-time suggestion menu above the text composer in `AndroidAgentScreen.kt` when typing `/`.
+  - Displays all 10 available skills and app cards:
+    - `/skills` (Core skill listing & capabilities)
+    - `/device-automation` (UI automation, bounds calculation, tap, type_text, swipe, key)
+    - `/recovery-and-safety` (Safety gates, sensitive confirmations, stuck recovery)
+    - `/app-cards` (App cards directory)
+    - `/user-preferences` (Durable user defaults)
+    - `/whatsapp`, `/chrome`, `/maps`, `/settings`, `/youtube` (Individual app workflows)
+  - Real-time filtering by keystrokes after `/`.
+  - Tapping an item autocompletes the draft (`/skills` or `/app `).
+  - Expanded `/skills` and app-card commands in `AgentViewModel.send()` to ensure crystal clear prompt resolution.
+- Validation:
+  - `WorkspaceSeederTest` updated and passed with assertions for `.codex/skills/` and `seedToCodexHome`.
+  - All unit tests passed (`.\gradlew.bat testDevDebugUnitTest`).
+- Release Validation v0.3.1:
+  - Bumped `versionCode=8`, `versionName=0.3.1` in `version.properties`.
+  - Build: `./gradlew.bat assembleDevRelease` passed.
+  - APK: `artifacts/android-agent-0.3.1.apk`, metadata `dev.androidagent.app.dev`, versionCode 8, versionName 0.3.1.
+  - SHA-256: `8B33FA42A138C3D055720D5EE7658E3AEEC3786ED1B5E33EDC127C3A6BEC12EB`.
+  - Zip alignment verified (4-byte alignment passed).
+  - APK Signature Scheme v3 verified with local Android debug key.
+  - Git tag: `v0.3.1`.
+

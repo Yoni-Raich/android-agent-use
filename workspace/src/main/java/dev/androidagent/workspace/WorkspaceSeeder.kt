@@ -24,26 +24,36 @@ object WorkspaceSeeder {
     fun seed(workspace: File, context: Context? = null) {
         workspace.mkdirs()
 
-        var seededFromAssets = false
         if (context != null) {
             runCatching {
                 val assetList = context.assets.list(ASSET_PREFIX)
                 if (!assetList.isNullOrEmpty()) {
                     copyAssetDir(context, ASSET_PREFIX, workspace)
-                    seededFromAssets = true
                 }
             }
         }
 
-        if (!seededFromAssets) {
-            seedFromEmbeddedTemplates(workspace)
-        }
+        // Always guarantee the harness, on-device skills, and cards are seeded
+        seedFromEmbeddedTemplates(workspace)
 
         // Guarantee preferences.json exists without overwriting user data
         val prefsFile = File(workspace, "preferences.json")
         if (!prefsFile.exists() || prefsFile.length() == 0L) {
             prefsFile.writeText(DEFAULT_PREFERENCES, Charsets.UTF_8)
         }
+    }
+
+    /**
+     * Seeds on-device skills directly into CODEX_HOME/skills/ so that Codex's
+     * built-in skill discovery indexes them into its global catalog.
+     */
+    fun seedToCodexHome(codexHomeDir: File) {
+        val skillsDir = File(codexHomeDir, "skills")
+        skillsDir.mkdirs()
+        writeTemplate(skillsDir, "device-automation/SKILL.md", SKILL_DEVICE_AUTOMATION)
+        writeTemplate(skillsDir, "recovery-and-safety/SKILL.md", SKILL_RECOVERY_SAFETY)
+        writeTemplate(skillsDir, "user-preferences/SKILL.md", SKILL_USER_PREFERENCES)
+        writeTemplate(skillsDir, "app-cards/SKILL.md", SKILL_APP_CARDS)
     }
 
     private fun copyAssetDir(context: Context, assetPath: String, targetDir: File) {
@@ -91,10 +101,17 @@ object WorkspaceSeeder {
     private fun seedFromEmbeddedTemplates(workspace: File) {
         writeTemplate(workspace, "AGENTS.md", AGENTS_MD)
         writeTemplate(workspace, "RECOVERY.md", RECOVERY_MD)
+        // Seed both .agents/skills/ and .codex/skills/ for Codex multi-root discovery
         writeTemplate(workspace, ".agents/skills/device-automation/SKILL.md", SKILL_DEVICE_AUTOMATION)
         writeTemplate(workspace, ".agents/skills/recovery-and-safety/SKILL.md", SKILL_RECOVERY_SAFETY)
         writeTemplate(workspace, ".agents/skills/user-preferences/SKILL.md", SKILL_USER_PREFERENCES)
         writeTemplate(workspace, ".agents/skills/app-cards/SKILL.md", SKILL_APP_CARDS)
+
+        writeTemplate(workspace, ".codex/skills/device-automation/SKILL.md", SKILL_DEVICE_AUTOMATION)
+        writeTemplate(workspace, ".codex/skills/recovery-and-safety/SKILL.md", SKILL_RECOVERY_SAFETY)
+        writeTemplate(workspace, ".codex/skills/user-preferences/SKILL.md", SKILL_USER_PREFERENCES)
+        writeTemplate(workspace, ".codex/skills/app-cards/SKILL.md", SKILL_APP_CARDS)
+
         writeTemplate(workspace, "cards/whatsapp.md", CARD_WHATSAPP)
         writeTemplate(workspace, "cards/chrome.md", CARD_CHROME)
         writeTemplate(workspace, "cards/maps.md", CARD_MAPS)
