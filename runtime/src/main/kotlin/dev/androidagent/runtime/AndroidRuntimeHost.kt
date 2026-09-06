@@ -13,6 +13,10 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileOutputStream
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 /**
  * On-phone Codex app-server host.
@@ -49,7 +53,7 @@ import java.io.File
  * remains recorded in the runtime manifest.
  *
  * Credentials stay app-private: this host only ensures CODEX_HOME exists and
- * writes a comment-only config.toml when none exists. It never reads
+ * writes a minimal feature config.toml when needed. It never reads
  * auth.json or any credential file, and it supervises only its own process.
  */
 class AndroidRuntimeHost(private val appContext: Context) : RuntimeHost {
@@ -194,7 +198,7 @@ class AndroidRuntimeHost(private val appContext: Context) : RuntimeHost {
             )
             val failed = dirs.firstOrNull { dir -> !dir.isDirectory && !dir.mkdirs() && !dir.isDirectory }
             if (failed != null) return@withContext failed
-            writeDefaultConfigIfMissing()
+            ensureRealtimeFeatureConfig(File(codexHomeDirectory, "config.toml"))
             null
         }
         if (created != null) {
@@ -319,22 +323,6 @@ class AndroidRuntimeHost(private val appContext: Context) : RuntimeHost {
     }
 
     /**
-     * Comment-only default config. Written once, never overwritten, so an
-     * existing user config (and any credentials it references) is preserved.
-     */
-    private fun writeDefaultConfigIfMissing() {
-        val config = File(codexHomeDirectory, "config.toml")
-        if (config.exists()) return
-        runCatching {
-            config.writeText(
-                "# Managed by Android Agent. Credentials stay in app-private CODEX_HOME.\n" +
-                    "# Helper discovery (rg/code-mode-host/zsh) is limited while the\n" +
-                    "# upstream package layout cannot be preserved under nativeLibraryDir.\n"
-            )
-        }
-    }
-
-    /**
      * Recreate canonical-name symlinks -> nativeLibraryDir lib*.so files.
      * Diagnostic only: targetSdk 35 cannot execute through app-writable paths,
      * so the server is always launched via its nativeLibraryDir path.
@@ -406,6 +394,15 @@ class AndroidRuntimeHost(private val appContext: Context) : RuntimeHost {
     companion object {
         private const val TAG = "AndroidRuntimeHost"
         private const val MAX_PROXY_EVENTS = 64
+        private const val REALTIME_FEATURE = "realtime_conversation"
+        private const val DEFAULT_CONFIG =
+            "# Managed by Android Agent. Credentials stay in app-private CODEX_HOME.\n" +
+                "# Helper discovery (rg/code-mode-host/zsh) is limited while the\n" +
+                "# upstream package layout cannot be preserved under nativeLibraryDir.\n"
+        private val TOML_TABLE = Regex("^\\s*\\[([^]]+)](?:\\s*#.*)?$")
+        private val REALTIME_KEY = Regex(
+            "^(\\s*(?:realtime_conversation|\\\"realtime_conversation\\\")\\s*=\\s*)(.*?)(\\s*(?:#.*)?)$"
+        )
         const val SERVER_LIB_NAME = "libcodex_app_server.so"
         private val SERVER_LIB_CANDIDATES = arrayOf(
             SERVER_LIB_NAME,
@@ -424,5 +421,124 @@ class AndroidRuntimeHost(private val appContext: Context) : RuntimeHost {
             "codex-resources/bwrap" to "libcodex_bwrap.so",
             "codex-resources/zsh/bin/zsh" to "libcodex_zsh.so"
         )
+
+        /**
+         * Ensure the pinned Codex feature is enabled without rewriting an unchanged file.
+         * A changed file is installed with an atomic sibling replacement so a killed process
+         * cannot leave a half-written config.toml. The config contents are treated as opaque
+         * apart from the one key; auth.json and other credential files are never touched.
+         *
+         * @return true when config.toml was created or changed.
+         */
+        internal fun ensureRealtimeFeatureConfig(config: File): Boolean {
+            val original = if (config.isFile) {
+                config.readText(StandardCharsets.UTF_8)
+            } else {
+                ""
+            }
+            val updated = ensureRealtimeFeatureConfigText(original)
+            if (updated == original) return false
+
+            val parent = config.parentFile ?: error("Config file has no parent directory")
+            if (!parent.isDirectory && !parent.mkdirs() && !parent.isDirectory) {
+                error("Cannot create config directory: ${parent.absolutePath}")
+            }
+            val temporary = File.createTempFile(".${config.name}.", ".tmp", parent)
+            try {
+                FileOutputStream(temporary).use { output ->
+                    output.write(updated.toByteArray(StandardCharsets.UTF_8))
+                    output.fd.sync()
+                }
+                Files.move(
+                    temporary.toPath(),
+                    config.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+            } catch (failure: java.nio.file.AtomicMoveNotSupportedException) {
+                throw IllegalStateException(
+                    "Atomic config replacement is not supported for ${config.absolutePath}",
+                    failure,
+                )
+            } finally {
+                if (temporary.exists()) temporary.delete()
+            }
+            return true
+        }
+
+        /** Pure text migration used by the host and focused unit tests. */
+        internal fun ensureRealtimeFeatureConfigText(existing: String): String {
+            if (existing.isEmpty()) return DEFAULT_CONFIG + "\n[features]\n$REALTIME_FEATURE = true\n"
+
+            val separator = when {
+                existing.contains("\r\n") -> "\r\n"
+                existing.contains('\n') -> "\n"
+                existing.contains('\r') -> "\r"
+                else -> "\n"
+            }
+            val lines = splitConfigLines(existing)
+            var inFeatures = false
+            var featuresLine = -1
+            var featuresEnd = lines.size
+            var keySeen = false
+
+            lines.indices.forEach { index ->
+                val content = lines[index]
+                val table = TOML_TABLE.matchEntire(content)?.groupValues?.getOrNull(1)?.trim()
+                if (table != null) {
+                    if (inFeatures && featuresEnd == lines.size) featuresEnd = index
+                    inFeatures = table == "features"
+                    if (inFeatures && featuresLine == -1) featuresLine = index
+                    return@forEach
+                }
+                if (!inFeatures) return@forEach
+                val key = REALTIME_KEY.matchEntire(content) ?: return@forEach
+                keySeen = true
+                lines[index] = key.groupValues[1] + "true" + key.groupValues[3]
+            }
+            if (keySeen) return lines.joinToString(separator)
+
+            if (featuresLine == -1) {
+                val insertAt = if (lines.lastOrNull() == "") lines.lastIndex else lines.size
+                insertConfigLines(lines, insertAt, listOf("[features]", "$REALTIME_FEATURE = true"))
+            } else {
+                // If the original file ended with a newline, splitConfigLines keeps a final
+                // empty sentinel. Insert before it so we do not create an extra blank line.
+                val insertAt = if (featuresEnd == lines.size && lines.lastOrNull() == "") {
+                    lines.lastIndex
+                } else {
+                    featuresEnd
+                }
+                insertConfigLines(lines, insertAt, listOf("$REALTIME_FEATURE = true"))
+            }
+            return lines.joinToString(separator)
+        }
+
+        private fun splitConfigLines(text: String): MutableList<String> {
+            val lines = mutableListOf<String>()
+            var start = 0
+            var index = 0
+            while (index < text.length) {
+                when (text[index]) {
+                    '\r' -> {
+                        lines += text.substring(start, index)
+                        if (index + 1 < text.length && text[index + 1] == '\n') index++
+                        start = index + 1
+                    }
+                    '\n' -> {
+                        lines += text.substring(start, index)
+                        start = index + 1
+                    }
+                }
+                index++
+            }
+            if (start < text.length) lines += text.substring(start)
+            else lines += ""
+            return lines
+        }
+
+        private fun insertConfigLines(lines: MutableList<String>, index: Int, additions: List<String>) {
+            lines.addAll(index.coerceIn(0, lines.size), additions)
+        }
     }
 }

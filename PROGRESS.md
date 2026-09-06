@@ -153,4 +153,24 @@ Record actual commands and results. Mark untested features explicitly. Do not re
     the local Android debug keystore, matching the prior private test release.
     This is installable for local testing, not production signing.
   - Physical Q8 install and Voice E2E remain NOT TESTED.
+- 2026-09-06: Fixed the realtime feature gate for existing and fresh installs.
+  - `AndroidRuntimeHost` now merges `[features] realtime_conversation = true`
+    into app-private `CODEX_HOME/config.toml` and repairs the comment-only file
+    created by v0.2.0.
+  - Existing settings and inline comments are preserved; the migration uses an
+    atomic sibling replacement and never reads or changes `auth.json`.
+  - Added JVM coverage for fresh, partial, existing, and idempotent configs.
+  - Bumped `versionCode=5`, `versionName=0.2.1`.
+  - PASS: `./gradlew :runtime:testDebugUnitTest --no-daemon`.
+  - Full validation passed: `./gradlew.bat test assembleDevRelease
+    assembleDevDebugAndroidTest :voice:lintDebug --no-daemon` (624 tasks,
+    74 executed), plus `python -m unittest tools.test_prepare_runtime`.
+  - APK: `artifacts/android-agent-0.2.1.apk`, metadata
+    `dev.androidagent.app.dev`, versionCode 5, versionName 0.2.1.
+  - SHA-256: `51E7BA0D5B85E4A34B985D240B040E47F1722574B44D2A69D4D25529F6322638`.
+    Zip alignment and APK Signature Scheme v3 verification passed with the
+    same local Android debug key used for v0.2.0; this is not production
+    signing.
+  - NOT TESTED: physical Q8 voice E2E, microphone capture, speaker playback,
+    and signed-in realtime upstream connectivity.
 

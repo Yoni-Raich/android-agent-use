@@ -79,6 +79,13 @@ its upstream WebSocket; Android does not connect directly to the OpenAI Realtime
 endpoint. WebRTC can be added later as another transport without changing chat,
 the coordinator, or Android audio capture.
 
+Realtime is enabled in the app-private `CODEX_HOME/config.toml` through a small
+startup migration. It adds only `[features] realtime_conversation = true`,
+preserves existing user settings, and replaces the file atomically. The
+migration also repairs the comment-only config created by older builds. The
+app-server is restarted before a new voice thread is created; existing threads
+created while the feature was disabled are not retrofitted.
+
 Android records and plays signed PCM16, 24 kHz, mono audio. Capture uses bounded
 20 ms chunks and drops old queued audio under backpressure instead of growing
 memory. Recording starts only after `thread/realtime/started`. Echo cancellation,
