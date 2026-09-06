@@ -9,6 +9,7 @@ import dev.androidagent.enginecodex.CodexEngine
 import dev.androidagent.overlay.FloatingControlOverlay
 import dev.androidagent.runtime.AndroidRuntimeHost
 import dev.androidagent.workspace.LocalSessionStore
+import dev.androidagent.voice.AndroidRealtimeVoiceController
 import kotlinx.coroutines.*
 
 class AgentApplication : Application() {
@@ -24,6 +25,7 @@ class AgentGraph(private val app: Application) {
     val engine = CodexEngine(runtime)
     val adb = AndroidAdbTransport(app)
     val tools = AndroidDeviceTools(adb, BuildConfig.APPLICATION_ID + "/dev.androidagent.app.ime.AgentInputMethodService")
+    val voice = AndroidRealtimeVoiceController(app, engine, scope)
     private lateinit var runCoordinator: AgentCoordinator
     val overlay = FloatingControlOverlay(
         app,

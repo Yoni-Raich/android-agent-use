@@ -113,6 +113,31 @@ class AgentCoordinatorTest {
         rig.close()
     }
 
+    @Test fun realtimeVoiceTurnsCanUseGatewayAndVoiceStopRevokesLocally() = runTest {
+        val rig = Rig(this)
+        rig.coordinator.beginVoice("one", "voice-thread", rig.store.workspace("one"))
+        runCurrent()
+        rig.engine.emit(EngineEvent.TurnStarted("voice-thread", "voice-turn"))
+        runCurrent()
+
+        rig.engine.emit(EngineEvent.ToolCall("voice-tool", "read_ui", buildJsonObject {}, "voice-thread", "voice-turn"))
+        runCurrent()
+        assertEquals(1, rig.tools.executions)
+        assertTrue(rig.engine.answers.single().success)
+
+        rig.engine.emit(EngineEvent.TurnFinished("completed", threadId = "voice-thread", turnId = "voice-turn"))
+        runCurrent()
+        assertTrue(rig.coordinator.state.value.active)
+        assertEquals("Listening", rig.coordinator.state.value.status)
+
+        rig.coordinator.endVoice()
+        assertTrue(rig.tools.revoked)
+        runCurrent()
+        assertFalse(rig.coordinator.state.value.active)
+        assertFalse(rig.engine.closed)
+        rig.close()
+    }
+
     private class Rig(test: TestScope) {
         val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(test.testScheduler))
         val engine = FakeEngine()

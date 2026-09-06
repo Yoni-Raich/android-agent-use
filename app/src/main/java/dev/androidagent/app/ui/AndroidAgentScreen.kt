@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Login
@@ -1129,9 +1130,15 @@ private fun AgentComposer(state: AgentUiState, actions: AgentUiActions) {
     var draft by rememberSaveable(state.activeSessionId) { mutableStateOf("") }
     var modelMenu by remember { mutableStateOf(false) }
     var reasoningMenu by remember { mutableStateOf(false) }
-    val active = state.runState.active
-    val stopping = state.runState.phase == RunPhase.STOPPING
-    val canSend = state.activeSessionId != null && draft.isNotBlank() && !state.isLoadingMessages && !stopping
+    val voiceActive = state.voiceState.active
+    val active = state.runState.active && !voiceActive
+    val stopping = state.runState.phase == RunPhase.STOPPING && !voiceActive
+    val voiceStopping = state.voiceState.phase == dev.androidagent.core.VoicePhase.STOPPING
+    val voiceBusy = state.voiceState.phase in setOf(
+        dev.androidagent.core.VoicePhase.STARTING,
+        dev.androidagent.core.VoicePhase.STOPPING,
+    )
+    val canSend = state.activeSessionId != null && draft.isNotBlank() && !state.isLoadingMessages && !stopping && !voiceStopping
     val selectedModel = state.modelCatalog.firstOrNull { it.id == state.selectedModel }
     val reasoningOptions = selectedModel?.reasoningEfforts.orEmpty()
     Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background)
@@ -1159,13 +1166,13 @@ private fun AgentComposer(state: AgentUiState, actions: AgentUiActions) {
                         focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent,
                         disabledIndicatorColor = Color.Transparent))
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = actions.onAttach, enabled = !active && state.activeSessionId != null) {
+                    IconButton(onClick = actions.onAttach, enabled = !active && !voiceActive && state.activeSessionId != null) {
                         Icon(Icons.Default.Add, "Attach file")
                     }
                     Spacer(Modifier.weight(1f))
                     Box {
                         TextButton(onClick = { if (state.availableModels.isEmpty()) actions.onOpenSettings() else modelMenu = true },
-                            enabled = !active, modifier = Modifier.widthIn(max = 190.dp)) {
+                            enabled = !active && !voiceActive, modifier = Modifier.widthIn(max = 190.dp)) {
                             Text(state.selectedModel?.removePrefix("gpt-") ?: "Choose model",
                                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                                 style = MaterialTheme.typography.labelMedium)
@@ -1182,7 +1189,7 @@ private fun AgentComposer(state: AgentUiState, actions: AgentUiActions) {
                     Box {
                         TextButton(
                             onClick = { reasoningMenu = true },
-                            enabled = !active && reasoningOptions.isNotEmpty(),
+                            enabled = !active && !voiceActive && reasoningOptions.isNotEmpty(),
                             modifier = Modifier
                                 .widthIn(max = 110.dp)
                                 .semantics { contentDescription = "Choose reasoning effort" },
@@ -1239,11 +1246,47 @@ private fun AgentComposer(state: AgentUiState, actions: AgentUiActions) {
                         Icon(Icons.Default.ArrowUpward, if (active) "Steer agent" else "Send message",
                             tint = if (canSend) Color.Black else Color(0xFF999999))
                     }
+                    if (!active) IconButton(
+                        onClick = actions.onVoiceToggle,
+                        enabled = state.activeSessionId != null && !state.isLoadingMessages && !voiceStopping,
+                        modifier = Modifier.size(48.dp).padding(3.dp)
+                            .background(Color(0xFF2F80ED), CircleShape)
+                            .semantics {
+                                contentDescription = if (voiceActive) "End voice conversation" else "Start voice conversation"
+                            },
+                    ) {
+                        if (voiceBusy) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(22.dp),
+                                color = Color.White,
+                                strokeWidth = 2.dp,
+                            )
+                        } else {
+                            Icon(Icons.Default.GraphicEq, null, tint = Color.White)
+                        }
+                    }
                 }
             }
         }
-        if (active) Text(if (stopping) "Stopping… your draft is kept" else "Working · you can add instructions or stop", Modifier.padding(start = 12.dp, top = 6.dp),
-            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        when {
+            voiceActive || voiceBusy -> {
+                val transcript = state.voiceTranscript.trim()
+                Text(
+                    if (transcript.isNotEmpty()) {
+                        val speaker = if (state.voiceTranscriptRole.equals("assistant", ignoreCase = true)) "Codex" else "You"
+                        "$speaker · $transcript"
+                    } else "Voice · ${state.voiceState.message}",
+                    Modifier.padding(start = 12.dp, top = 6.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (state.voiceState.phase == dev.androidagent.core.VoicePhase.SPEAKING) Color(0xFF69A7FF)
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            active -> Text(if (stopping) "Stopping… your draft is kept" else "Working · you can add instructions or stop", Modifier.padding(start = 12.dp, top = 6.dp),
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 

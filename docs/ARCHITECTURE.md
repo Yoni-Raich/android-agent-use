@@ -7,6 +7,7 @@ One Android project, with replaceable modules and small core contracts.
 | app | Compose chat, setup, foreground lifecycle, dependency wiring |
 | core | Neutral contracts, coordinator, run state, local cancellation |
 | engine-codex | Bidirectional Codex app-server protocol and event mapping |
+| voice | Android microphone, speaker, and realtime audio lifecycle |
 | runtime | On-phone executable provisioning and process supervision |
 | workspace | Durable sessions, messages, artifacts and session directories |
 | adb | Persistent pairing identity, discovery, localhost transport |
@@ -68,6 +69,28 @@ Stop remains reachable while a steering draft exists; STOPPING blocks dispatch
 and preserves that draft. Terminal formatting is removed before display.
 Compose fixture tests exercise UI callbacks without starting or authenticating
 Codex. They do not establish real runtime, device-control, or network success.
+
+## Realtime voice (experimental)
+
+Voice is isolated behind `RealtimeVoiceEngine` and the separate `voice` module.
+The pinned Codex 0.153.4 app-server remains the single JSON-RPC stdio process.
+The app starts `thread/realtime/start` with protocol V2 and lets app-server own
+its upstream WebSocket; Android does not connect directly to the OpenAI Realtime
+endpoint. WebRTC can be added later as another transport without changing chat,
+the coordinator, or Android audio capture.
+
+Android records and plays signed PCM16, 24 kHz, mono audio. Capture uses bounded
+20 ms chunks and drops old queued audio under backpressure instead of growing
+memory. Recording starts only after `thread/realtime/started`. Echo cancellation,
+noise suppression, gain control, audio focus, and foreground microphone service
+state are used when Android supports them. Raw microphone audio is never saved;
+only finalized user and assistant transcripts enter the session store.
+
+Realtime turns still pass through `AgentCoordinator`. A matching realtime turn
+may use the same device-tool gateway as typed chat. Local stop first revokes new
+tool calls, then interrupts an active delegated turn, stops microphone capture,
+and asks app-server to stop the realtime conversation. Completed side effects
+cannot be undone.
 
 ## Unicode input
 

@@ -8,11 +8,12 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
 import java.io.BufferedWriter
 import java.io.File
+import java.util.Base64
 import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
-class CodexEngine(private val runtime: RuntimeHost) : AgentEngine {
+class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoiceEngine {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val connectLock = Mutex()
     private val writeLock = Mutex()
@@ -20,6 +21,13 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine {
     private val ids = AtomicLong()
     private val stream = MutableSharedFlow<EngineEvent>(extraBufferCapacity = 128)
     override val events: Flow<EngineEvent> = stream.asSharedFlow()
+    private val voiceStream = MutableSharedFlow<VoiceEvent>(extraBufferCapacity = 128)
+    override val voiceEvents: Flow<VoiceEvent> = voiceStream.asSharedFlow()
+    private val mutableVoiceState = MutableStateFlow(VoiceState())
+    override val voiceState: StateFlow<VoiceState> = mutableVoiceState.asStateFlow()
+    private val voiceLock = Mutex()
+    @Volatile private var voiceThreadId: String? = null
+    @Volatile private var voiceClosedSignal: CompletableDeferred<Unit>? = null
     private var process: Process? = null
     private var writer: BufferedWriter? = null
     private var readerJob: Job? = null
@@ -54,6 +62,18 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine {
                 initialized = false
                 pending.values.forEach { it.completeExceptionally(IllegalStateException("Codex process stopped")) }
                 pending.clear()
+                val stoppedVoiceThreadId = voiceThreadId
+                if (stoppedVoiceThreadId != null) {
+                    val detail = SecretRedactor.redact(
+                        listOfNotNull("Codex process stopped during voice", stderrSnapshot().takeIf { it.isNotBlank() })
+                            .joinToString(" | ")
+                    )
+                    voiceClosedSignal?.complete(Unit)
+                    voiceClosedSignal = null
+                    voiceThreadId = null
+                    mutableVoiceState.value = VoiceState(VoicePhase.ERROR, detail, stoppedVoiceThreadId)
+                    voiceStream.emit(VoiceEvent.Failure(detail, stoppedVoiceThreadId))
+                }
             }
         }
         scope.launch {
@@ -116,6 +136,92 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine {
         return result["turn"]?.jsonObject?.string("id")?.takeIf { it.isNotBlank() } ?: error("Codex returned no turn ID")
     }
 
+    override suspend fun startVoice(threadId: String, model: String?) = voiceLock.withLock {
+        require(threadId.isNotBlank()) { "threadId must not be blank" }
+        if (mutableVoiceState.value.active) error("A voice session is already active")
+
+        voiceThreadId = threadId
+        voiceClosedSignal = CompletableDeferred()
+        mutableVoiceState.value = VoiceState(VoicePhase.STARTING, "Starting voice", threadId)
+        try {
+            connect()
+            // The app-server owns the websocket transport when `transport` is omitted.
+            request("thread/realtime/start", realtimeStartParams(threadId, model))
+            Unit
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            failVoice(error.message ?: "Unable to start voice", threadId)
+            voiceThreadId = null
+            voiceClosedSignal?.cancel()
+            voiceClosedSignal = null
+            throw error
+        }
+    }
+
+    override suspend fun appendAudio(audio: RealtimeAudioChunk) = voiceLock.withLock {
+        val threadId = requireVoiceThread()
+        try {
+            request("thread/realtime/appendAudio", realtimeAppendAudioParams(threadId, audio))
+            if (mutableVoiceState.value.phase !in setOf(VoicePhase.STOPPING, VoicePhase.ERROR)) {
+                mutableVoiceState.value = VoiceState(VoicePhase.LISTENING, "Listening", threadId)
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            failVoice(error.message ?: "Unable to send audio", threadId)
+            throw error
+        }
+    }
+
+    override suspend fun appendText(text: String, role: String) = voiceLock.withLock {
+        val threadId = requireVoiceThread()
+        try {
+            request("thread/realtime/appendText", realtimeAppendTextParams(threadId, text, role))
+            if (mutableVoiceState.value.phase !in setOf(VoicePhase.STOPPING, VoicePhase.ERROR)) {
+                mutableVoiceState.value = VoiceState(VoicePhase.LISTENING, "Listening", threadId)
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            failVoice(error.message ?: "Unable to send text", threadId)
+            throw error
+        }
+    }
+
+    override suspend fun appendSpeech(text: String) = voiceLock.withLock {
+        val threadId = requireVoiceThread()
+        try {
+            request("thread/realtime/appendSpeech", realtimeAppendSpeechParams(threadId, text))
+            Unit
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            failVoice(error.message ?: "Unable to send speech", threadId)
+            throw error
+        }
+    }
+
+    override suspend fun stopVoice() = voiceLock.withLock {
+        val threadId = voiceThreadId ?: return@withLock
+        mutableVoiceState.value = VoiceState(VoicePhase.STOPPING, "Stopping voice", threadId)
+        try {
+            request("thread/realtime/stop", realtimeStopParams(threadId))
+            withTimeoutOrNull(10_000) { voiceClosedSignal?.await() }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            failVoice(error.message ?: "Unable to stop voice", threadId)
+            throw error
+        } finally {
+            if (voiceThreadId == threadId) voiceThreadId = null
+            voiceClosedSignal = null
+            if (mutableVoiceState.value.phase != VoicePhase.ERROR) {
+                mutableVoiceState.value = VoiceState(VoicePhase.IDLE, "Voice stopped", threadId)
+            }
+        }
+    }
+
     override suspend fun steer(threadId: String, turnId: String, prompt: String) {
         request("turn/steer", buildJsonObject { put("threadId", threadId); put("expectedTurnId", turnId); put("input", buildJsonArray { add(buildJsonObject { put("type", "text"); put("text", prompt) }) }) })
     }
@@ -136,6 +242,11 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine {
 
     override suspend fun close() {
         initialized = false
+        val closedVoiceThreadId = voiceThreadId
+        voiceThreadId = null
+        voiceClosedSignal?.cancel()
+        voiceClosedSignal = null
+        mutableVoiceState.value = VoiceState(VoicePhase.IDLE, "Closed", closedVoiceThreadId)
         readerJob?.cancel()
         withContext(Dispatchers.IO) { runCatching { writer?.close() }; writer = null }
         runtime.stop()
@@ -178,6 +289,63 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine {
                 stream.emit(EngineEvent.ToolCall(id, params.string("tool"), value, params.string("threadId"), params.string("turnId")))
             }
             id != null && method.endsWith("requestApproval") -> stream.emit(EngineEvent.Approval(id, method, params))
+            method == "thread/realtime/started" -> {
+                val threadId = params.string("threadId")
+                val sessionId = params.string("realtimeSessionId").ifBlank { null }
+                val version = params.string("version").ifBlank { null }
+                voiceThreadId = threadId.ifBlank { voiceThreadId }
+                val activeThreadId = voiceThreadId ?: threadId
+                mutableVoiceState.value = VoiceState(VoicePhase.LISTENING, "Listening", activeThreadId)
+                voiceStream.emit(VoiceEvent.Started(activeThreadId.orEmpty(), sessionId, version))
+            }
+            method == "thread/realtime/transcript/delta" -> {
+                val threadId = params.string("threadId")
+                val role = params.string("role")
+                val delta = params.string("delta")
+                if (role.equals("assistant", ignoreCase = true)) {
+                    mutableVoiceState.value = VoiceState(VoicePhase.SPEAKING, "Speaking", threadId)
+                } else if (mutableVoiceState.value.phase !in setOf(VoicePhase.STOPPING, VoicePhase.ERROR)) {
+                    mutableVoiceState.value = VoiceState(VoicePhase.LISTENING, "Listening", threadId)
+                }
+                voiceStream.emit(VoiceEvent.TranscriptDelta(threadId, role, delta))
+            }
+            method == "thread/realtime/transcript/done" -> {
+                val threadId = params.string("threadId")
+                val role = params.string("role")
+                val text = params.string("text")
+                if (!role.equals("assistant", ignoreCase = true) && mutableVoiceState.value.phase !in setOf(VoicePhase.STOPPING, VoicePhase.ERROR)) {
+                    mutableVoiceState.value = VoiceState(VoicePhase.LISTENING, "Listening", threadId)
+                }
+                voiceStream.emit(VoiceEvent.TranscriptDone(threadId, role, text))
+            }
+            method == "thread/realtime/outputAudio/delta" -> {
+                val threadId = params.string("threadId")
+                val audioJson = params["audio"] as? JsonObject
+                val audio = runCatching { audioJson?.let(::parseRealtimeAudio) }.getOrNull()
+                if (audio == null) {
+                    failVoice("Invalid realtime output audio", threadId)
+                } else {
+                    mutableVoiceState.value = VoiceState(VoicePhase.SPEAKING, "Speaking", threadId)
+                    voiceStream.emit(VoiceEvent.OutputAudio(threadId, audio))
+                }
+            }
+            method == "thread/realtime/error" -> {
+                val threadId = params.string("threadId").ifBlank { null }
+                failVoice(params.string("message").ifBlank { "Realtime voice error" }, threadId)
+            }
+            method == "thread/realtime/closed" -> {
+                val threadId = params.string("threadId").ifBlank { voiceThreadId.orEmpty() }
+                val reason = params.string("reason").ifBlank { null }
+                val hadError = mutableVoiceState.value.phase == VoicePhase.ERROR
+                voiceClosedSignal?.complete(Unit)
+                voiceThreadId = null
+                mutableVoiceState.value = VoiceState(
+                    phase = if (hadError) VoicePhase.ERROR else VoicePhase.IDLE,
+                    message = reason ?: "Voice closed",
+                    threadId = threadId.ifBlank { null },
+                )
+                voiceStream.emit(VoiceEvent.Closed(threadId, reason))
+            }
             id != null -> respond(id, buildJsonObject {})
             method == "turn/started" -> stream.emit(EngineEvent.TurnStarted(params.string("threadId"), (params["turn"] as? JsonObject)?.string("id").orEmpty()))
             method == "item/agentMessage/delta" -> stream.emit(EngineEvent.TextDelta(params.string("delta"), params.string("threadId"), params.string("turnId")))
@@ -201,6 +369,17 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine {
                 )
             )
         }
+    }
+
+    private fun requireVoiceThread(): String {
+        check(mutableVoiceState.value.active) { "Voice session is not active" }
+        return voiceThreadId?.takeIf { it.isNotBlank() } ?: error("Voice session has no thread ID")
+    }
+
+    private suspend fun failVoice(message: String, threadId: String? = voiceThreadId) {
+        val safeMessage = SecretRedactor.redact(message).ifBlank { "Realtime voice error" }
+        mutableVoiceState.value = VoiceState(VoicePhase.ERROR, safeMessage, threadId)
+        voiceStream.emit(VoiceEvent.Failure(safeMessage, threadId))
     }
 
     /** Keep a redacted, bounded stderr tail so RPC failures retain their cause chain. */
@@ -276,6 +455,69 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine {
             // Omitting effort keeps the app-server's model default in control.
             if (!reasoningEffort.isNullOrBlank()) put("effort", reasoningEffort)
         }
+
+        /** Build the v0.153.4 thread/realtime/start request. Transport is intentionally omitted. */
+        internal fun realtimeStartParams(threadId: String, model: String?): JsonObject = buildJsonObject {
+            put("threadId", threadId)
+            put("outputModality", "audio")
+            // Do not lose the final recognized words when the user taps Stop.
+            put("flushTranscriptTailOnSessionEnd", true)
+            // V2 is the Realtime Voice API path that supports app-server managed
+            // WebSocket audio. WebRTC is intentionally a later transport option.
+            put("version", "v2")
+            if (!model.isNullOrBlank()) put("model", model)
+        }
+
+        internal fun realtimeAppendAudioParams(threadId: String, audio: RealtimeAudioChunk): JsonObject = buildJsonObject {
+            put("threadId", threadId)
+            put("audio", buildJsonObject {
+                // The protocol carries audio.data as base64. Use the basic encoder so the
+                // JSON value never contains whitespace or line breaks.
+                put("data", Base64.getEncoder().encodeToString(audio.copyData()))
+                put("sampleRate", audio.sampleRate)
+                put("numChannels", audio.numChannels)
+                audio.samplesPerChannel?.let { put("samplesPerChannel", it) }
+            })
+        }
+
+        internal fun realtimeAppendTextParams(threadId: String, text: String, role: String): JsonObject {
+            require(role in REALTIME_TEXT_ROLES) {
+                "Realtime text role must be user, developer, or assistant"
+            }
+            return buildJsonObject {
+                put("threadId", threadId)
+                put("text", text)
+                put("role", role)
+            }
+        }
+
+        internal fun realtimeAppendSpeechParams(threadId: String, text: String): JsonObject = buildJsonObject {
+            put("threadId", threadId)
+            put("text", text)
+        }
+
+        internal fun realtimeStopParams(threadId: String): JsonObject = buildJsonObject {
+            put("threadId", threadId)
+        }
+
+        /** Decode one v0.153.4 ThreadRealtimeAudioChunk from a notification payload. */
+        internal fun parseRealtimeAudio(audio: JsonObject): RealtimeAudioChunk {
+            val encoded = audio.string("data")
+            require(encoded.isNotBlank()) { "Realtime audio data is missing" }
+            val sampleRate = audio["sampleRate"]?.jsonPrimitive?.intOrNull
+                ?: error("Realtime audio sampleRate is missing or invalid")
+            val numChannels = audio["numChannels"]?.jsonPrimitive?.intOrNull
+                ?: error("Realtime audio numChannels is missing or invalid")
+            val samplesPerChannel = (audio["samplesPerChannel"] as? JsonPrimitive)?.intOrNull
+            return RealtimeAudioChunk(
+                data = Base64.getDecoder().decode(encoded),
+                sampleRate = sampleRate,
+                numChannels = numChannels,
+                samplesPerChannel = samplesPerChannel,
+            )
+        }
+
+        private val REALTIME_TEXT_ROLES = setOf("user", "developer", "assistant")
 
         private fun parseReasoningEfforts(model: JsonObject): List<ReasoningEffortOption> {
             val values = model["supportedReasoningEfforts"]

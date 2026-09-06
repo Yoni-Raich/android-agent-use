@@ -33,6 +33,7 @@ class AgentCoordinator(
     private var assistantOutcome = "complete"
     private var controlTakeover = false
     private var awaitingTurn = false
+    private var voiceMode = false
     private val startupEvents = ArrayDeque<EngineEvent>()
     private var textRevision = 0L
     private var textFlushJob: Job? = null
@@ -66,6 +67,96 @@ class AgentCoordinator(
             startupEvents.clear()
             textRevision = 0L
             runJob = scope.launch { run(token, runCompletion, sessionId, prompt, images, model, reasoningEffort) }
+        }
+    }
+
+    /**
+     * Attach the device-tool gateway to turns delegated by a realtime voice
+     * session. Realtime owns the conversation transport; this coordinator owns
+     * only local tool safety and the delegated turn identity.
+     */
+    fun beginVoice(sessionId: String, threadId: String, workspace: File) {
+        require(threadId.isNotBlank()) { "Voice thread ID is required." }
+        synchronized(lifecycleLock) {
+            check(!state.value.active) { "Another agent run is already active." }
+            val token = epoch.incrementAndGet()
+            tools.beginRun(token.toString(), workspace)
+            voiceMode = true
+            thread = threadId
+            turn = null
+            assistantId = null
+            assistantText.clear()
+            assistantOutcome = "complete"
+            controlTakeover = false
+            awaitingTurn = false
+            startupEvents.clear()
+            completion = null
+            runJob = null
+            mutableState.value = RunState(RunPhase.THINKING, sessionId, "Voice ready")
+        }
+    }
+
+    /** Revoke local voice-delegated work without closing the shared app-server. */
+    fun endVoice() {
+        val context = synchronized(lifecycleLock) {
+            if (!voiceMode) return
+            val stoppingEpoch = epoch.incrementAndGet()
+            voiceMode = false
+            val controls = controlJobs.toList().also { jobs ->
+                jobs.forEach { it.cancel() }
+                controlJobs.clear()
+            }
+            val toolsInFlight = toolJobs.toList().also { jobs ->
+                jobs.forEach { it.cancel() }
+                toolJobs.clear()
+            }
+            val result = VoiceStopContext(
+                stoppingEpoch = stoppingEpoch,
+                sessionId = state.value.sessionId,
+                threadId = thread,
+                turnId = turn,
+                controls = controls,
+                toolsInFlight = toolsInFlight,
+            )
+            turn = null
+            controlTakeover = false
+            mutableState.value = state.value.copy(
+                phase = RunPhase.STOPPING,
+                status = "Ending voice",
+                controlling = false,
+                approval = null,
+            )
+            result
+        }
+        tools.revoke()
+        runCatching { overlay.updateState(OverlayState(OverlayPhase.STOPPING, "Voice")) }
+        scope.launch {
+            withContext(NonCancellable) {
+                context.controls.forEach { job -> runCatching { withTimeout(2_000) { job.join() } } }
+                val deviceStop = async { runCatching { withTimeout(2_000) { tools.cancel() } } }
+                val engineStop = async {
+                    runCatching {
+                        withTimeout(2_000) {
+                            if (context.threadId != null && context.turnId != null) {
+                                engine.interrupt(context.threadId, context.turnId)
+                            }
+                        }
+                    }
+                }
+                deviceStop.await()
+                context.toolsInFlight.forEach { job -> runCatching { withTimeout(2_000) { job.join() } } }
+                engineStop.await()
+                synchronized(lifecycleLock) {
+                    if (epoch.get() == context.stoppingEpoch) {
+                        thread = null
+                        assistantId = null
+                        assistantText.clear()
+                        completion = null
+                        mutableState.value = RunState(sessionId = context.sessionId, status = "Voice ended")
+                    }
+                }
+                runCatching { overlay.finish(OverlayState(OverlayPhase.DONE, "Voice ended")) }
+            }
         }
     }
 
@@ -161,6 +252,10 @@ class AgentCoordinator(
     }
 
     fun stop() {
+        if (synchronized(lifecycleLock) { voiceMode }) {
+            endVoice()
+            return
+        }
         val context = synchronized(lifecycleLock) {
             val snapshot = state.value
             if (!snapshot.active || snapshot.phase == RunPhase.STOPPING || completion?.isCompleted == true) return
@@ -348,8 +443,17 @@ class AgentCoordinator(
     private suspend fun handleEvent(event: EngineEvent) {
         if (bufferStartupEvent(event)) return
         when (event) {
-            is EngineEvent.TurnStarted -> Unit
-            is EngineEvent.TextDelta -> if (matches(event.threadId, event.turnId)) {
+            is EngineEvent.TurnStarted -> synchronized(lifecycleLock) {
+                if (voiceMode && event.threadId == thread && event.turnId.isNotBlank()) {
+                    turn = event.turnId
+                    mutableState.value = state.value.copy(
+                        phase = RunPhase.THINKING,
+                        status = "Working from voice",
+                        controlling = false,
+                    )
+                }
+            }
+            is EngineEvent.TextDelta -> if (matches(event.threadId, event.turnId) && !isVoiceMode()) {
                 synchronized(lifecycleLock) {
                     assistantText.append(event.text)
                     textRevision++
@@ -435,7 +539,22 @@ class AgentCoordinator(
                 }
             }
             is EngineEvent.TurnFinished -> if (matches(event.threadId, event.turnId)) {
-                when (event.status) {
+                if (isVoiceMode()) {
+                    if (event.status == "failed") {
+                        state.value.sessionId?.let { sessions.append(message(it, "system", event.error ?: "Voice task failed")) }
+                    }
+                    synchronized(lifecycleLock) {
+                        if (voiceMode && thread == event.threadId && turn == event.turnId) {
+                            turn = null
+                            mutableState.value = state.value.copy(
+                                phase = RunPhase.THINKING,
+                                status = "Listening",
+                                controlling = false,
+                                approval = null,
+                            )
+                        }
+                    }
+                } else when (event.status) {
                     "failed" -> {
                         val error = event.error ?: "Codex could not finish"
                         synchronized(lifecycleLock) {
@@ -449,15 +568,29 @@ class AgentCoordinator(
                         mutableState.value = state.value.copy(status = "Interrupted")
                     }
                 }
-                completion?.complete(Unit)
+                if (!isVoiceMode()) completion?.complete(Unit)
             }
             is EngineEvent.Failure -> if (failureMatches(event)) {
-                synchronized(lifecycleLock) {
-                    assistantOutcome = "error"
-                    mutableState.value = state.value.copy(phase = RunPhase.ERROR, status = event.message)
-                }
                 state.value.sessionId?.let { sessions.append(message(it, "system", event.message)) }
-                completion?.complete(Unit)
+                if (isVoiceMode()) {
+                    synchronized(lifecycleLock) {
+                        if (voiceMode) {
+                            turn = null
+                            mutableState.value = state.value.copy(
+                                phase = RunPhase.THINKING,
+                                status = "Voice task failed",
+                                controlling = false,
+                                approval = null,
+                            )
+                        }
+                    }
+                } else {
+                    synchronized(lifecycleLock) {
+                        assistantOutcome = "error"
+                        mutableState.value = state.value.copy(phase = RunPhase.ERROR, status = event.message)
+                    }
+                    completion?.complete(Unit)
+                }
             }
             is EngineEvent.AccountChanged -> Unit
         }
@@ -468,6 +601,8 @@ class AgentCoordinator(
             if (!isCurrentTurnLocked(token, threadId, turnId)) throw CancellationException("Run stopped")
         }
     }
+
+    private fun isVoiceMode(): Boolean = synchronized(lifecycleLock) { voiceMode }
 
     private fun scheduleAssistantFlush() {
         synchronized(lifecycleLock) {
@@ -505,6 +640,7 @@ class AgentCoordinator(
                 val flush = textFlushJob.also { it?.cancel() }
                 textFlushJob = null
                 awaitingTurn = false
+                voiceMode = false
                 startupEvents.clear()
                 controlTakeover = false
                 AssistantFinal(assistantId, assistantText.toString(), assistantOutcome, flush)
@@ -600,5 +736,14 @@ class AgentCoordinator(
         val toolsInFlight: List<Job>,
         val flush: Job?,
         val runJob: Job?,
+    )
+
+    private data class VoiceStopContext(
+        val stoppingEpoch: Long,
+        val sessionId: String?,
+        val threadId: String?,
+        val turnId: String?,
+        val controls: List<Job>,
+        val toolsInFlight: List<Job>,
     )
 }

@@ -24,6 +24,10 @@ class MainActivity : ComponentActivity() {
     private val model: AgentViewModel by viewModels()
     private val filePicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(model::addAttachment) }
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    private val microphonePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) { ensureService(); model.toggleVoice() }
+        else model.error("Microphone permission is required for voice.")
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge(statusBarStyle = SystemBarStyle.dark(android.graphics.Color.BLACK),
@@ -57,6 +61,7 @@ class MainActivity : ComponentActivity() {
         onSend = { text, attachments -> ensureService(); model.send(text, attachments) },
         onSteer = { model.graph.coordinator.steer(it) },
         onStop = model::stop,
+        onVoiceToggle = ::toggleVoice,
         onOpenSettings = { model.editUi { it.copy(isSettingsOpen = true) } },
         onCloseSettings = { model.editUi { it.copy(isSettingsOpen = false) } },
         onPrepareRuntime = { ensureService(); model.prepare() },
@@ -85,6 +90,18 @@ class MainActivity : ComponentActivity() {
         onDismissUpdateBanner = { model.dismissUpdateBanner() },
         onOpenInstallPermission = { model.openInstallPermission() },
     )
+    private fun toggleVoice() {
+        if (model.graph.voice.state.value.active) {
+            model.toggleVoice()
+            return
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            ensureService()
+            model.toggleVoice()
+        } else {
+            microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
     private fun openFile(item: WorkspaceFileItem) {
         runCatching {
             check(!item.isDirectory) { "Choose a file inside this folder." }

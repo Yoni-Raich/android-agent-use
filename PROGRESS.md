@@ -117,4 +117,29 @@ Record actual commands and results. Mark untested features explicitly. Do not re
   - Validation:
     - Unit tests: all modules passed (`./gradlew.bat test`), including `AppUpdateManagerTest`.
     - APK: artifacts/android-agent-0.1.2.apk (SHA-256: 89FFB574F8E290B07F9B62B4CF7E9216DE7F693F6E7AB3D6D37FFD9D3DE86B96).
+- 2026-09-06: Implemented experimental Codex realtime voice behind separate
+  engine and Android-audio contracts.
+  - Added a blue voice button based on the supplied ChatGPT composer reference,
+    microphone permission flow, foreground microphone state, live transcripts,
+    typed text while voice is active, and local start/stop handling.
+  - Added V2 `thread/realtime/start`, `appendAudio`, `appendText`,
+    `appendSpeech`, and `stop` support against pinned Codex 0.153.4. App-server
+    owns the upstream WebSocket. Audio is PCM16 24 kHz mono in bounded 20 ms
+    chunks; raw microphone audio is not stored.
+  - Realtime turns may call device tools through `AgentCoordinator`. Voice stop
+    revokes the gateway before interrupting active work and stopping capture.
+  - PASS: `./gradlew.bat test assembleDevDebugAndroidTest assembleDevDebug :voice:lintDebug`
+    (466 tasks, 42 executed),
+    `python -m unittest tools.test_prepare_runtime`, and
+    `git diff --check` (line-ending warnings only).
+  - Project-wide `:app:lintDevDebug` remains blocked by the existing unchanged
+    suspicious indentation in `AgentInputMethodService.kt:39` (1 error). This
+    voice change did not edit that file; the remaining lint output has 18 warnings.
+  - NOT TESTED: real sign-in, microphone capture, speaker playback, interruption,
+    latency, device tools during voice, and transcript accuracy on physical Q8.
+    Q8G64TD6ZTB6H6ZL was not connected; only the prohibited other emulator was
+    visible, so no device test, install, or visual check was run.
+  - At the time of this implementation entry, changes were still local and no
+    release had been published yet. The release result is recorded below after
+    the validated main-branch build.
 

@@ -98,6 +98,64 @@ interface AgentEngine {
     suspend fun close()
 }
 
+/** Lifecycle phase for the experimental Codex Realtime voice session. */
+enum class VoicePhase { IDLE, STARTING, LISTENING, SPEAKING, STOPPING, ERROR }
+
+/** State exposed to the voice UI without coupling it to the app-server protocol. */
+data class VoiceState(
+    val phase: VoicePhase = VoicePhase.IDLE,
+    val message: String = "Ready",
+    val threadId: String? = null,
+) {
+    val active: Boolean get() = phase !in setOf(VoicePhase.IDLE, VoicePhase.ERROR)
+}
+
+/** PCM audio chunk used by the voice contract. The engine owns protocol encoding. */
+data class RealtimeAudioChunk(
+    val data: ByteArray,
+    val sampleRate: Int,
+    val numChannels: Int,
+    val samplesPerChannel: Int? = null,
+) {
+    init {
+        require(sampleRate > 0) { "sampleRate must be positive" }
+        require(numChannels > 0) { "numChannels must be positive" }
+        require(samplesPerChannel == null || samplesPerChannel >= 0) {
+            "samplesPerChannel must be non-negative"
+        }
+    }
+
+    /** Return a copy so callers cannot mutate a chunk while it is being sent or played. */
+    fun copyData(): ByteArray = data.copyOf()
+}
+
+/** Events emitted by a Realtime voice session. */
+sealed interface VoiceEvent {
+    data class Started(
+        val threadId: String,
+        val realtimeSessionId: String? = null,
+        val version: String? = null,
+    ) : VoiceEvent
+
+    data class TranscriptDelta(val threadId: String, val role: String, val delta: String) : VoiceEvent
+    data class TranscriptDone(val threadId: String, val role: String, val text: String) : VoiceEvent
+    data class OutputAudio(val threadId: String, val audio: RealtimeAudioChunk) : VoiceEvent
+    data class Failure(val message: String, val threadId: String? = null) : VoiceEvent
+    data class Closed(val threadId: String, val reason: String? = null) : VoiceEvent
+}
+
+/** Small boundary around the experimental app-server Realtime Voice API. */
+interface RealtimeVoiceEngine {
+    val voiceEvents: Flow<VoiceEvent>
+    val voiceState: StateFlow<VoiceState>
+
+    suspend fun startVoice(threadId: String, model: String? = null)
+    suspend fun appendAudio(audio: RealtimeAudioChunk)
+    suspend fun appendText(text: String, role: String = "user")
+    suspend fun appendSpeech(text: String)
+    suspend fun stopVoice()
+}
+
 enum class RunPhase { IDLE, STARTING, THINKING, TOOL, CONTROLLING, STOPPING, ERROR }
 data class RunState(val phase: RunPhase = RunPhase.IDLE, val sessionId: String? = null, val status: String = "Ready", val controlling: Boolean = false, val approval: EngineEvent.Approval? = null) {
     val active: Boolean get() = phase !in setOf(RunPhase.IDLE, RunPhase.ERROR)

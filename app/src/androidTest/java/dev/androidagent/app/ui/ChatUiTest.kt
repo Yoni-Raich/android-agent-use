@@ -10,6 +10,8 @@ import dev.androidagent.core.ChatMessage
 import dev.androidagent.core.ReasoningEffortOption
 import dev.androidagent.core.RunPhase
 import dev.androidagent.core.RunState
+import dev.androidagent.core.VoicePhase
+import dev.androidagent.core.VoiceState
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -107,5 +109,22 @@ class ChatUiTest {
         compose.onNodeWithText("Hide details").performClick()
         compose.onNodeWithText(details).assertDoesNotExist()
         screenshot("chat-error-collapsed")
+    }
+    @Test fun voiceButtonStartsAndShowsActiveState() {
+        var toggles = 0
+        compose.setContent {
+            AndroidAgentScreen(fixture, AgentUiActions(onVoiceToggle = { toggles++ }))
+        }
+        compose.onNodeWithContentDescription("Start voice conversation").assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals(1, toggles) }
+
+        compose.setContent {
+            AndroidAgentScreen(
+                fixture.copy(voiceState = VoiceState(VoicePhase.LISTENING, "Listening", "thread-1")),
+                AgentUiActions(onVoiceToggle = { toggles++ }),
+            )
+        }
+        compose.onNodeWithContentDescription("End voice conversation").assertIsDisplayed()
+        compose.onNodeWithText("Voice · Listening").assertIsDisplayed()
     }
 }

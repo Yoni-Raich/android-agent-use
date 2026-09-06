@@ -26,6 +26,8 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     )
     val ui: StateFlow<AgentUiState> = mutable.asStateFlow()
     private var setupJob: Job? = null
+    private var voiceLocalSessionId: String? = null
+    private val pendingVoiceTexts = java.util.ArrayDeque<String>()
 
     init {
         viewModelScope.launch {
@@ -51,6 +53,8 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { graph.coordinator.state.collect { state -> mutable.update { it.copy(runState = state) } } }
         viewModelScope.launch { graph.adb.status.collect { state -> mutable.update { it.copy(adbStatus = state) } } }
         viewModelScope.launch { graph.runtime.status.collect { state -> mutable.update { it.copy(runtimeStatus = state) } } }
+        viewModelScope.launch { graph.voice.state.collect { state -> mutable.update { it.copy(voiceState = state) } } }
+        viewModelScope.launch { graph.engine.voiceEvents.collect(::handleVoiceEvent) }
         viewModelScope.launch { graph.engine.events.collect { event ->
             when (event) {
                 is EngineEvent.AccountChanged -> { mutable.update { it.copy(accountStatus = event.status, infoMessage = if (event.status.signedIn) "Signed in. You can start chatting." else null) }; if (event.status.signedIn) loadModels() }
@@ -66,10 +70,25 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     fun rename(id: String, title: String) = task { graph.sessions.rename(id, title) }
     fun delete(id: String) {
         if (graph.coordinator.state.value.sessionId == id && graph.coordinator.state.value.active) { error("Stop this chat before deleting it."); return }
+        if (voiceLocalSessionId == id && graph.voice.state.value.active) { error("End the voice conversation before deleting it."); return }
         task { graph.sessions.deleteSession(id) }
     }
     fun send(text: String, attachments: List<PendingAttachment>) {
         val id = current.value ?: return
+        if (graph.voice.state.value.active) {
+            if (attachments.isNotEmpty()) { error("End voice before sending attachments."); return }
+            task {
+                synchronized(pendingVoiceTexts) { pendingVoiceTexts.addLast(text) }
+                try {
+                    graph.voice.appendText(text)
+                    graph.sessions.append(ChatMessage(UUID.randomUUID().toString(), id, "user", text, System.currentTimeMillis()))
+                } catch (failure: Exception) {
+                    synchronized(pendingVoiceTexts) { pendingVoiceTexts.removeLastOccurrence(text) }
+                    throw failure
+                }
+            }
+            return
+        }
         val active = graph.coordinator.state.value
         if (active.active && active.sessionId != id) { error("Another chat is working. Stop it before starting this one."); return }
         val paths = attachments.mapNotNull { it.path?.let(::File) }
@@ -86,7 +105,49 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         )
         mutable.update { it.copy(attachments = emptyList(), errorMessage = null) }
     }
-    fun stop() = graph.coordinator.stop()
+    fun stop() {
+        if (graph.voice.state.value.active) stopVoice() else graph.coordinator.stop()
+    }
+    fun toggleVoice() {
+        if (graph.voice.state.value.active) stopVoice() else startVoice()
+    }
+    private fun startVoice() = task {
+        check(!graph.coordinator.state.value.active) { "Stop the current agent run before starting voice." }
+        val sessionId = current.value ?: kotlin.error("Choose a chat first.")
+        val session = graph.sessions.getSession(sessionId) ?: kotlin.error("Chat no longer exists.")
+        graph.engine.connect()
+        check(graph.engine.account().signedIn) { "Sign in to Codex in Settings first." }
+        val snapshot = mutable.value
+        val workspace = graph.sessions.workspace(sessionId)
+        val threadId = graph.engine.openSession(
+            workspace,
+            session.engineThreadId,
+            snapshot.selectedModel,
+            graph.tools.definitions,
+        )
+        graph.sessions.setThread(sessionId, threadId)
+        voiceLocalSessionId = sessionId
+        mutable.update { it.copy(errorMessage = null, voiceTranscript = "", voiceTranscriptRole = null) }
+        graph.coordinator.beginVoice(sessionId, threadId, workspace)
+        try {
+            // Realtime selects its own compatible voice model. The normal Codex
+            // model remains a thread setting and is not forced into this RPC.
+            graph.voice.start(threadId)
+        } catch (failure: Exception) {
+            graph.coordinator.endVoice()
+            voiceLocalSessionId = null
+            throw failure
+        }
+    }
+    private fun stopVoice() = task {
+        // Revoke before the remote stop so no new device action can begin while
+        // the voice session is ending. Completed side effects are not undone.
+        graph.coordinator.endVoice()
+        graph.voice.stop()
+        voiceLocalSessionId = null
+        synchronized(pendingVoiceTexts) { pendingVoiceTexts.clear() }
+        mutable.update { it.copy(voiceTranscript = "", voiceTranscriptRole = null) }
+    }
     fun prepare() {
         if (setupJob?.isActive == true) return
         setupJob = task {
@@ -103,7 +164,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         val status = graph.engine.login()
         mutable.update { it.copy(accountStatus = status, isSettingsOpen = true, errorMessage = null) }
     }
-    fun logout() = task { check(!graph.coordinator.state.value.active) { "Stop the current run before signing out." }; graph.engine.logout(); mutable.update { it.copy(accountStatus = AccountStatus(false, "Sign in to Codex")) } }
+    fun logout() = task { check(!graph.coordinator.state.value.active && !graph.voice.state.value.active) { "Stop the current run or voice conversation before signing out." }; graph.engine.logout(); mutable.update { it.copy(accountStatus = AccountStatus(false, "Sign in to Codex")) } }
     fun refreshAccount() = task { if (graph.runtime.status.value.phase in setOf(RuntimePhase.READY, RuntimePhase.RUNNING)) { val account = graph.engine.account(); mutable.update { it.copy(accountStatus = account) } } }
     private suspend fun loadModels() {
         mutable.update { it.copy(isLoadingModels = true) }
@@ -297,6 +358,54 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         mutable.update { it.copy(isUpdateBannerVisible = false) }
     }
     private fun parsePort(value: String): Int = value.trim().toIntOrNull()?.takeIf { it in 1..65535 } ?: kotlin.error("Enter a port from 1 to 65535.")
+    private suspend fun handleVoiceEvent(event: VoiceEvent) {
+        when (event) {
+            is VoiceEvent.TranscriptDelta -> if (event.threadId == graph.voice.state.value.threadId) {
+                mutable.update { state ->
+                    val text = if (state.voiceTranscriptRole == event.role) state.voiceTranscript + event.delta else event.delta
+                    state.copy(voiceTranscript = text, voiceTranscriptRole = event.role)
+                }
+            }
+            is VoiceEvent.TranscriptDone -> {
+                val localSessionId = voiceLocalSessionId ?: return
+                val text = event.text.trim()
+                val skipTypedUserEcho = if (event.role.equals("user", ignoreCase = true)) {
+                    synchronized(pendingVoiceTexts) {
+                        if (pendingVoiceTexts.peekFirst() == text) {
+                            pendingVoiceTexts.removeFirst()
+                            true
+                        } else false
+                    }
+                } else false
+                if (text.isNotBlank() && !skipTypedUserEcho) {
+                    val role = if (event.role.equals("assistant", ignoreCase = true)) "assistant" else "user"
+                    graph.sessions.append(
+                        ChatMessage(UUID.randomUUID().toString(), localSessionId, role, text, System.currentTimeMillis())
+                    )
+                    val session = graph.sessions.getSession(localSessionId)
+                    if (role == "user" && session?.title == "New chat") graph.sessions.rename(localSessionId, text.take(48))
+                }
+                mutable.update { state ->
+                    if (state.voiceTranscriptRole == event.role) state.copy(voiceTranscript = "", voiceTranscriptRole = null)
+                    else state
+                }
+            }
+            is VoiceEvent.Failure -> {
+                graph.coordinator.endVoice()
+                voiceLocalSessionId = null
+                synchronized(pendingVoiceTexts) { pendingVoiceTexts.clear() }
+                mutable.update { it.copy(voiceTranscript = "", voiceTranscriptRole = null) }
+                error(event.message)
+            }
+            is VoiceEvent.Closed -> {
+                graph.coordinator.endVoice()
+                voiceLocalSessionId = null
+                synchronized(pendingVoiceTexts) { pendingVoiceTexts.clear() }
+                mutable.update { it.copy(voiceTranscript = "", voiceTranscriptRole = null) }
+            }
+            is VoiceEvent.Started, is VoiceEvent.OutputAudio -> Unit
+        }
+    }
     private fun task(block: suspend () -> Unit): Job = viewModelScope.launch {
         try { block() } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { error(failure.message ?: "Something went wrong.") }

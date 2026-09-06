@@ -11,6 +11,7 @@ import dev.androidagent.core.ChatSession
 import dev.androidagent.core.EngineEvent
 import dev.androidagent.core.RunState
 import dev.androidagent.core.RuntimeStatus
+import dev.androidagent.core.VoiceState
 
 /**
  * A file that is waiting to be sent with the next user message.
@@ -69,6 +70,9 @@ data class AgentUiState(
     val modelCatalog: List<AgentModel> = emptyList(),
     val selectedModel: String? = null,
     val selectedReasoningEffort: String? = null,
+    val voiceState: VoiceState = VoiceState(),
+    val voiceTranscript: String = "",
+    val voiceTranscriptRole: String? = null,
     val isDrawerOpen: Boolean = false,
     val isSettingsOpen: Boolean = false,
     val isLoadingSessions: Boolean = false,
@@ -101,6 +105,7 @@ data class AgentUiActions(
     val onSend: (String, List<PendingAttachment>) -> Unit = { _, _ -> },
     val onSteer: (String) -> Unit = {},
     val onStop: () -> Unit = {},
+    val onVoiceToggle: () -> Unit = {},
     val onOpenSettings: () -> Unit = {},
     val onCloseSettings: () -> Unit = {},
     val onPrepareRuntime: () -> Unit = {},

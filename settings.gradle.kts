@@ -4,4 +4,4 @@ dependencyResolutionManagement {
     repositories { google(); mavenCentral(); maven("https://jitpack.io") }
 }
 rootProject.name = "Android Agent"
-include(":app", ":core", ":engine-codex", ":runtime", ":workspace", ":adb", ":device-tools", ":overlay")
+include(":app", ":core", ":engine-codex", ":runtime", ":workspace", ":adb", ":device-tools", ":overlay", ":voice")
