@@ -133,7 +133,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
             // Realtime selects its own compatible voice model. The normal Codex
             // model remains a thread setting and is not forced into this RPC.
             graph.voice.start(threadId)
-        } catch (failure: Exception) {
+        } catch (failure: Throwable) {
             graph.coordinator.endVoice()
             voiceLocalSessionId = null
             throw failure

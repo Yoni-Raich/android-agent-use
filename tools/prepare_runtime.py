@@ -56,8 +56,9 @@ DEFAULT_CA_BUNDLE = os.path.join(".codex-work", "runtime", "cacert.pem")
 CA_BUNDLE_URL = "https://curl.se/ca/cacert.pem"
 CA_BUNDLE_SHA256 = "f66dff1bdf8f96060b8177976f8b7d9254bc89bc4db933d769f7384d28480bc9"
 
-# Canonical package path -> staged lib name. Mirror in
-# runtime/.../AndroidRuntimeHost.kt PACKAGE_LINKS; keep both in sync.
+# Canonical package path -> staged lib name. Upstream tarballs contain
+# codex-resources/bwrap; AndroidRuntimeHost adds an intentional runtime-only
+# alias codex-path/bwrap -> libcodex_bwrap.so so bwrap is discoverable on PATH.
 LIB_MAPPING = {
     "bin/codex-app-server": "libcodex_app_server.so",
     # Android's native-library packaging accepts .so files, but does not

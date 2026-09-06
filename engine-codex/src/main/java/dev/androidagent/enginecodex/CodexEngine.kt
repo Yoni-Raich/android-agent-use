@@ -113,18 +113,24 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
 
     override suspend fun openSession(workspace: File, threadId: String?, model: String?, tools: List<ToolDefinition>): String {
         connect()
-        val params = buildJsonObject {
-            put("cwd", workspace.absolutePath)
-            put("approvalPolicy", "never")
-            put("sandbox", "danger-full-access")
-            put("developerInstructions", AGENT_INSTRUCTIONS)
-            if (!model.isNullOrBlank()) put("model", model)
-            if (threadId != null) put("threadId", threadId)
-            else put("dynamicTools", JsonArray(tools.map { tool -> buildJsonObject {
-                put("type", "function"); put("name", tool.name); put("description", tool.description); put("inputSchema", tool.inputSchema)
-            } }))
+        if (!threadId.isNullOrBlank()) {
+            val resumeParams = resumeSessionParams(workspace, threadId, model)
+            try {
+                val result = request("thread/resume", resumeParams)
+                val resumedId = result["thread"]?.jsonObject?.string("id")?.takeIf { it.isNotBlank() }
+                if (resumedId != null) return resumedId
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                // If thread/resume fails (e.g. "no rollout found for thread id",
+                // unmaterialized zero-turn thread, app update, or missing state),
+                // fall back to starting a fresh thread so the user is never locked out.
+                // Note: request() withTimeout(60_000) throws TimeoutCancellationException (a CancellationException),
+                // which deliberately propagates to the caller rather than triggering an unwanted fallback.
+                System.err.println("CodexEngine: Failed to resume thread $threadId, falling back to fresh thread: ${SecretRedactor.redact(error.message ?: error.toString())}")
+            }
         }
-        val result = request(if (threadId == null) "thread/start" else "thread/resume", params)
+        val startParams = startSessionParams(workspace, model, tools)
+        val result = request("thread/start", startParams)
         return result["thread"]?.jsonObject?.string("id")?.takeIf { it.isNotBlank() } ?: error("Codex returned no thread ID")
     }
 
@@ -392,19 +398,23 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
         }
     }
 
-    private fun stderrSnapshot(): String = synchronized(stderrLock) {
-        stderrTail.joinToString("; ")
+    private fun stderrSnapshot(maxLines: Int = 3): String = synchronized(stderrLock) {
+        if (stderrTail.isEmpty()) return ""
+        val count = minOf(stderrTail.size, maxLines)
+        stderrTail.toList().takeLast(count).joinToString("; ")
     }
 
     private fun rpcErrorMessage(error: JsonObject): String {
         val code = error["code"]?.jsonPrimitive?.longOrNull
         val pieces = mutableListOf<String>()
-        error.string("message").takeIf { it.isNotBlank() }?.let(pieces::add)
+        val message = error.string("message").takeIf { it.isNotBlank() }
+        if (message != null) pieces.add(message)
         // `data` can contain a nested cause. Redaction happens before it is
         // combined with stderr, and bodies/tokens are never displayed.
         error["data"]?.let { pieces += SecretRedactor.redact(it.toString()) }
         error["cause"]?.let { pieces += SecretRedactor.redact(it.toString()) }
-        stderrSnapshot().takeIf { it.isNotBlank() }?.let(pieces::add)
+        val recentStderr = stderrSnapshot(if (message != null) 2 else 5)
+        if (recentStderr.isNotBlank()) pieces.add(recentStderr)
         val raw = pieces.ifEmpty { listOf("Codex reported an RPC error") }.joinToString(" | ")
         return SecretRedactor.describe(raw, code)
     }
@@ -440,6 +450,37 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
                     defaultReasoningEffort = defaultEffort,
                 )
             }
+
+        internal fun resumeSessionParams(
+            workspace: File,
+            threadId: String,
+            model: String?,
+        ): JsonObject = buildJsonObject {
+            put("cwd", workspace.absolutePath)
+            put("approvalPolicy", "never")
+            put("sandbox", "danger-full-access")
+            put("developerInstructions", AGENT_INSTRUCTIONS)
+            if (!model.isNullOrBlank()) put("model", model)
+            put("threadId", threadId)
+        }
+
+        internal fun startSessionParams(
+            workspace: File,
+            model: String?,
+            tools: List<ToolDefinition>,
+        ): JsonObject = buildJsonObject {
+            put("cwd", workspace.absolutePath)
+            put("approvalPolicy", "never")
+            put("sandbox", "danger-full-access")
+            put("developerInstructions", AGENT_INSTRUCTIONS)
+            if (!model.isNullOrBlank()) put("model", model)
+            put("dynamicTools", JsonArray(tools.map { tool -> buildJsonObject {
+                put("type", "function")
+                put("name", tool.name)
+                put("description", tool.description)
+                put("inputSchema", tool.inputSchema)
+            } }))
+        }
 
         internal fun turnStartParams(
             threadId: String,

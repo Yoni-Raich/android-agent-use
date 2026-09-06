@@ -3,8 +3,10 @@ package dev.androidagent.enginecodex
 import dev.androidagent.core.AgentModel
 import dev.androidagent.core.RealtimeAudioChunk
 import dev.androidagent.core.ReasoningEffortOption
+import kotlinx.coroutines.*
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertArrayEquals
@@ -137,6 +139,234 @@ class CodexEngineTest {
             throw AssertionError("expected an invalid role to be rejected")
         } catch (_: IllegalArgumentException) {
             // expected
+        }
+    }
+
+    @Test fun sessionParamsDistinguishResumeAndStart() {
+        val work = File("/tmp/workspace")
+        val tools = listOf(
+            dev.androidagent.core.ToolDefinition("test_tool", "A test tool", kotlinx.serialization.json.buildJsonObject {})
+        )
+
+        val resumeParams = CodexEngine.resumeSessionParams(work, "existing-thread-123", "custom-model")
+        assertEquals("existing-thread-123", resumeParams["threadId"]?.jsonPrimitive?.content)
+        assertEquals("custom-model", resumeParams["model"]?.jsonPrimitive?.content)
+        assertFalse(resumeParams.containsKey("dynamicTools"))
+        assertEquals("never", resumeParams["approvalPolicy"]?.jsonPrimitive?.content)
+        assertEquals("danger-full-access", resumeParams["sandbox"]?.jsonPrimitive?.content)
+
+        val startParams = CodexEngine.startSessionParams(work, null, tools)
+        assertFalse(startParams.containsKey("threadId"))
+        assertFalse(startParams.containsKey("model"))
+        assertTrue(startParams.containsKey("dynamicTools"))
+        assertEquals(1, startParams["dynamicTools"]?.jsonArray?.size)
+    }
+
+    @Test fun openSessionFallsBackToThreadStartOnResumeFailure() = runBlocking {
+        val serverIn = java.io.PipedInputStream()
+        val clientOut = java.io.PipedOutputStream(serverIn)
+        val clientIn = java.io.PipedInputStream()
+        val serverOut = java.io.PipedOutputStream(clientIn)
+
+        val fakeProcess = object : Process() {
+            override fun getOutputStream() = clientOut
+            override fun getInputStream() = clientIn
+            override fun getErrorStream() = java.io.ByteArrayInputStream(ByteArray(0))
+            override fun waitFor() = 0
+            override fun exitValue() = 0
+            override fun destroy() = Unit
+        }
+
+        val fakeRuntime = object : dev.androidagent.core.RuntimeHost {
+            override val status = kotlinx.coroutines.flow.MutableStateFlow(dev.androidagent.core.RuntimeStatus())
+            override val homeDirectory = File("/tmp/home")
+            override suspend fun prepare() = Unit
+            override suspend fun startAppServer(): Process = fakeProcess
+            override suspend fun stop() = Unit
+        }
+
+        val serverReader = serverIn.bufferedReader()
+        val serverWriter = serverOut.bufferedWriter()
+
+        val engine = CodexEngine(fakeRuntime)
+        val calledMethods = java.util.Collections.synchronizedList(mutableListOf<String>())
+
+        val serverJob = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            while (isActive) {
+                val line = serverReader.readLine() ?: break
+                val req = Json.parseToJsonElement(line).jsonObject
+                val id = req["id"]?.jsonPrimitive?.content ?: continue
+                val method = req["method"]?.jsonPrimitive?.content ?: continue
+                calledMethods.add(method)
+                when (method) {
+                    "initialize" -> {
+                        serverWriter.write("""{"id":$id,"result":{}}""" + "\n")
+                        serverWriter.flush()
+                    }
+                    "thread/resume" -> {
+                        serverWriter.write("""{"id":$id,"error":{"code":-32600,"message":"no rollout found for thread id stale-123"}}""" + "\n")
+                        serverWriter.flush()
+                    }
+                    "thread/start" -> {
+                        serverWriter.write("""{"id":$id,"result":{"thread":{"id":"fresh-456"}}}""" + "\n")
+                        serverWriter.flush()
+                    }
+                }
+            }
+        }
+
+        try {
+            val opened = engine.openSession(File("/tmp/workspace"), "stale-123", null, emptyList())
+            assertEquals("fresh-456", opened)
+            assertEquals(listOf("initialize", "thread/resume", "thread/start"), calledMethods)
+        } finally {
+            engine.close()
+            serverJob.cancel()
+            runCatching { serverIn.close() }
+            runCatching { clientIn.close() }
+            runCatching { serverOut.close() }
+            runCatching { clientOut.close() }
+        }
+    }
+
+    @Test fun openSessionReturnsResumedThreadWithoutCallingStart() = runBlocking {
+        val serverIn = java.io.PipedInputStream()
+        val clientOut = java.io.PipedOutputStream(serverIn)
+        val clientIn = java.io.PipedInputStream()
+        val serverOut = java.io.PipedOutputStream(clientIn)
+
+        val fakeProcess = object : Process() {
+            override fun getOutputStream() = clientOut
+            override fun getInputStream() = clientIn
+            override fun getErrorStream() = java.io.ByteArrayInputStream(ByteArray(0))
+            override fun waitFor() = 0
+            override fun exitValue() = 0
+            override fun destroy() = Unit
+        }
+
+        val fakeRuntime = object : dev.androidagent.core.RuntimeHost {
+            override val status = kotlinx.coroutines.flow.MutableStateFlow(dev.androidagent.core.RuntimeStatus())
+            override val homeDirectory = File("/tmp/home")
+            override suspend fun prepare() = Unit
+            override suspend fun startAppServer(): Process = fakeProcess
+            override suspend fun stop() = Unit
+        }
+
+        val serverReader = serverIn.bufferedReader()
+        val serverWriter = serverOut.bufferedWriter()
+
+        val engine = CodexEngine(fakeRuntime)
+        val calledMethods = java.util.Collections.synchronizedList(mutableListOf<String>())
+
+        val serverJob = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            while (isActive) {
+                val line = serverReader.readLine() ?: break
+                val req = Json.parseToJsonElement(line).jsonObject
+                val id = req["id"]?.jsonPrimitive?.content ?: continue
+                val method = req["method"]?.jsonPrimitive?.content ?: continue
+                calledMethods.add(method)
+                when (method) {
+                    "initialize" -> {
+                        serverWriter.write("""{"id":$id,"result":{}}""" + "\n")
+                        serverWriter.flush()
+                    }
+                    "thread/resume" -> {
+                        serverWriter.write("""{"id":$id,"result":{"thread":{"id":"resumed-789"}}}""" + "\n")
+                        serverWriter.flush()
+                    }
+                    "thread/start" -> {
+                        serverWriter.write("""{"id":$id,"result":{"thread":{"id":"fresh-456"}}}""" + "\n")
+                        serverWriter.flush()
+                    }
+                }
+            }
+        }
+
+        try {
+            val opened = engine.openSession(File("/tmp/workspace"), "resumed-789", null, emptyList())
+            assertEquals("resumed-789", opened)
+            assertEquals(listOf("initialize", "thread/resume"), calledMethods)
+            assertFalse(calledMethods.contains("thread/start"))
+        } finally {
+            engine.close()
+            serverJob.cancel()
+            runCatching { serverIn.close() }
+            runCatching { clientIn.close() }
+            runCatching { serverOut.close() }
+            runCatching { clientOut.close() }
+        }
+    }
+
+    @Test fun openSessionPropagatesCancellationExceptionWithoutFallback() = runBlocking {
+        val serverIn = java.io.PipedInputStream()
+        val clientOut = java.io.PipedOutputStream(serverIn)
+        val clientIn = java.io.PipedInputStream()
+        val serverOut = java.io.PipedOutputStream(clientIn)
+
+        val fakeProcess = object : Process() {
+            override fun getOutputStream() = clientOut
+            override fun getInputStream() = clientIn
+            override fun getErrorStream() = java.io.ByteArrayInputStream(ByteArray(0))
+            override fun waitFor() = 0
+            override fun exitValue() = 0
+            override fun destroy() = Unit
+        }
+
+        val fakeRuntime = object : dev.androidagent.core.RuntimeHost {
+            override val status = kotlinx.coroutines.flow.MutableStateFlow(dev.androidagent.core.RuntimeStatus())
+            override val homeDirectory = File("/tmp/home")
+            override suspend fun prepare() = Unit
+            override suspend fun startAppServer(): Process = fakeProcess
+            override suspend fun stop() = Unit
+        }
+
+        val serverReader = serverIn.bufferedReader()
+        val serverWriter = serverOut.bufferedWriter()
+
+        val engine = CodexEngine(fakeRuntime)
+        val calledMethods = java.util.Collections.synchronizedList(mutableListOf<String>())
+
+        val serverJob = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            while (isActive) {
+                val line = serverReader.readLine() ?: break
+                val req = Json.parseToJsonElement(line).jsonObject
+                val id = req["id"]?.jsonPrimitive?.content ?: continue
+                val method = req["method"]?.jsonPrimitive?.content ?: continue
+                calledMethods.add(method)
+                when (method) {
+                    "initialize" -> {
+                        serverWriter.write("""{"id":$id,"result":{}}""" + "\n")
+                        serverWriter.flush()
+                    }
+                    "thread/resume" -> {
+                        // Delay response to allow cancellation
+                    }
+                    "thread/start" -> {
+                        serverWriter.write("""{"id":$id,"result":{"thread":{"id":"fresh-456"}}}""" + "\n")
+                        serverWriter.flush()
+                    }
+                }
+            }
+        }
+
+        try {
+            val job = launch {
+                engine.openSession(File("/tmp/workspace"), "cancel-thread", null, emptyList())
+            }
+            while (!calledMethods.contains("thread/resume")) {
+                delay(10)
+            }
+            job.cancelAndJoin()
+            assertTrue(job.isCancelled)
+            assertTrue(calledMethods.contains("thread/resume"))
+            assertFalse(calledMethods.contains("thread/start"))
+        } finally {
+            engine.close()
+            serverJob.cancel()
+            runCatching { serverIn.close() }
+            runCatching { clientIn.close() }
+            runCatching { serverOut.close() }
+            runCatching { clientOut.close() }
         }
     }
 }

@@ -411,15 +411,16 @@ class AndroidRuntimeHost(private val appContext: Context) : RuntimeHost {
 
         /**
          * Canonical package path -> staged lib name. Mirrors
-         * tools/prepare_runtime.py LIB_MAPPING (single source of truth for the
-         * rename; keep both in sync).
+         * tools/prepare_runtime.py LIB_MAPPING, plus an intentional runtime-only
+         * alias `codex-path/bwrap -> libcodex_bwrap.so` so bwrap is discoverable on PATH.
          */
         val PACKAGE_LINKS: List<Pair<String, String>> = listOf(
             "bin/codex-app-server" to "libcodex_app_server.so",
             "bin/codex-code-mode-host" to "codex-code-mode-x.so",
             "codex-path/rg" to "libcodex_rg.so",
+            "codex-path/bwrap" to "libcodex_bwrap.so",
             "codex-resources/bwrap" to "libcodex_bwrap.so",
-            "codex-resources/zsh/bin/zsh" to "libcodex_zsh.so"
+            "codex-resources/zsh/bin/zsh" to "libcodex_zsh.so",
         )
 
         /**

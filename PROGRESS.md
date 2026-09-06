@@ -173,4 +173,43 @@ Record actual commands and results. Mark untested features explicitly. Do not re
     signing.
   - NOT TESTED: physical Q8 voice E2E, microphone capture, speaker playback,
     and signed-in realtime upstream connectivity.
+- 2026-09-06: Release v0.2.2 published (versionCode 6, versionName 0.2.2).
+  - Resolved chat lockout caused by `[UNKNOWN] no rollout found for thread id`:
+    - Root cause: In upstream Codex app-server, zero-turn threads (threads on
+      which no turn completed, e.g. when voice failed immediately upon startup)
+      are not written to `.jsonl` rollout files on disk. When reopening the
+      session, `openSession` attempted `thread/resume` on the non-existent
+      rollout, throwing RPC error -32600 and permanently locking the session.
+    - Fix: `CodexEngine.openSession` now catches recoverable `thread/resume`
+      failures, logs a redacted warning, and falls back to `thread/start`.
+      `CancellationException` (including `withTimeout` cancellations) is
+      strictly preserved and never swallowed.
+    - Bounded `CodexEngine.rpcErrorMessage` stderr snapshot to recent lines
+      (2-5 lines) so historic startup logs no longer pollute unrelated RPC errors.
+  - Resolved `Codex could not find bubblewrap on PATH` warning:
+    - Added `codex-path/bwrap -> libcodex_bwrap.so` runtime alias in
+      `AndroidRuntimeHost.PACKAGE_LINKS` so `bwrap` is found in the directory
+      exported on `PATH`.
+  - Improved `AgentViewModel.startVoice` resilience:
+    - Preserves the fresh valid thread returned by `openSession` instead of
+      restoring a stale dead thread on voice start failures.
+    - Rethrows `Throwable` cleanly to avoid swallowing cancellations.
+  - Peer Code Review:
+    - Muse (OpenCode `opencode/muse-spark-1.3-contributor-free`):
+      - Pass 1: Requested changes on silent catch, unverified launcher flags,
+        `PACKAGE_LINKS` vs `LIB_MAPPING` symmetry, and `AgentViewModel` rollback.
+      - Pass 2: Verified all 5 items addressed. 11/11 tests in `CodexEngineTest`
+        passed. Approved with `DECISION: APPROVE`.
+  - Validation:
+    - Unit tests: all modules passed (`./gradlew.bat test --no-daemon`).
+    - Staging test: `python -m unittest tools.test_prepare_runtime` passed.
+    - Full build: `./gradlew.bat test assembleDevRelease assembleDevDebugAndroidTest :voice:lintDebug --no-daemon`
+      passed (624 tasks, 84 executed).
+    - APK: `artifacts/android-agent-0.2.2.apk`, metadata
+      `dev.androidagent.app.dev`, versionCode 6, versionName 0.2.2.
+    - SHA-256: `AB1B472D7FDF5BEE76D96BAD4E8331A12BBFE4562D712365ED9DFAEB60C82A55`.
+    - Zip alignment verified (4-byte alignment passed).
+    - APK Signature Scheme v3 verified with local Android debug key.
+  - NOT TESTED: physical Q8 voice E2E, microphone capture, speaker playback,
+    and signed-in realtime upstream connectivity (Q8 not connected).
 
