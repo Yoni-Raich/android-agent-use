@@ -45,6 +45,18 @@ class FloatingControlOverlayTest {
             assertTrue(device.hasObject(By.desc("Stop run")))
             assertTrue(device.hasObject(By.text("Thinking")))
 
+            // Catch the old crowded layout: controls must remain usable and
+            // the composer must sit below the header, within the screen.
+            val stop = device.findObject(By.desc("Stop run")).visibleBounds
+            val send = device.findObject(By.desc("Send message")).visibleBounds
+            val input = device.findObject(By.desc("Steer or reply")).visibleBounds
+            val target = (48 * targetContext.resources.displayMetrics.density).toInt()
+            assertTrue("Stop touch target", stop.width() >= target && stop.height() >= target)
+            assertTrue("Send touch target", send.width() >= target && send.height() >= target)
+            assertTrue("Composer below header", input.top >= stop.bottom)
+            assertTrue("Composer has space", input.width() >= target * 3)
+            assertTrue("Send stays on screen", send.right <= device.displayWidth)
+
             saveScreenshot(device, targetContext, "overlay-glass-pill-visible")
 
             overlay.setAppForeground(true)

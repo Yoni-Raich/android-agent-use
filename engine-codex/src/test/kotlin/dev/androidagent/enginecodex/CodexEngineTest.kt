@@ -1,6 +1,7 @@
 package dev.androidagent.enginecodex
 
 import dev.androidagent.core.AgentModel
+import dev.androidagent.core.AgentSkill
 import dev.androidagent.core.RealtimeAudioChunk
 import dev.androidagent.core.ReasoningEffortOption
 import kotlinx.coroutines.*
@@ -17,6 +18,59 @@ import org.junit.Test
 import java.io.File
 
 class CodexEngineTest {
+    @Test fun skillCatalogParsesTheRequestedCwdAndEnabledSkills() {
+        val workspace = File("workspace").absoluteFile
+        val response = Json.parseToJsonElement(
+            """
+            {
+              "data": [
+                {
+                  "cwd": "${workspace.path.replace("\\", "\\\\")}",
+                  "skills": [
+                    {
+                      "name": "device-automation",
+                      "description": "Control Android through the device gateway",
+                      "path": "/home/.agents/skills/device-automation/SKILL.md",
+                      "scope": "user",
+                      "enabled": true
+                    },
+                    {
+                      "name": "disabled-skill",
+                      "description": "Disabled",
+                      "path": "/home/.agents/skills/disabled-skill/SKILL.md",
+                      "scope": "user",
+                      "enabled": false
+                    }
+                  ],
+                  "errors": []
+                }
+              ]
+            }
+            """.trimIndent()
+        ).jsonObject
+
+        assertEquals(
+            listOf(
+                AgentSkill(
+                    name = "device-automation",
+                    description = "Control Android through the device gateway",
+                    path = "/home/.agents/skills/device-automation/SKILL.md",
+                    scope = "user",
+                )
+            ),
+            CodexEngine.parseSkillCatalog(response, workspace),
+        )
+    }
+
+    @Test fun skillCatalogDoesNotUseAnotherWorkspaceEntry() {
+        val workspace = File("workspace").absoluteFile
+        val response = Json.parseToJsonElement(
+            """{"data":[{"cwd":"${workspace.resolve("other").invariantSeparatorsPath}","skills":[{"name":"wrong","description":"wrong","path":"/wrong/SKILL.md","scope":"repo","enabled":true}]}]}"""
+        ).jsonObject
+
+        assertTrue(CodexEngine.parseSkillCatalog(response, workspace).isEmpty())
+    }
+
     @Test fun modelCatalogPreservesAdvertisedReasoningOptions() {
         val response = Json.parseToJsonElement(
             """
@@ -86,6 +140,22 @@ class CodexEngineTest {
 
         val automatic = CodexEngine.turnStartParams("thread", "Hello", emptyList(), null)
         assertFalse(automatic.containsKey("effort"))
+    }
+
+    @Test fun turnParamsIncludeNativeSkillInput() {
+        val skill = AgentSkill(
+            name = "device-automation",
+            description = "Control Android",
+            path = "/home/.agents/skills/device-automation/SKILL.md",
+            scope = "user",
+        )
+
+        val params = CodexEngine.turnStartParams("thread", "\$device-automation read the screen", emptyList(), null, skill)
+        val input = params["input"]!!.jsonArray
+        assertEquals("text", input[0].jsonObject["type"]?.jsonPrimitive?.content)
+        assertEquals("skill", input[1].jsonObject["type"]?.jsonPrimitive?.content)
+        assertEquals("device-automation", input[1].jsonObject["name"]?.jsonPrimitive?.content)
+        assertEquals(skill.path, input[1].jsonObject["path"]?.jsonPrimitive?.content)
     }
 
     @Test fun realtimeStartUsesWebSocketV2ByDefault() {

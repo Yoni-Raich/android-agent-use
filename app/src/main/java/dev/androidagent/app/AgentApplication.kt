@@ -39,7 +39,7 @@ class AgentGraph(private val app: Application) {
     init {
         runCoordinator = AgentCoordinator(scope, engine, sessions, tools, overlay)
         runCatching {
-            WorkspaceSeeder.seedToCodexHome(runtime.codexHomeDirectory)
+            WorkspaceSeeder.installDefaultSkills(runtime.homeDirectory, app)
         }
     }
 }
