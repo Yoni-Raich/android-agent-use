@@ -440,3 +440,27 @@ Record actual commands and results. Mark untested features explicitly. Do not re
   has unit coverage only. Reproducing it needs a contact that forces a search.
 - NOT TESTED: voice/realtime, visual QA, and any workflow other than the
   WhatsApp send.
+
+## Auto-Rotate Root Cause (#12) - 2026-09-08
+- ROOT CAUSE: `read_ui`'s `uiautomator dump`. The command runs inside a
+  UiAutomation session, and AOSP's `UiAutomationConnection.shutdown()` restores
+  rotation on teardown by calling `WindowManagerService.thawRotation()` whenever
+  the session never froze a rotation itself. `thawRotation()` writes
+  `Settings.System.accelerometer_rotation = 1`, so every observation silently
+  turns system Auto-Rotate on and drops the user's manual orientation lock.
+- RULED OUT by code search, not by measurement: nothing in this repo writes
+  `accelerometer_rotation` or `user_rotation` (issue hypothesis 2), and no
+  manifest or overlay code sets `screenOrientation` / `SCREEN_ORIENTATION_*`
+  (hypothesis 3). `FloatingControlOverlay`'s only `orientation` uses are
+  `LinearLayout` axes. `screencap -p` does not use UiAutomation and is unaffected.
+- FIX: `AndroidDeviceTools.uiDumpCommand()` snapshots both rotation settings,
+  runs the dump, and restores them in the same shell round trip, preserving the
+  dump's own exit code. The restore only fires when the lock was held and then
+  lost; the post-dump read short-circuits away when Auto-Rotate was already on.
+- PASS: `./gradlew.bat :device-tools:test --no-daemon` (52 tasks, 27 tests),
+  including `uiDumpCommandRestoresRotationLockThawedByUiautomator` and
+  `readUiStillParsesHierarchyThroughRotationGuard`.
+- NOT TESTED ON HARDWARE: no device was attached (`adb devices` empty), so the
+  thaw and the restore are both unverified on a phone. Confirming needs:
+  `settings put system accelerometer_rotation 0`, run one agent observation,
+  then re-read the setting and check it is still `0`.
