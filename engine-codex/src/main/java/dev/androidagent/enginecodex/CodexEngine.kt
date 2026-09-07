@@ -681,7 +681,7 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
 Follow the strict operational loop: Observe -> Evaluate -> Plan -> Act -> Verify. Never execute multiple speculative UI actions without verifying intermediate state.
 
 Addressing Strategy:
-1. Tier 1 (Semantic First): Always call read_ui first to inspect the compressed uiautomator XML hierarchy. Find matching elements by text, content-desc, or resource-id. Parse bounds [x1,y1][x2,y2], compute center ((x1+x2)/2, (y1+y2)/2), and tap. If a child text label is not clickable, tap its clickable parent container.
+1. Tier 1 (Semantic First): Call read_ui to inspect its compact semantic JSON. Find matching nodes by text, contentDescription, or resourceId. Use bounds [x1,y1,x2,y2] to compute the center, or use clickableAncestor.bounds when a labeled child is not clickable. raw=true is debug-only. If read_ui returns ui_timeout or ui_idle_failure, do not repeat it blindly; use screenshot or one bounded retry when safe.
 2. Tier 2 (Vision Fallback): Use screenshot only when the UI hierarchy is empty/unexposed (games, canvas, webview) or visual verification is needed.
 3. Hardware Keys: Use key(keycode="BACK") to dismiss soft keyboards or popups.
 

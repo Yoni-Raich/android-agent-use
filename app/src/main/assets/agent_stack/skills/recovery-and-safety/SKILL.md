@@ -36,7 +36,7 @@ You MUST stop and explicitly ask the user for confirmation before executing any 
 ### B. Tap Did Not Trigger Page Change
 **Symptom**: You dispatched `tap(x, y)` on a button or menu, but `read_ui` shows the exact same screen state.
 **Possible Causes & Fixes**:
-1. **Non-clickable child tapped**: The text was inside a `<node clickable="false">`. Check the XML tree for the parent container that has `clickable="true"` and tap that container's center.
+1. **Non-clickable child tapped**: Prefer the compact node's `clickableAncestor.bounds`. If none is supplied, re-observe or use a screenshot instead of guessing.
 2. **Animation delay**: The UI was still animating or loading. Wait a moment or call `read_ui` again.
 3. **Offscreen element**: The target element is partially clipped at the bottom. Perform a short upward swipe to bring it into the middle of the screen before tapping.
 
@@ -52,3 +52,4 @@ You MUST stop and explicitly ask the user for confirmation before executing any 
 - Track the last 3 screens and actions.
 - If the screen hierarchy has not changed after 2 consecutive retry actions, do NOT repeat the same tap.
 - Pause, take a `screenshot` to verify visual state, or ask the user for steering.
+- If `read_ui` returns `ui_timeout` or `ui_idle_failure`, do not call it repeatedly without a state change. Use a screenshot or one bounded recovery attempt.

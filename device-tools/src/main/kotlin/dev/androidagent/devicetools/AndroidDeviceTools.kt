@@ -19,13 +19,19 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import java.io.File
+import java.io.StringReader
 import java.util.Base64
+import java.util.concurrent.atomic.AtomicLong
+import org.xmlpull.v1.XmlPullParser
+import org.xmlpull.v1.XmlPullParserFactory
 
 /**
  * Sole agent-facing device gateway. Every device operation goes through [adb].
@@ -49,6 +55,7 @@ class AndroidDeviceTools(
     @Volatile private var revoked = true
     @Volatile private var workspace: File? = null
     @Volatile private var runId: String? = null
+    private val observationRevision = AtomicLong(0L)
 
     override val definitions: List<ToolDefinition> = TOOL_DEFINITIONS
 
@@ -112,18 +119,365 @@ class AndroidDeviceTools(
     }
 
     private suspend fun readUi(arguments: JsonObject): ToolResult {
-        val timeout = arguments.timeoutMsOrDefault()
+        val timeout = arguments.timeoutMsOrDefault(READ_UI_DEFAULT_TIMEOUT_MS)
+        val raw = arguments["raw"]?.jsonPrimitive?.booleanOrNull ?: false
+        val revision = observationRevision.incrementAndGet()
+        val observationId = "ui-$revision"
+        val startedAt = System.nanoTime()
+
+        return try {
+            withTimeout(timeout) {
+                readUiWithinBudget(raw, revision, observationId, startedAt, timeout)
+            }
+        } catch (error: TimeoutCancellationException) {
+            currentCoroutineContext().ensureActive()
+            uiFailure(
+                observationId = observationId,
+                revision = revision,
+                startedAt = startedAt,
+                errorType = "ui_timeout",
+                message = "UI hierarchy timed out before a stable dump completed; try screenshot or retry",
+            )
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            uiFailure(
+                observationId = observationId,
+                revision = revision,
+                startedAt = startedAt,
+                errorType = "ui_dump_failure",
+                message = error.message ?: "UI hierarchy dump failed",
+            )
+        }
+    }
+
+    private suspend fun readUiWithinBudget(
+        raw: Boolean,
+        revision: Long,
+        observationId: String,
+        startedAt: Long,
+        totalBudgetMs: Long,
+    ): ToolResult {
         // /dev/tty prints the hierarchy to stdout without staging a file.
-        val direct = runCatching { userExecute("uiautomator dump --compressed /dev/tty", timeout) }
-            .getOrNull()?.output.orEmpty()
-        if (direct.contains("<hierarchy")) return ToolResult(bound(direct))
-        val fallback = userExecute(
-            "uiautomator dump --compressed ${quotedRemote(UI_DUMP_PATH)} && cat ${quotedRemote(UI_DUMP_PATH)}",
-            timeout,
+        val direct = runUiDumpCommand(
+            "uiautomator dump --compressed /dev/tty",
+            remainingBudget(startedAt, totalBudgetMs),
         )
-        return ToolResult(
-            text = bound(fallback.output),
-            success = fallback.exitCode == 0,
+        val directCompleted = when (direct) {
+            is UiDumpAttempt.TimedOut -> return uiFailure(
+                observationId, revision, startedAt, "ui_timeout",
+                "UI hierarchy timed out; no fallback dump was attempted",
+            )
+            is UiDumpAttempt.Completed -> direct
+        }
+
+        val directResult = directCompleted.result
+        if (isIdleFailure(directResult.output)) {
+            return uiFailure(
+                observationId, revision, startedAt, "ui_idle_failure",
+                "UI Automator could not get idle state; no fallback dump was attempted",
+            )
+        }
+        val directXml = extractHierarchyXml(directResult.output)
+        if (directResult.exitCode == 0 && directXml != null) {
+            return completeUiObservation(
+                directXml, "direct", raw, observationId, revision, startedAt,
+            )
+        }
+        if (directXml != null) {
+            return uiFailure(
+                observationId, revision, startedAt, "ui_dump_failure",
+                "Direct UI hierarchy dump failed with exit ${directResult.exitCode}",
+            )
+        }
+
+        // A second dump is allowed only when the direct path failed quickly for
+        // a non-idle reason. Its timeout is the remaining total budget.
+        if (directCompleted.elapsedMs > DIRECT_FALLBACK_MAX_MS) {
+            return uiFailure(
+                observationId, revision, startedAt, "ui_dump_unsupported",
+                "Direct UI hierarchy path returned no hierarchy; fallback was skipped after a slow attempt",
+            )
+        }
+        val remaining = remainingBudget(startedAt, totalBudgetMs)
+        if (remaining <= 0L) {
+            return uiFailure(
+                observationId, revision, startedAt, "ui_timeout",
+                "UI hierarchy budget was exhausted before the fallback dump",
+            )
+        }
+        val fallback = runUiDumpCommand(
+            "uiautomator dump --compressed ${quotedRemote(UI_DUMP_PATH)} && cat ${quotedRemote(UI_DUMP_PATH)}",
+            remaining,
+        )
+        val fallbackCompleted = when (fallback) {
+            is UiDumpAttempt.TimedOut -> return uiFailure(
+                observationId, revision, startedAt, "ui_timeout",
+                "Fallback UI hierarchy dump timed out within the total budget",
+            )
+            is UiDumpAttempt.Completed -> fallback
+        }
+        if (isIdleFailure(fallbackCompleted.result.output)) {
+            return uiFailure(
+                observationId, revision, startedAt, "ui_idle_failure",
+                "UI Automator could not get idle state during fallback; no additional dump was attempted",
+            )
+        }
+        val fallbackXml = extractHierarchyXml(fallbackCompleted.result.output)
+            ?: return uiFailure(
+                observationId, revision, startedAt, "ui_dump_failure",
+                "UI hierarchy dump returned no hierarchy XML",
+            )
+        if (fallbackCompleted.result.exitCode != 0) {
+            return uiFailure(
+                observationId, revision, startedAt, "ui_dump_failure",
+                "Fallback UI hierarchy dump failed with exit ${fallbackCompleted.result.exitCode}",
+            )
+        }
+        return completeUiObservation(
+            fallbackXml, "file-fallback", raw, observationId, revision, startedAt,
+        )
+    }
+
+    private suspend fun runUiDumpCommand(command: String, timeoutMs: Long): UiDumpAttempt {
+        if (timeoutMs <= 0L) return UiDumpAttempt.TimedOut(0L)
+        val startedAt = System.nanoTime()
+        return try {
+            UiDumpAttempt.Completed(
+                userExecute(command, timeoutMs),
+                elapsedMs(startedAt),
+            )
+        } catch (error: TimeoutCancellationException) {
+            UiDumpAttempt.TimedOut(elapsedMs(startedAt))
+        }
+    }
+
+    private fun completeUiObservation(
+        xml: String,
+        source: String,
+        raw: Boolean,
+        observationId: String,
+        revision: Long,
+        startedAt: Long,
+    ): ToolResult {
+        // raw=true is an explicit compatibility/debug path. It does not claim
+        // that semantic parsing succeeded.
+        if (raw) return ToolResult(bound(xml))
+        return try {
+            val parsed = parseUiHierarchy(xml)
+            var nodes = parsed.nodes
+            var truncated = false
+            var text = semanticObservationJson(
+                parsed.activePackage, nodes, source, observationId, revision,
+                elapsedMs(startedAt), truncated,
+            )
+            while (text.length > MAX_OUTPUT_CHARS && nodes.size > 1) {
+                nodes = nodes.dropLast((nodes.size / 8).coerceAtLeast(1))
+                truncated = true
+                text = semanticObservationJson(
+                    parsed.activePackage, nodes, source, observationId, revision,
+                    elapsedMs(startedAt), truncated,
+                )
+            }
+            ToolResult(bound(text))
+        } catch (error: Exception) {
+            uiFailure(
+                observationId, revision, startedAt, "ui_parse_failure",
+                "UI hierarchy XML could not be parsed safely: ${error.message ?: "invalid XML"}",
+            )
+        }
+    }
+
+    private fun parseUiHierarchy(xml: String): ParsedUiHierarchy {
+        require(xml.length <= MAX_UI_XML_CHARS) { "hierarchy XML is too large" }
+        require(!xml.contains("<!DOCTYPE", ignoreCase = true)) { "DOCTYPE is not allowed" }
+        require(!xml.contains("<!ENTITY", ignoreCase = true)) { "ENTITY declarations are not allowed" }
+
+        val parser = XmlPullParserFactory.newInstance().newPullParser().apply {
+            setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false)
+            runCatching { setFeature(XmlPullParser.FEATURE_PROCESS_DOCDECL, false) }
+            setInput(StringReader(xml))
+        }
+        val ancestors = ArrayDeque<ParsedUiNode>()
+        val meaningful = mutableListOf<ParsedUiNode>()
+        val packages = mutableMapOf<String, Int>()
+        var nodeCount = 0
+        var sawHierarchy = false
+        var event = parser.eventType
+        while (event != XmlPullParser.END_DOCUMENT) {
+            when (event) {
+                XmlPullParser.START_TAG -> when (parser.name) {
+                    "hierarchy" -> {
+                        require(!sawHierarchy) { "multiple hierarchy roots" }
+                        sawHierarchy = true
+                    }
+                    "node" -> {
+                        require(sawHierarchy) { "node appears before hierarchy root" }
+                        require(parser.depth <= MAX_UI_XML_DEPTH) { "hierarchy is too deep" }
+                        require(nodeCount < MAX_UI_NODES) { "hierarchy has too many nodes" }
+                        val node = ParsedUiNode(
+                            nodeId = "n${nodeCount++}",
+                            text = parser.attribute("text").compactUiText(),
+                            contentDescription = parser.attribute("content-desc").compactUiText(),
+                            resourceId = parser.attribute("resource-id").compactUiText(),
+                            className = parser.attribute("class").compactUiText(),
+                            bounds = parseBounds(parser.attribute("bounds")),
+                            enabled = parser.attribute("enabled")?.toBooleanStrictOrNull() ?: true,
+                            clickable = parser.attribute("clickable")?.toBooleanStrictOrNull() ?: false,
+                            scrollable = parser.attribute("scrollable")?.toBooleanStrictOrNull() ?: false,
+                            focused = parser.attribute("focused")?.toBooleanStrictOrNull() ?: false,
+                            packageName = parser.attribute("package").compactUiText(),
+                            clickableAncestor = ancestors.lastOrNull { it.clickable }?.asClickTarget(),
+                        )
+                        node.packageName?.let { packages[it] = (packages[it] ?: 0) + 1 }
+                        if (node.isMeaningful()) meaningful += node
+                        ancestors.addLast(node)
+                    }
+                }
+                XmlPullParser.END_TAG -> if (parser.name == "node" && ancestors.isNotEmpty()) {
+                    ancestors.removeLast()
+                }
+            }
+            event = parser.next()
+        }
+        require(sawHierarchy) { "missing hierarchy root" }
+        require(ancestors.isEmpty()) { "unclosed node elements" }
+        return ParsedUiHierarchy(
+            activePackage = packages.maxByOrNull { it.value }?.key,
+            nodes = meaningful,
+        )
+    }
+
+    private fun semanticObservationJson(
+        activePackage: String?,
+        nodes: List<ParsedUiNode>,
+        source: String,
+        observationId: String,
+        revision: Long,
+        elapsedMs: Long,
+        truncated: Boolean,
+    ): String = buildJsonObject {
+        put("ok", true)
+        put("observationId", observationId)
+        put("revision", revision)
+        put("elapsedMs", elapsedMs)
+        put("source", source)
+        put("stable", true)
+        activePackage?.let { put("activePackage", it) }
+        put("truncated", truncated)
+        put("nodes", buildJsonArray { nodes.forEach { add(it.toJson()) } })
+    }.toString()
+
+    private fun uiFailure(
+        observationId: String,
+        revision: Long,
+        startedAt: Long,
+        errorType: String,
+        message: String,
+    ): ToolResult = ToolResult(
+        buildJsonObject {
+            put("ok", false)
+            put("observationId", observationId)
+            put("revision", revision)
+            put("elapsedMs", elapsedMs(startedAt))
+            put("source", "none")
+            put("stable", false)
+            put("errorType", errorType)
+            put("message", message.take(MAX_UI_FIELD_CHARS))
+        }.toString(),
+        success = false,
+    )
+
+    private fun extractHierarchyXml(output: String): String? {
+        val start = output.indexOf("<hierarchy")
+        if (start < 0) return null
+        val end = output.indexOf("</hierarchy>", start)
+        if (end < 0) return null
+        return output.substring(start, end + "</hierarchy>".length)
+    }
+
+    private fun isIdleFailure(output: String): Boolean =
+        output.contains("could not get idle state", ignoreCase = true)
+
+    private fun remainingBudget(startedAt: Long, totalBudgetMs: Long): Long =
+        (totalBudgetMs - elapsedMs(startedAt)).coerceAtLeast(0L)
+
+    private fun elapsedMs(startedAt: Long): Long =
+        ((System.nanoTime() - startedAt) / 1_000_000L).coerceAtLeast(0L)
+
+    private data class ParsedUiHierarchy(
+        val activePackage: String?,
+        val nodes: List<ParsedUiNode>,
+    )
+
+    private data class ParsedUiNode(
+        val nodeId: String,
+        val text: String?,
+        val contentDescription: String?,
+        val resourceId: String?,
+        val className: String?,
+        val bounds: IntArray?,
+        val enabled: Boolean,
+        val clickable: Boolean,
+        val scrollable: Boolean,
+        val focused: Boolean,
+        val packageName: String?,
+        val clickableAncestor: ParsedUiNode? = null,
+    ) {
+        fun isMeaningful(): Boolean =
+            text != null || contentDescription != null || resourceId != null ||
+                clickable || scrollable || focused || !enabled
+
+        fun toJson() = buildJsonObject {
+            put("nodeId", nodeId)
+            text?.let { put("text", it) }
+            contentDescription?.let { put("contentDescription", it) }
+            resourceId?.let { put("resourceId", it) }
+            className?.let { put("class", it) }
+            bounds?.let { values ->
+                put("bounds", buildJsonArray { values.forEach { add(JsonPrimitive(it)) } })
+            }
+            put("enabled", enabled)
+            put("clickable", clickable)
+            put("scrollable", scrollable)
+            put("focused", focused)
+            clickableAncestor?.let { ancestor ->
+                put("clickableAncestor", buildJsonObject {
+                    put("nodeId", ancestor.nodeId)
+                    ancestor.bounds?.let { values ->
+                        put("bounds", buildJsonArray { values.forEach { add(JsonPrimitive(it)) } })
+                    }
+                    ancestor.className?.let { put("class", it) }
+                })
+            }
+        }
+
+        fun asClickTarget(): ParsedUiNode = copy(
+            text = null,
+            contentDescription = null,
+            resourceId = null,
+            packageName = null,
+            clickableAncestor = null,
+        )
+    }
+
+    private sealed interface UiDumpAttempt {
+        data class Completed(val result: CommandResult, val elapsedMs: Long) : UiDumpAttempt
+        data class TimedOut(val elapsedMs: Long) : UiDumpAttempt
+    }
+
+    private fun XmlPullParser.attribute(name: String): String? = getAttributeValue(null, name)
+
+    private fun String?.compactUiText(): String? =
+        this?.trim()?.takeIf { it.isNotEmpty() }?.take(MAX_UI_FIELD_CHARS)
+
+    private fun parseBounds(value: String?): IntArray? {
+        val match = BOUNDS_RE.matchEntire(value?.trim().orEmpty()) ?: return null
+        return intArrayOf(
+            match.groupValues[1].toIntOrNull() ?: return null,
+            match.groupValues[2].toIntOrNull() ?: return null,
+            match.groupValues[3].toIntOrNull() ?: return null,
+            match.groupValues[4].toIntOrNull() ?: return null,
         )
     }
 
@@ -491,6 +845,7 @@ class AndroidDeviceTools(
         const val DEFAULT_TIMEOUT_MS = 30_000L
         const val MAX_TIMEOUT_MS = 120_000L
         const val MAX_OUTPUT_CHARS = 20_000
+        const val READ_UI_DEFAULT_TIMEOUT_MS = 6_000L
         const val MAX_SHELL_CHARS = 8_000
         const val MAX_COORDINATE = 10_000
         const val MAX_SCREENSHOT_BYTES = 16 * 1024 * 1024
@@ -498,6 +853,12 @@ class AndroidDeviceTools(
         const val MAX_PUSH_BYTES = 64 * 1024 * 1024
         const val MAX_APK_BYTES = 256 * 1024 * 1024
         const val UI_DUMP_PATH = "/sdcard/window_dump.xml"
+        private const val DIRECT_FALLBACK_MAX_MS = 1_500L
+        private const val MAX_UI_FIELD_CHARS = 256
+        private const val MAX_UI_XML_CHARS = 512 * 1024
+        private const val MAX_UI_XML_DEPTH = 128
+        private const val MAX_UI_NODES = 5_000
+        private val BOUNDS_RE = Regex("\\[(-?\\d+),(-?\\d+)]\\[(-?\\d+),(-?\\d+)]")
 
         private const val IME_ACTION_SUFFIX = ".INPUT_TEXT"
         private const val IME_EXTRA_PAYLOAD = "payload_base64"
@@ -658,7 +1019,12 @@ class AndroidDeviceTools(
 
         val TOOL_DEFINITIONS: List<ToolDefinition> = listOf(
             tool("device_status", "Read ADB connection state. Read-only.", emptyMap(), emptyList()),
-            tool("read_ui", "Dump the current UI hierarchy as XML. Read-only.", emptyMap(), emptyList()),
+            tool(
+                "read_ui",
+                "Read a bounded compact semantic UI observation. Returns labeled/actionable nodes by default; use raw=true only for debug XML. Timeout or idle failures are typed and do not trigger a second full dump.",
+                mapOf("timeoutMs" to "integer", "raw" to "boolean"),
+                emptyList(),
+            ),
             tool("screenshot", "Capture a PNG screenshot. Returns imageBase64. Read-only.", emptyMap(), emptyList()),
             tool("tap", "Tap the screen at pixel coordinates.", mapOf("x" to "integer", "y" to "integer"), listOf("x", "y")),
             tool("swipe", "Swipe from one point to another.", mapOf("x1" to "integer", "y1" to "integer", "x2" to "integer", "y2" to "integer", "durationMs" to "integer"), listOf("x1", "y1", "x2", "y2")),

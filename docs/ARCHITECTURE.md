@@ -142,11 +142,12 @@ catalog:
   Enforces the **Observe → Evaluate → Plan → Act → Verify** cycle and routes
   to app cards and skills on demand.
 - **Layer 2: 3-Tier Addressing Strategy**:
-  1. *Tier 1 (Semantic First)*: `read_ui` XML parsed directly. Element bounds
-     `[x1,y1][x2,y2]` center `((x1+x2)/2, (y1+y2)/2)` tapped deterministically.
-     Eliminates slow screenshot parsing and vision coordinate errors.
-  2. *Tier 2 (Vision Fallback)*: `screenshot` used only when XML hierarchy is
-     empty, unexposed (canvas, games, webviews), or verifying images.
+  1. *Tier 1 (Semantic First)*: `read_ui` returns compact semantic JSON with an
+     observation revision, package, elapsed time, node state, bounds, and
+     clickable-ancestor targeting. Raw XML is debug-only. Coordinate actions
+     still require verification because Android state can change.
+  2. *Tier 2 (Vision Fallback)*: `screenshot` is used when semantic observation
+     fails, is unexposed (canvas, games, webviews), or images need verification.
   3. *Tier 3 (Hardware Navigation)*: `key` events (`BACK`, `HOME`, `ENTER`) and
      calibrated swipes.
 - **Layer 3: Modular Skills & App Cards**: Complete bundled skill sources live
@@ -165,3 +166,19 @@ catalog:
   path. `skills/changed` refreshes the catalog. There is no hard-coded
   slash-skill list. `WorkspaceSeeder` still populates `AGENTS.md`, app cards,
   `RECOVERY.md`, and `preferences.json` offline without duplicating skills.
+
+## Bounded UI observation
+
+`read_ui` has a six-second default total budget instead of inheriting the
+gateway's 30-second shell timeout. The direct `/dev/tty` hierarchy path runs
+first. A timeout or `could not get idle state` result returns a typed failure
+and never starts a second full dump. The file path is used only when the direct
+path fails quickly for a non-idle compatibility reason, and it receives only
+the remaining total budget.
+
+Successful XML is parsed inside the device gateway with external entities and
+DOCTYPEs disabled. The model receives only labeled or actionable semantic
+nodes plus clickable-ancestor bounds; decorative empty nodes are filtered.
+Each result includes monotonic elapsed time and an observation revision. This
+removes raw XML token cost and caps the observed 22-second idle-wait tail, but
+it does not prove a faster real WhatsApp workflow until measured on Q8.
