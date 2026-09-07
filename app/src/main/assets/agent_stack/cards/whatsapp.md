@@ -24,10 +24,10 @@
 2. **Locate Contact**:
    - Tap `content-desc="Search"`.
    - Call `type_text(text="Danny", submit=true)`.
-   - Call `read_ui` and tap the conversation row matching `"Danny"`.
+   - Call `read_ui` and tap the compact semantic node matching `"Danny"`; use `clickableAncestor.bounds` when supplied.
 3. **Draft & Send**:
    - Tap the message entry field (`resource-id="com.whatsapp:id/entry"`).
    - Call `type_text(text="We are meeting tomorrow at 6:00 PM.", submit=false)`.
-   - Call `read_ui` to verify text was entered. The voice note icon now transforms into the **Send** button (`content-desc="Send"`).
+   - Call `read_ui` to verify text was entered. The voice note icon now transforms into the **Send** button (`contentDescription="Send"`).
    - Tap the Send button center.
 4. **Verify**: Call `read_ui` to confirm the sent message bubble is present in the conversation history.

@@ -9,29 +9,34 @@ This skill defines the exact mechanisms for interacting with the Android OS and 
 
 ---
 
-## 1. Semantic Hierarchy Parsing (`read_ui`)
+## 1. Compact Semantic Observation (`read_ui`)
 
 Always call `read_ui` to inspect screen elements before tapping.
 
-### Node Structure
-A typical uiautomator node looks like:
-```xml
-<node index="3" text="Search…" resource-id="com.example:id/search_box" class="android.widget.EditText" package="com.example" content-desc="Search query" checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="false" password="false" selected="false" bounds="[72,140][936,260]" />
+### Result Structure
+The normal result is compact JSON. Raw XML is available only with `raw=true` for debugging:
+```json
+{"ok":true,"revision":12,"activePackage":"com.example","stable":true,"nodes":[{"nodeId":"n3","text":"Search","resourceId":"com.example:id/search_box","contentDescription":"Search query","bounds":[72,140,936,260],"clickable":true,"enabled":true}]}
 ```
 
 ### Addressing Rules
 1. **Search Criteria**: Look for elements where:
-   - `text` contains or equals your target label (e.g. `text="Danny"`).
-   - `content-desc` matches the accessibility label (e.g. `content-desc="Voice message"`, `content-desc="Navigate up"`).
-   - `resource-id` matches the standard Android or app view ID (e.g. `com.whatsapp:id/entry`, `id/search_button`).
+   - `text` contains or equals your target label.
+   - `contentDescription` matches the accessibility label.
+   - `resourceId` matches the Android or app view ID.
 2. **Bounds Center Formula**:
-   From `bounds="[x1,y1][x2,y2]"`:
+   From `bounds:[x1,y1,x2,y2]`:
    - $x_{center} = \lfloor (x_1 + x_2) / 2 \rfloor$
    - $y_{center} = \lfloor (y_1 + y_2) / 2 \rfloor$
    - Example: `[72,140][936,260]` $\rightarrow x = (72+936)/2 = 504$, $y = (140+260)/2 = 200$.
    - Action: `tap(x=504, y=200)`.
 3. **Clickable Ancestor Rule**:
-   If the matched text or image node has `clickable="false"`, inspect its parent or enclosing `<node>` elements in the XML. If an enclosing container has `clickable="true"`, tap the center coordinates of that clickable parent container instead of the unclickable child.
+   If the matched node has `clickable:false`, use `clickableAncestor.bounds` when supplied instead of guessing a parent.
+
+### Typed Read Failures
+- `ui_timeout` and `ui_idle_failure` are bounded failures. Do not repeat the same read in a loop.
+- Use `screenshot` when visual state is enough, or perform one bounded retry only after a real state change.
+- `ui_parse_failure` means semantic parsing failed safely. Use `read_ui(raw=true)` only to debug it.
 
 ---
 

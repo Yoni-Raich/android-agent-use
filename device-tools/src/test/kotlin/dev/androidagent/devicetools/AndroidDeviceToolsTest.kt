@@ -9,7 +9,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.junit.Assert.*
 import org.junit.Test
@@ -224,6 +229,89 @@ class AndroidDeviceToolsTest {
         assertEquals(0, adb.calls)
     }
 
+    @Test fun readUiReturnsCompactSemanticNodesAndClickableAncestor() = runBlocking {
+        val adb = ScriptedUiAdb(mutableListOf(CommandResult(SAMPLE_UI_XML, 0)))
+        val tools = AndroidDeviceTools(adb)
+        tools.beginRun("ui", Files.createTempDirectory("ws").toFile())
+
+        val result = tools.invoke("read_ui", buildJsonObject {})
+
+        assertTrue(result.success)
+        val json = Json.parseToJsonElement(result.text).jsonObject
+        assertEquals("com.whatsapp", json["activePackage"]!!.jsonPrimitive.content)
+        assertEquals("direct", json["source"]!!.jsonPrimitive.content)
+        assertEquals("true", json["stable"]!!.jsonPrimitive.content)
+        val label = json["nodes"]!!.jsonArray
+            .map { it.jsonObject }
+            .first { it["text"]?.jsonPrimitive?.content == "Send" }
+        assertEquals("n0", label["clickableAncestor"]!!.jsonObject["nodeId"]!!.jsonPrimitive.content)
+        assertEquals(listOf("900", "2100", "1080", "2300"),
+            label["clickableAncestor"]!!.jsonObject["bounds"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertEquals(1, adb.commands.size)
+        assertTrue(adb.timeouts.single() in 1..AndroidDeviceTools.READ_UI_DEFAULT_TIMEOUT_MS)
+    }
+
+    @Test fun readUiIdleFailureIsTypedAndNeverFallsBack() = runBlocking {
+        val adb = ScriptedUiAdb(mutableListOf(CommandResult("ERROR: could not get idle state.", 1)))
+        val tools = AndroidDeviceTools(adb)
+        tools.beginRun("ui", Files.createTempDirectory("ws").toFile())
+
+        val result = tools.invoke("read_ui", buildJsonObject {})
+
+        assertFalse(result.success)
+        val json = Json.parseToJsonElement(result.text).jsonObject
+        assertEquals("ui_idle_failure", json["errorType"]!!.jsonPrimitive.content)
+        assertEquals("false", json["stable"]!!.jsonPrimitive.content)
+        assertNotNull(json["elapsedMs"])
+        assertEquals(1, adb.commands.size)
+        assertTrue(adb.commands.single().contains("/dev/tty"))
+    }
+
+    @Test fun readUiUsesOneFileFallbackWhenDirectPathIsUnsupported() = runBlocking {
+        val adb = ScriptedUiAdb(mutableListOf(
+            CommandResult("UI hierarchy output is unavailable on /dev/tty", 1),
+            CommandResult(SAMPLE_UI_XML, 0),
+        ))
+        val tools = AndroidDeviceTools(adb)
+        tools.beginRun("ui", Files.createTempDirectory("ws").toFile())
+
+        val result = tools.invoke("read_ui", buildJsonObject {})
+
+        assertTrue(result.success)
+        val json = Json.parseToJsonElement(result.text).jsonObject
+        assertEquals("file-fallback", json["source"]!!.jsonPrimitive.content)
+        assertEquals(2, adb.commands.size)
+        assertTrue(adb.commands[1].contains(AndroidDeviceTools.UI_DUMP_PATH))
+        assertTrue(adb.timeouts.sum() <= AndroidDeviceTools.READ_UI_DEFAULT_TIMEOUT_MS * 2)
+        assertTrue(adb.timeouts[1] <= adb.timeouts[0])
+    }
+
+    @Test fun readUiRawModePreservesXmlCompatibility() = runBlocking {
+        val adb = ScriptedUiAdb(mutableListOf(CommandResult(SAMPLE_UI_XML, 0)))
+        val tools = AndroidDeviceTools(adb)
+        tools.beginRun("ui", Files.createTempDirectory("ws").toFile())
+
+        val result = tools.invoke("read_ui", buildJsonObject { put("raw", true) })
+
+        assertTrue(result.success)
+        assertTrue(result.text.startsWith("<hierarchy"))
+        assertTrue(result.text.endsWith("</hierarchy>"))
+    }
+
+    @Test fun readUiTimeoutIsTypedAndNeverFallsBack() = runBlocking {
+        val adb = HangingUiAdb()
+        val tools = AndroidDeviceTools(adb)
+        tools.beginRun("ui", Files.createTempDirectory("ws").toFile())
+
+        val result = tools.invoke("read_ui", buildJsonObject { put("timeoutMs", 10) })
+
+        assertFalse(result.success)
+        val json = Json.parseToJsonElement(result.text).jsonObject
+        assertEquals("ui_timeout", json["errorType"]!!.jsonPrimitive.content)
+        assertEquals("false", json["stable"]!!.jsonPrimitive.content)
+        assertEquals(1, adb.calls)
+    }
+
     private class FakeAdb : AdbTransport {
         private val state = MutableStateFlow(AdbStatus(ConnectionPhase.CONNECTED, "ok", 1))
         override val status: StateFlow<AdbStatus> = state.asStateFlow()
@@ -283,5 +371,49 @@ class AndroidDeviceToolsTest {
         override suspend fun cancelActive() = Unit
         override suspend fun disconnect() = Unit
         override suspend fun forgetPairing() = Unit
+    }
+
+    private class ScriptedUiAdb(
+        private val results: MutableList<CommandResult>,
+    ) : AdbTransport {
+        private val state = MutableStateFlow(AdbStatus(ConnectionPhase.CONNECTED, "ok", 1))
+        override val status: StateFlow<AdbStatus> = state.asStateFlow()
+        val commands = mutableListOf<String>()
+        val timeouts = mutableListOf<Long>()
+
+        override suspend fun discover(): List<AdbEndpoint> = emptyList()
+        override suspend fun pair(port: Int, code: String) = Unit
+        override suspend fun connect(port: Int) = Unit
+        override suspend fun execute(command: String, timeoutMs: Long): CommandResult {
+            commands += command
+            timeouts += timeoutMs
+            return results.removeAt(0)
+        }
+        override suspend fun executeBytes(command: String, timeoutMs: Long): ByteArray = ByteArray(0)
+        override suspend fun cancelActive() = Unit
+        override suspend fun disconnect() = Unit
+        override suspend fun forgetPairing() = Unit
+    }
+
+    private class HangingUiAdb : AdbTransport {
+        private val state = MutableStateFlow(AdbStatus(ConnectionPhase.CONNECTED, "ok", 1))
+        override val status: StateFlow<AdbStatus> = state.asStateFlow()
+        var calls = 0
+
+        override suspend fun discover(): List<AdbEndpoint> = emptyList()
+        override suspend fun pair(port: Int, code: String) = Unit
+        override suspend fun connect(port: Int) = Unit
+        override suspend fun execute(command: String, timeoutMs: Long): CommandResult {
+            calls++
+            return suspendCancellableCoroutine { }
+        }
+        override suspend fun executeBytes(command: String, timeoutMs: Long): ByteArray = ByteArray(0)
+        override suspend fun cancelActive() = Unit
+        override suspend fun disconnect() = Unit
+        override suspend fun forgetPairing() = Unit
+    }
+
+    companion object {
+        private const val SAMPLE_UI_XML = """<hierarchy rotation="0"><node index="0" text="" resource-id="" class="android.widget.LinearLayout" package="com.whatsapp" content-desc="" clickable="true" enabled="true" scrollable="false" focused="false" bounds="[900,2100][1080,2300]"><node index="0" text="Send" resource-id="com.whatsapp:id/send" class="android.widget.TextView" package="com.whatsapp" content-desc="" clickable="false" enabled="true" scrollable="false" focused="false" bounds="[920,2120][1060,2280]"/><node index="1" text="" resource-id="" class="android.view.View" package="com.whatsapp" content-desc="" clickable="false" enabled="true" scrollable="false" focused="false" bounds="[0,0][1,1]"/></node></hierarchy>"""
     }
 }

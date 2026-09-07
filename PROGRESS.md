@@ -24,6 +24,15 @@ A fully usable Android app with Codex chat, on-phone execution, per-session file
   the valid device target.
 
 ## Delivery gates
+- 2026-09-07: Implemented the first `read_ui` latency fix after device traces
+  showed normal hierarchy reads at 4.3-4.7 seconds and idle failures at about
+  22.5 seconds. `read_ui` now has a six-second total default budget, does not
+  retry a full dump after timeout/idle failure, and returns typed timing data.
+  Successful reads are compact semantic JSON with clickable-ancestor bounds;
+  `raw=true` preserves debug XML. Focused JVM tests cover compact output,
+  fallback, idle failure, timeout, and raw compatibility. Physical Q8 latency,
+  WhatsApp success rate, and model first-token time are still NOT TESTED.
+
 - 2026-09-06: Phone screenshot showed model refresh and chat network failures.
   Confirmed the proxy rejected chatgpt.com although pinned upstream
   model-provider-info/src/lib.rs selects that host for ChatGPT accounts.
