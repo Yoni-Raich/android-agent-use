@@ -398,3 +398,16 @@ Record actual commands and results. Mark untested features explicitly. Do not re
   production signing.
 - NOT TESTED: physical installation/runtime behavior on
   `Q8G64TD6ZTB6H6ZL`, live Codex account negotiation, or visual QA.
+
+## Release Validation v0.3.4 - 2026-09-07
+- Bumped `versionCode=11`, `versionName=0.3.4` for the bounded `read_ui` latency,
+  compact semantic hierarchy, and clickable-ancestor bounds targeting changes.
+- PASS: `./gradlew.bat test assembleDevRelease assembleDevDebugAndroidTest :voice:lintDebug --no-daemon` (630 actionable tasks, 78 executed).
+- APK: `artifacts/android-agent-0.3.4.apk`, metadata
+  `dev.androidagent.app.dev`, versionCode 11, versionName 0.3.4.
+- SHA-256: `CE53AF692545322D4A9EC45AA3829A66434561F210F9145506A47446A50C1A4C`.
+- Zip alignment passed and APK Signature Scheme v3 verification passed with
+  the local Android debug key. This is installable for private testing, not
+  production signing.
+- NOT TESTED: physical installation/runtime behavior on
+  `Q8G64TD6ZTB6H6ZL`, live WhatsApp workflow latency, or visual QA.
