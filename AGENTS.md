@@ -1,17 +1,30 @@
-# Working rules
+# AGENTS.md — Android Agent
 
-- Write short, clear English.
-- Goal: a fully usable on-device Android Codex agent, including chat, session files, wireless self-ADB, visible device control, live steering, and local stop.
-- Preserve android_ai_agent_mvp_brief.md. Record decisions in docs/ARCHITECTURE.md and progress in PROGRESS.md.
-- Work only in assigned paths. Never edit another project. Read-only tasks must never write files.
-- Use LUNA with max reasoning for bounded reading and implementation tasks. The main agent owns integration and final checks. Muse via OpenCode may review code.
-- Keep engine, runtime, workspace, ADB transport, device tools, coordinator, chat, and overlay behind core contracts.
-- All device operations pass through the tool gateway. Arbitrary ADB shell may control the screen and must enter visible-control mode.
-- Stop revokes new tool calls locally before interrupting the engine. Do not claim that already completed side effects can be undone.
-- Device tests use adb -s Q8G64TD6ZTB6H6ZL. Never use the other device on the LAN.
-- Never commit credentials, device pairing codes, private keys, local.properties, or raw personal screen captures.
-- Update PROGRESS.md with real evidence and remaining gaps. Build/install alone do not prove a working app.
-- Use conventional commits. dev is the integration branch; main holds validated releases. No public distribution repo is needed for this private MVP.
-- Every commit must include a `Signed-off-by:` trailer naming the model that created it. Use `git commit -s` with that model's commit identity; do not claim another model's sign-off.
+Read `PROGRESS.md` and `docs/ARCHITECTURE.md` before work. Write short, clear English. Goal: on-device Codex chat with session files, wireless self-ADB, visible device control, live steering, local stop.
 
-- Before publishing an APK, bump versionCode and versionName in version.properties. Verify the built APK metadata and use a matching release tag and asset name. Never replace an old version asset.
+## Build / test (Windows uses `gradlew.bat`)
+
+- Quick: `./gradlew :app:assembleDevDebug`; unit: `./gradlew :core:test`; scoped: `./gradlew :device-tools:test :core:test`
+- Full gate (evidence for releases): `./gradlew.bat test assembleDevRelease assembleDevDebugAndroidTest :voice:lintDebug --no-daemon` + `python -m unittest tools.test_prepare_runtime` + `git diff --check`
+- CI (`android.yml`) runs only `:core:test :app:assembleDevDebug :app:lintDevDebug` on Java 17 — passing CI does not equal full gate.
+- `:app:lintDevDebug` has a known pre-existing error (`AgentInputMethodService.kt:39` indentation); use scoped `:voice:lintDebug` / `:overlay:lintDebug` for signal, do not "fix" unrelated files to green CI.
+- `preBuild` runs `tools/prepare_runtime.py`: stages pinned Codex app-server ARM64+x86_64 binaries, patches helper lookup to `codex-code-mode-x.so`, fails closed on upstream layout change. Runtime sources live under `research/runtime/`, never in the APK directly.
+- Flavors: `dev` (`dev.androidagent.app.dev`) for daily work, `prod` for release. `version.properties` is the single version source (`app/build.gradle.kts` reads it).
+
+## Architecture (see `docs/ARCHITECTURE.md`)
+
+- Modules (`settings.gradle.kts`): `:app` (Compose UI, wiring) `:core` (contracts, coordinator, run state) `:engine-codex` (app-server JSON-RPC) `:runtime` (binary staging, process supervision, CONNECT proxy) `:workspace` (sessions/files) `:adb` (pairing identity, discovery, transport) `:device-tools` (sole agent device gateway) `:overlay` (floating card, stop) `:voice` (realtime audio).
+- Rules: UI observes app events, never raw Codex JSON. All device ops go through `device-tools`; arbitrary shell = visible-control mode with overlay states Starting/Thinking/Running/Controlling/Stopping/Done/Error. One active run per phone. Stop revokes new tool calls first, then interrupts — never claim completed side effects were undone.
+- On-device skills: canonical sources `app/src/main/assets/agent_stack/skills/*/SKILL.md`, installed at startup to app-private `$HOME/.agents/skills`; engine discovers via `skills/list`. No hard-coded slash list.
+
+## Device
+
+- Only `adb -s 00152154B002517` (Nothing A059, ARM64, Android 16). Never touch any other LAN/emulator device. The device also has a Work profile (user 11) and a Private space (user 10); `pm list packages` without `--user 0` raises a harmless SecurityException for user 11.
+- x86_64 emulator app-server exits `SIGSYS` (159) — not a valid runtime target; Q8 is. Emulator Compose fixture tests do not prove real chat, ADB, or voice.
+
+## Workflow
+
+- `dev` = integration, `main` = validated releases. Conventional commits, `git commit -s` with your own model identity only (`Signed-off-by: <model>`; verify with `git show -s --format=%B HEAD`). Work only in assigned paths; read-only tasks never write files.
+- Preserve `android_ai_agent_mvp_brief.md`. Record decisions in `docs/ARCHITECTURE.md`, real command evidence + untested gaps in `PROGRESS.md` (build/install alone prove nothing). PRs use `.github/pull_request_template.md` (Change / Checks / Remaining gaps + UI evidence for visual changes).
+- Release: bump `versionCode`+`versionName` in `version.properties` first, then build, verify APK metadata (package, version), zipalign + APK Signature Scheme v3 (debug key = test-only), tag `vX.Y.Z` with matching `artifacts/android-agent-X.Y.Z.apk`. Never replace a published asset.
+- Never commit `local.properties`, `*.keystore`/`*.jks`, pairing codes, credentials, tokens, or raw personal screen captures (`artifacts/`, `**/build/`, logs already gitignored).
