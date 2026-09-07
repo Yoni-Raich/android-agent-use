@@ -383,7 +383,7 @@ Record actual commands and results. Mark untested features explicitly. Do not re
   :voice:lintDebug --no-daemon` (630 actionable tasks, 113 executed).
 - APK: `artifacts/android-agent-0.3.3.apk`, metadata
   `dev.androidagent.app.dev`, versionCode 10, versionName 0.3.3.
-- SHA-256: `F780B9BCA57E91A9938692BB42FA51FFFFA24E2D7D018188D8FB5CEEC9FE0F33`.
+- SHA-256: `922D67E0C2A5161AF2F4141F52B8C0E20C03BDD625A16BECF9EF70D36AE5DAAA`.
 - Zip alignment passed and APK Signature Scheme v3 verification passed with
   the local Android debug key. This is installable for private testing, not
   production signing.
