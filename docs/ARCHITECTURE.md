@@ -26,6 +26,17 @@ reported as Wireless Debugging off/on-waiting when Android exposes that state;
 the loop stays idle until the app has a stored pairing identity, and pairing
 codes are never requested by reconnect.
 
+Immediately before each typed Codex turn, `AgentCoordinator` snapshots the
+app-owned `AdbStatus`. The engine adds a small application-owned runtime-context
+text item before the user's text with the phase, tool availability, and local
+port when known. The newest snapshot replaces older snapshots in the thread.
+The pinned app-server's `turn/start` contract has no per-turn developer-
+instructions field, so this context uses a supported input item while the
+thread-level developer instructions define its trust and precedence rules.
+Disconnected/error snapshots tell the model not to call device tools and to
+guide the user to Wireless Debugging. The gateway remains the enforcement
+boundary if connection state changes after the snapshot.
+
 Codex app-server is preferred over parsing terminal UI output. The model remains a cloud service; the agent process and workspace live on the phone. The APK packages the official ARM64 and x86_64 Linux-musl app-server variants, and Android selects the matching native library directory. The x86_64 emulator now avoids ARM translation, but its app-process launch currently exits with `SIGSYS` (exit code 159), so emulator runtime support remains unproven.
 
 The Android APK stages the code-mode helper as `codex-code-mode-x.so`, because
