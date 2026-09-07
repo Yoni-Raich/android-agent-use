@@ -24,6 +24,14 @@ A fully usable Android app with Codex chat, on-phone execution, per-session file
   the valid device target.
 
 ## Delivery gates
+- 2026-09-08: Implemented Issue #10 with a live Wireless ADB status pill in
+  the main top app bar. It shows the active port when connected, uses distinct
+  connected/waiting/disconnected/error colors, and opens Android Wireless
+  Debugging settings when tapped. PASS: `:app:assembleDevDebug` and
+  `:app:assembleDevDebugAndroidTest`. The targeted Compose test covers the
+  connected port, reconnecting label, and tap callback, but it was only
+  compiled because the approved physical device `00152154B002517` was not
+  connected. Physical layout, colors, and settings navigation remain NOT TESTED.
 - 2026-09-07: Implemented the first `read_ui` latency fix after device traces
   showed normal hierarchy reads at 4.3-4.7 seconds and idle failures at about
   22.5 seconds. `read_ui` now has a six-second total default budget, does not
