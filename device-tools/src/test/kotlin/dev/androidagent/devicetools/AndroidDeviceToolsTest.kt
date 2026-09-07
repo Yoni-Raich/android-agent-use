@@ -239,7 +239,7 @@ class AndroidDeviceToolsTest {
         assertTrue(result.success)
         val json = Json.parseToJsonElement(result.text).jsonObject
         assertEquals("com.whatsapp", json["activePackage"]!!.jsonPrimitive.content)
-        assertEquals("direct", json["source"]!!.jsonPrimitive.content)
+        assertEquals("file", json["source"]!!.jsonPrimitive.content)
         assertEquals("true", json["stable"]!!.jsonPrimitive.content)
         val label = json["nodes"]!!.jsonArray
             .map { it.jsonObject }
@@ -264,14 +264,17 @@ class AndroidDeviceToolsTest {
         assertEquals("false", json["stable"]!!.jsonPrimitive.content)
         assertNotNull(json["elapsedMs"])
         assertEquals(1, adb.commands.size)
-        assertTrue(adb.commands.single().contains("/dev/tty"))
+        assertTrue(adb.commands.single().contains(AndroidDeviceTools.UI_DUMP_PATH))
     }
 
-    @Test fun readUiUsesOneFileFallbackWhenDirectPathIsUnsupported() = runBlocking {
-        val adb = ScriptedUiAdb(mutableListOf(
-            CommandResult("UI hierarchy output is unavailable on /dev/tty", 1),
-            CommandResult(SAMPLE_UI_XML, 0),
-        ))
+    /**
+     * Regression guard for v0.3.4: the `/dev/tty` shortcut reported exit 0 with
+     * no hierarchy on the supported device, and the guard that skipped the file
+     * dump after a "slow" shortcut left read_ui with no working path at all.
+     * One staged dump per observation, and never /dev/tty.
+     */
+    @Test fun readUiIssuesOneStagedDumpAndNeverUsesDevTty() = runBlocking {
+        val adb = ScriptedUiAdb(mutableListOf(CommandResult(SAMPLE_UI_XML, 0)))
         val tools = AndroidDeviceTools(adb)
         tools.beginRun("ui", Files.createTempDirectory("ws").toFile())
 
@@ -279,11 +282,112 @@ class AndroidDeviceToolsTest {
 
         assertTrue(result.success)
         val json = Json.parseToJsonElement(result.text).jsonObject
-        assertEquals("file-fallback", json["source"]!!.jsonPrimitive.content)
+        assertEquals("file", json["source"]!!.jsonPrimitive.content)
+        assertEquals(1, adb.commands.size)
+        assertTrue(adb.commands.single().contains(AndroidDeviceTools.UI_DUMP_PATH))
+        assertFalse(adb.commands.any { it.contains("/dev/tty") })
+        assertTrue(adb.timeouts.single() <= AndroidDeviceTools.READ_UI_DEFAULT_TIMEOUT_MS)
+    }
+
+    @Test fun readUiReportsDumpFailureWhenNoHierarchyIsReturned() = runBlocking {
+        val adb = ScriptedUiAdb(mutableListOf(
+            CommandResult("UI hierchary dumped to: /sdcard/window_dump.xml", 0),
+        ))
+        val tools = AndroidDeviceTools(adb)
+        tools.beginRun("ui", Files.createTempDirectory("ws").toFile())
+
+        val result = tools.invoke("read_ui", buildJsonObject {})
+
+        assertFalse(result.success)
+        val json = Json.parseToJsonElement(result.text).jsonObject
+        assertEquals("ui_dump_failure", json["errorType"]!!.jsonPrimitive.content)
+        assertEquals(1, adb.commands.size)
+    }
+
+    @Test fun readUiSuppressesAnIdenticalConsecutiveObservation() = runBlocking {
+        val adb = ScriptedUiAdb(mutableListOf(
+            CommandResult(SAMPLE_UI_XML, 0),
+            CommandResult(SAMPLE_UI_XML, 0),
+        ))
+        val tools = AndroidDeviceTools(adb)
+        tools.beginRun("ui", Files.createTempDirectory("ws").toFile())
+
+        val first = Json.parseToJsonElement(tools.invoke("read_ui", buildJsonObject {}).text).jsonObject
+        val second = tools.invoke("read_ui", buildJsonObject {})
+
+        assertTrue(second.success)
+        val json = Json.parseToJsonElement(second.text).jsonObject
+        assertEquals("true", json["unchanged"]!!.jsonPrimitive.content)
+        assertEquals(first["revision"]!!.jsonPrimitive.content,
+            json["unchangedSinceRevision"]!!.jsonPrimitive.content)
+        // The whole point: the node list is not resent.
+        assertNull(json["nodes"])
+        assertTrue(second.text.length < 400)
+        // The dump still runs, so a changed screen is never missed.
         assertEquals(2, adb.commands.size)
-        assertTrue(adb.commands[1].contains(AndroidDeviceTools.UI_DUMP_PATH))
-        assertTrue(adb.timeouts.sum() <= AndroidDeviceTools.READ_UI_DEFAULT_TIMEOUT_MS * 2)
-        assertTrue(adb.timeouts[1] <= adb.timeouts[0])
+    }
+
+    @Test fun readUiResendsFullNodesWhenScreenChanges() = runBlocking {
+        val adb = ScriptedUiAdb(mutableListOf(
+            CommandResult(SAMPLE_UI_XML, 0),
+            CommandResult(SAMPLE_UI_XML.replace("Send", "Resend"), 0),
+        ))
+        val tools = AndroidDeviceTools(adb)
+        tools.beginRun("ui", Files.createTempDirectory("ws").toFile())
+
+        tools.invoke("read_ui", buildJsonObject {})
+        val json = Json.parseToJsonElement(tools.invoke("read_ui", buildJsonObject {}).text).jsonObject
+
+        assertNull(json["unchanged"])
+        assertTrue(json["nodes"]!!.jsonArray.isNotEmpty())
+    }
+
+    @Test fun readUiForceResendsNodesForAnIdenticalScreen() = runBlocking {
+        val adb = ScriptedUiAdb(mutableListOf(
+            CommandResult(SAMPLE_UI_XML, 0),
+            CommandResult(SAMPLE_UI_XML, 0),
+        ))
+        val tools = AndroidDeviceTools(adb)
+        tools.beginRun("ui", Files.createTempDirectory("ws").toFile())
+
+        tools.invoke("read_ui", buildJsonObject {})
+        val forced = tools.invoke("read_ui", buildJsonObject { put("force", true) })
+
+        val json = Json.parseToJsonElement(forced.text).jsonObject
+        assertNull(json["unchanged"])
+        assertTrue(json["nodes"]!!.jsonArray.isNotEmpty())
+    }
+
+    @Test fun readUiResendsFullNodesAfterAFailedObservation() = runBlocking {
+        val adb = ScriptedUiAdb(mutableListOf(
+            CommandResult(SAMPLE_UI_XML, 0),
+            CommandResult("ERROR: could not get idle state.", 1),
+            CommandResult(SAMPLE_UI_XML, 0),
+        ))
+        val tools = AndroidDeviceTools(adb)
+        tools.beginRun("ui", Files.createTempDirectory("ws").toFile())
+
+        tools.invoke("read_ui", buildJsonObject {})
+        assertFalse(tools.invoke("read_ui", buildJsonObject {}).success)
+        val json = Json.parseToJsonElement(tools.invoke("read_ui", buildJsonObject {}).text).jsonObject
+
+        // The screen was unknown while the dump failed, so no diff is claimed.
+        assertNull(json["unchanged"])
+        assertTrue(json["nodes"]!!.jsonArray.isNotEmpty())
+    }
+
+    @Test fun readUiRawModeIsNeverSuppressed() = runBlocking {
+        val adb = ScriptedUiAdb(mutableListOf(
+            CommandResult(SAMPLE_UI_XML, 0),
+            CommandResult(SAMPLE_UI_XML, 0),
+        ))
+        val tools = AndroidDeviceTools(adb)
+        tools.beginRun("ui", Files.createTempDirectory("ws").toFile())
+
+        tools.invoke("read_ui", buildJsonObject {})
+        val raw = tools.invoke("read_ui", buildJsonObject { put("raw", true) })
+
+        assertTrue(raw.text.startsWith("<hierarchy"))
     }
 
     @Test fun readUiRawModePreservesXmlCompatibility() = runBlocking {

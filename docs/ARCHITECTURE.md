@@ -170,15 +170,30 @@ catalog:
 ## Bounded UI observation
 
 `read_ui` has a six-second default total budget instead of inheriting the
-gateway's 30-second shell timeout. The direct `/dev/tty` hierarchy path runs
-first. A timeout or `could not get idle state` result returns a typed failure
-and never starts a second full dump. The file path is used only when the direct
-path fails quickly for a non-idle compatibility reason, and it receives only
-the remaining total budget.
+gateway's 30-second shell timeout. Exactly one dump runs per observation: the
+hierarchy is staged to `/sdcard/window_dump.xml` and read back. A timeout or
+`could not get idle state` result returns a typed failure and never starts a
+second dump.
+
+Dumping straight to `/dev/tty` is deliberately not attempted. `uiautomator`
+reports success and exits 0 on that path while emitting no hierarchy unless the
+shell service forwards raw stdout, which the app's transport does not. On the
+supported device it cost roughly 2.2 seconds per call and never once returned
+data; the staged dump costs about the same and always works.
 
 Successful XML is parsed inside the device gateway with external entities and
 DOCTYPEs disabled. The model receives only labeled or actionable semantic
 nodes plus clickable-ancestor bounds; decorative empty nodes are filtered.
+
+An observation whose semantic payload is byte-identical to the previous one is
+answered with `"unchanged":true` and `"unchangedSinceRevision"` instead of the
+node list. The dump still runs every time, so a changed screen is never missed;
+only the resend is suppressed. The fingerprint is cleared on `beginRun` and
+after any failed observation, so the gateway never claims "unchanged" across a
+gap in its own knowledge, and `raw=true` never participates. `force=true`
+resends the full list for an agent that no longer holds it. A device trace of
+one WhatsApp send showed three consecutive identical observations of the chat
+list, so this suppression removes repeated payloads the model has already read.
 Each result includes monotonic elapsed time and an observation revision. This
 removes raw XML token cost and caps the observed 22-second idle-wait tail, but
 it does not prove a faster real WhatsApp workflow until measured on Q8.

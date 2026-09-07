@@ -19,6 +19,18 @@ The normal result is compact JSON. Raw XML is available only with `raw=true` for
 {"ok":true,"revision":12,"activePackage":"com.example","stable":true,"nodes":[{"nodeId":"n3","text":"Search","resourceId":"com.example:id/search_box","contentDescription":"Search query","bounds":[72,140,936,260],"clickable":true,"enabled":true}]}
 ```
 
+### Unchanged Screens
+When the screen is identical to the previous observation, the node list is not
+resent:
+```json
+{"ok":true,"revision":13,"activePackage":"com.example","stable":true,"unchanged":true,"unchangedSinceRevision":12,"nodeCount":41}
+```
+Reuse the nodes from revision 12; they are still valid. This is diagnostic
+information, not an error. If the action before it was meant to change the
+screen, the action did not land — pick a different target or dismiss whatever is
+covering it rather than repeating the same tap. Use `force=true` only when the
+earlier node list is no longer available to you.
+
 ### Addressing Rules
 1. **Search Criteria**: Look for elements where:
    - `text` contains or equals your target label.
