@@ -24,6 +24,17 @@ A fully usable Android app with Codex chat, on-phone execution, per-session file
   the valid device target.
 
 ## Delivery gates
+- 2026-09-08: Implemented Issue #11 by snapshotting the app-owned Wireless ADB
+  state immediately before every typed Codex turn. The engine now sends phase,
+  device-tool availability, and the known local port in an application-owned
+  runtime-context input before the user's text. Disconnected/error context tells
+  the model not to call device tools and to guide the user to Wireless Debugging;
+  the device gateway still enforces availability if state changes mid-turn.
+  PASS: `:core:test`, `:engine-codex:test`, and `:app:assembleDevDebug`.
+  Focused tests cover coordinator snapshot wiring, connected context and port,
+  disconnected guidance, and preservation of the separate user text. A real
+  signed-in phone turn that changes behavior based on this context remains NOT
+  TESTED.
 - 2026-09-08: Implemented Issue #10 with a live Wireless ADB status pill in
   the main top app bar. It shows the active port when connected, uses distinct
   connected/waiting/disconnected/error colors, and opens Android Wireless
