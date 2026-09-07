@@ -3,16 +3,15 @@ package dev.androidagent.workspace
 import android.content.Context
 import java.io.File
 import java.io.FileOutputStream
-import java.io.InputStream
 
 /**
- * Seeds the on-device agent harness, skills, app cards, and user preferences into
- * each session's workspace directory.
+ * Seeds the on-device agent harness, app cards, and user preferences into each
+ * session workspace. App-managed skills are installed separately in Codex's
+ * standard user root: `$HOME/.agents/skills`.
  *
  * This ensures that when the on-device Codex engine starts with `cwd` set to the
  * session workspace, it immediately discovers:
  * - `AGENTS.md` (root harness entrypoint)
- * - `.agents/skills` (device-automation, recovery-and-safety, user-preferences, app-cards)
  * - `cards` (whatsapp, chrome, maps, settings, youtube)
  * - `RECOVERY.md` (quick stuck-state guide)
  * - `preferences.json` (durable user preferences, created once and preserved)
@@ -20,6 +19,12 @@ import java.io.InputStream
 object WorkspaceSeeder {
 
     private const val ASSET_PREFIX = "agent_stack"
+    private val DEFAULT_SKILL_NAMES = listOf(
+        "device-automation",
+        "recovery-and-safety",
+        "user-preferences",
+        "app-cards",
+    )
 
     fun seed(workspace: File, context: Context? = null) {
         workspace.mkdirs()
@@ -33,8 +38,9 @@ object WorkspaceSeeder {
             }
         }
 
-        // Always guarantee the harness, on-device skills, and cards are seeded
+        // Always guarantee the workspace harness and app cards are seeded.
         seedFromEmbeddedTemplates(workspace)
+        removeLegacyWorkspaceSkillCopies(workspace)
 
         // Guarantee preferences.json exists without overwriting user data
         val prefsFile = File(workspace, "preferences.json")
@@ -43,17 +49,41 @@ object WorkspaceSeeder {
         }
     }
 
-    /**
-     * Seeds on-device skills directly into CODEX_HOME/skills/ so that Codex's
-     * built-in skill discovery indexes them into its global catalog.
-     */
-    fun seedToCodexHome(codexHomeDir: File) {
-        val skillsDir = File(codexHomeDir, "skills")
-        skillsDir.mkdirs()
-        writeTemplate(skillsDir, "device-automation/SKILL.md", SKILL_DEVICE_AUTOMATION)
-        writeTemplate(skillsDir, "recovery-and-safety/SKILL.md", SKILL_RECOVERY_SAFETY)
-        writeTemplate(skillsDir, "user-preferences/SKILL.md", SKILL_USER_PREFERENCES)
-        writeTemplate(skillsDir, "app-cards/SKILL.md", SKILL_APP_CARDS)
+    /** Install the app-managed defaults in Codex's standard user-skill root. */
+    fun installDefaultSkills(homeDir: File, context: Context) {
+        installDefaultSkills(homeDir) { relativePath ->
+            context.assets.open("$ASSET_PREFIX/skills/$relativePath").use { it.readBytes() }
+        }
+    }
+
+    internal fun installDefaultSkills(homeDir: File, readAsset: (String) -> ByteArray) {
+        val skillsDir = File(homeDir, ".agents/skills").apply { mkdirs() }
+        for (name in DEFAULT_SKILL_NAMES) {
+            val bytes = readAsset("$name/SKILL.md")
+            require(bytes.isNotEmpty()) { "Bundled skill $name is empty" }
+            val staging = File(skillsDir, ".$name.installing")
+            staging.deleteRecursively()
+            staging.mkdirs()
+            File(staging, "SKILL.md").writeBytes(bytes)
+
+            val target = File(skillsDir, name)
+            target.deleteRecursively()
+            require(staging.renameTo(target)) { "Could not install bundled skill $name" }
+        }
+
+        // Remove only paths created by older Android Agent releases. Keep all
+        // unrelated user and repository skills untouched.
+        removeManagedSkills(File(homeDir, ".codex/skills"))
+    }
+
+    private fun removeLegacyWorkspaceSkillCopies(workspace: File) {
+        removeManagedSkills(File(workspace, ".agents/skills"))
+        removeManagedSkills(File(workspace, ".codex/skills"))
+        removeManagedSkills(File(workspace, "skills"))
+    }
+
+    private fun removeManagedSkills(root: File) {
+        for (name in DEFAULT_SKILL_NAMES) File(root, name).deleteRecursively()
     }
 
     private fun copyAssetDir(context: Context, assetPath: String, targetDir: File) {
@@ -75,6 +105,7 @@ object WorkspaceSeeder {
         }
 
         for (child in children) {
+            if (assetPath == ASSET_PREFIX && child == "skills") continue
             val subAsset = if (assetPath.isEmpty()) child else "$assetPath/$child"
             val subChildren = context.assets.list(subAsset)
             if (!subChildren.isNullOrEmpty()) {
@@ -101,17 +132,6 @@ object WorkspaceSeeder {
     private fun seedFromEmbeddedTemplates(workspace: File) {
         writeTemplate(workspace, "AGENTS.md", AGENTS_MD)
         writeTemplate(workspace, "RECOVERY.md", RECOVERY_MD)
-        // Seed both .agents/skills/ and .codex/skills/ for Codex multi-root discovery
-        writeTemplate(workspace, ".agents/skills/device-automation/SKILL.md", SKILL_DEVICE_AUTOMATION)
-        writeTemplate(workspace, ".agents/skills/recovery-and-safety/SKILL.md", SKILL_RECOVERY_SAFETY)
-        writeTemplate(workspace, ".agents/skills/user-preferences/SKILL.md", SKILL_USER_PREFERENCES)
-        writeTemplate(workspace, ".agents/skills/app-cards/SKILL.md", SKILL_APP_CARDS)
-
-        writeTemplate(workspace, ".codex/skills/device-automation/SKILL.md", SKILL_DEVICE_AUTOMATION)
-        writeTemplate(workspace, ".codex/skills/recovery-and-safety/SKILL.md", SKILL_RECOVERY_SAFETY)
-        writeTemplate(workspace, ".codex/skills/user-preferences/SKILL.md", SKILL_USER_PREFERENCES)
-        writeTemplate(workspace, ".codex/skills/app-cards/SKILL.md", SKILL_APP_CARDS)
-
         writeTemplate(workspace, "cards/whatsapp.md", CARD_WHATSAPP)
         writeTemplate(workspace, "cards/chrome.md", CARD_CHROME)
         writeTemplate(workspace, "cards/maps.md", CARD_MAPS)
@@ -197,8 +217,8 @@ object WorkspaceSeeder {
            - Google Maps: `cards/maps.md`
            - Android Settings: `cards/settings.md`
            - YouTube: `cards/youtube.md`
-        3. **Deep Device Control**: For advanced gestures, IME typing nuances, or shell execution, read `.agents/skills/device-automation/SKILL.md`.
-        4. **Failure & Recovery**: If an action fails, screen doesn't update, an ANR occurs, or a permission prompt appears, consult `.agents/skills/recovery-and-safety/SKILL.md`.
+        3. **Deep Device Control**: For advanced gestures, IME typing nuances, or shell execution, use the `device-automation` skill from the Codex skill catalog.
+        4. **Failure & Recovery**: If an action fails, the screen does not update, an ANR occurs, or a permission prompt appears, use the `recovery-and-safety` skill from the Codex skill catalog.
 
         ---
 
@@ -221,69 +241,6 @@ object WorkspaceSeeder {
         3. **Unexpected Dialog / Pop-up**: Inspect dialog via `read_ui`. Grant necessary permissions; dismiss promos or ANRs.
         4. **App Crashed or Closed**: Call `open_app(package="<package>")` to relaunch.
         5. **Stuck / Looping**: If state does not change after 2 retries, pause and ask the user for steering.
-    """
-
-    val SKILL_DEVICE_AUTOMATION = """
-        ---
-        name: device-automation
-        description: Master skill for precise Android device control via ADB. Covers semantic UI hierarchy parsing, bounds calculation, gestures, Unicode text input, key events, and verification.
-        ---
-
-        # Android Device Automation Skill
-
-        1. **Semantic Hierarchy**: Call `read_ui`. Find matching node (`text`, `content-desc`, `resource-id`).
-           Calculate center: x = (x1 + x2) / 2, y = (y1 + y2) / 2 from `bounds="[x1,y1][x2,y2]"`.
-           If node is `clickable="false"`, tap its clickable parent container.
-        2. **Unicode Text Input**: Focus input field with `tap` first, then call `type_text(text="...", submit=false)`.
-           The bundled IME handles full Unicode (Hebrew, Arabic, Emoji, etc.).
-        3. **Swiping**:
-           - Scroll down: `swipe(540, 1600, 540, 600, 350)`
-           - Scroll up: `swipe(540, 600, 540, 1600, 350)`
-           - Always verify with `read_ui` after swiping.
-        4. **Keyevents**: `key(keycode="BACK")` for dismiss/back, `key(keycode="HOME")` for home, `key(keycode="ENTER")` for enter.
-        5. **Open App**: `open_app(package="...")` brings the app to the foreground.
-    """
-
-    val SKILL_RECOVERY_SAFETY = """
-        ---
-        name: recovery-and-safety
-        description: Safety guardrails, intent preservation rules, and recovery procedures for stuck screens, system dialogs, keyboard obstruction, and app crashes.
-        ---
-
-        # Android Agent Safety & Recovery Guide
-
-        1. **Confirmation Gates**: Ask user confirmation before financial actions, deletions, or messaging ambiguous contacts.
-        2. **Intent Preservation**: Never rewrite user's message text or search query.
-        3. **Keyboard Clearance**: Send `key(keycode="BACK")` to hide soft keyboard hiding target views.
-        4. **Stuck Loop**: After 2 unchanged UI screens, pause and report or ask user for steering.
-    """
-
-    val SKILL_USER_PREFERENCES = """
-        ---
-        name: user-preferences
-        description: Manage persistent user preferences, default applications, and frequent addresses to minimize redundant user questioning.
-        ---
-
-        # User Preferences System
-
-        1. Check `preferences.json` in workspace before asking user for preferred app or address.
-        2. If preference exists, use it silently.
-        3. If preference is learned, update `preferences.json` in workspace.
-    """
-
-    val SKILL_APP_CARDS = """
-        ---
-        name: app-cards
-        description: Directory and routing for known application cards containing package names, view hierarchies, and workflows.
-        ---
-
-        # App Cards Directory
-
-        - WhatsApp: `cards/whatsapp.md` (`com.whatsapp`)
-        - Chrome: `cards/chrome.md` (`com.android.chrome`)
-        - Google Maps: `cards/maps.md` (`com.google.android.apps.maps`)
-        - Settings: `cards/settings.md` (`com.android.settings`)
-        - YouTube: `cards/youtube.md` (`com.google.android.youtube`)
     """
 
     val CARD_WHATSAPP = """

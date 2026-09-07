@@ -1125,65 +1125,6 @@ private fun UpdateBanner(
     }
 }
 
-private data class SlashSkillItem(
-    val command: String,
-    val title: String,
-    val description: String,
-)
-
-private val ALL_SLASH_SKILLS = listOf(
-    SlashSkillItem(
-        command = "/skills",
-        title = "Available Skills",
-        description = "List all on-device skills, tools, and capabilities",
-    ),
-    SlashSkillItem(
-        command = "/device-automation",
-        title = "Device Automation",
-        description = "Precise UI control: bounds clicks, gestures, typing, keys",
-    ),
-    SlashSkillItem(
-        command = "/recovery-and-safety",
-        title = "Recovery & Safety",
-        description = "Safety gates, confirmation rules, stuck-state recovery",
-    ),
-    SlashSkillItem(
-        command = "/app-cards",
-        title = "App Cards Directory",
-        description = "Interaction blueprints for WhatsApp, Chrome, Maps, Settings, YouTube",
-    ),
-    SlashSkillItem(
-        command = "/user-preferences",
-        title = "User Preferences",
-        description = "Durable user defaults and preferences (preferences.json)",
-    ),
-    SlashSkillItem(
-        command = "/whatsapp",
-        title = "WhatsApp",
-        description = "Send messages, search contacts, and navigate WhatsApp chats",
-    ),
-    SlashSkillItem(
-        command = "/chrome",
-        title = "Google Chrome",
-        description = "Browse the web, search queries, and open URLs",
-    ),
-    SlashSkillItem(
-        command = "/maps",
-        title = "Google Maps",
-        description = "Find places, navigate routes, and check directions",
-    ),
-    SlashSkillItem(
-        command = "/settings",
-        title = "Settings",
-        description = "Search and toggle Android device system settings",
-    ),
-    SlashSkillItem(
-        command = "/youtube",
-        title = "YouTube",
-        description = "Search videos and control playback",
-    ),
-)
-
 @Composable
 private fun AgentComposer(state: AgentUiState, actions: AgentUiActions) {
     var draft by rememberSaveable(state.activeSessionId) { mutableStateOf("") }
@@ -1200,18 +1141,17 @@ private fun AgentComposer(state: AgentUiState, actions: AgentUiActions) {
     val canSend = state.activeSessionId != null && draft.isNotBlank() && !state.isLoadingMessages && !stopping && !voiceStopping
     val selectedModel = state.modelCatalog.firstOrNull { it.id == state.selectedModel }
     val reasoningOptions = selectedModel?.reasoningEfforts.orEmpty()
-    val showSlashSuggestions = draft.startsWith("/") && !draft.contains(" ") && !draft.contains("\n")
-    val slashQuery = if (showSlashSuggestions) draft.removePrefix("/").trim() else ""
-    val matchingSkills = remember(showSlashSuggestions, slashQuery) {
-        if (!showSlashSuggestions) {
+    val showSkillSuggestions = draft.startsWith("\$") && !draft.contains(" ") && !draft.contains("\n")
+    val skillQuery = if (showSkillSuggestions) draft.removePrefix("\$").trim() else ""
+    val matchingSkills = remember(showSkillSuggestions, skillQuery, state.availableSkills) {
+        if (!showSkillSuggestions) {
             emptyList()
-        } else if (slashQuery.isEmpty()) {
-            ALL_SLASH_SKILLS
+        } else if (skillQuery.isEmpty()) {
+            state.availableSkills
         } else {
-            ALL_SLASH_SKILLS.filter {
-                it.command.removePrefix("/").contains(slashQuery, ignoreCase = true) ||
-                    it.title.contains(slashQuery, ignoreCase = true) ||
-                    it.description.contains(slashQuery, ignoreCase = true)
+            state.availableSkills.filter {
+                it.name.contains(skillQuery, ignoreCase = true) ||
+                    it.description.contains(skillQuery, ignoreCase = true)
             }
         }
     }
@@ -1239,7 +1179,7 @@ private fun AgentComposer(state: AgentUiState, actions: AgentUiActions) {
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = "Skills & Commands",
+                            text = "Codex Skills",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontWeight = FontWeight.SemiBold,
@@ -1257,12 +1197,12 @@ private fun AgentComposer(state: AgentUiState, actions: AgentUiActions) {
                             .fillMaxWidth()
                             .heightIn(max = 220.dp),
                     ) {
-                        items(matchingSkills, key = { it.command }) { skill ->
+                        items(matchingSkills, key = { it.path }) { skill ->
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
-                                        draft = if (skill.command == "/skills") "/skills" else "${skill.command} "
+                                        draft = "\$${skill.name} "
                                     }
                                     .padding(horizontal = 12.dp, vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
@@ -1273,7 +1213,7 @@ private fun AgentComposer(state: AgentUiState, actions: AgentUiActions) {
                                     border = BorderStroke(0.5.dp, Color(0xFF444444)),
                                 ) {
                                     Text(
-                                        text = skill.command,
+                                        text = "\$${skill.name}",
                                         style = MaterialTheme.typography.labelMedium,
                                         fontWeight = FontWeight.Bold,
                                         color = Color(0xFF83D9CA),
@@ -1283,7 +1223,7 @@ private fun AgentComposer(state: AgentUiState, actions: AgentUiActions) {
                                 Spacer(Modifier.width(10.dp))
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
-                                        text = skill.title,
+                                        text = skill.name,
                                         style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = FontWeight.Medium,
                                         color = MaterialTheme.colorScheme.onSurface,

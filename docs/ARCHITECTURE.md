@@ -12,11 +12,11 @@ One Android project, with replaceable modules and small core contracts.
 | workspace | Durable sessions, messages, artifacts and session directories |
 | adb | Persistent pairing identity, discovery, localhost transport |
 | device-tools | Sole agent-facing device gateway, reads/control/shell/files |
-| overlay | Floating chat, glow, status and direct local stop |
+| overlay | Floating steering card, status and direct local stop |
 
 A model change is configuration. An engine change replaces the engine adapter. Runtime packaging must not affect chat or ADB APIs. The UI observes app events, never raw Codex JSON.
 
-The MVP permits one active agent run per phone. A session has its own working directory; this is organization, not a claim of OS-level isolation. Stop revokes dispatch first and interrupts active work next. Unknown raw shell requests are visible device control. The overlay tracks Starting, Thinking, Running, Controlling, Stopping, Done, and Error states for the entire run. MainActivity visibility hides its window inside the app and restores it outside the app until the run ends, including between tool calls. Its translucent pill provides local Stop and steering; it releases input focus before device actions and returns to MainActivity after a terminal state.
+The MVP permits one active agent run per phone. A session has its own working directory; this is organization, not a claim of OS-level isolation. Stop revokes dispatch first and interrupts active work next. Unknown raw shell requests are visible device control. The overlay tracks Starting, Thinking, Running, Controlling, Stopping, Done, and Error states for the entire run. MainActivity visibility hides its window inside the app and restores it outside the app until the run ends, including between tool calls. Its floating card separates status and local Stop from the steering composer, with 48dp action targets and native drawn icons. It releases input focus before device actions and returns to MainActivity after a terminal state.
 
 Wireless ADB stores only the last successful local connect port in app-private
 preferences. The foreground service runs a bounded reconnect loop: it tries
@@ -130,9 +130,8 @@ versionCode 2; the older 0.1.0 fix releases all used versionCode 1.
 
 ## On-device agent instruction and skill stack
 
-The agent uses a tiered, progressive-disclosure prompt and skill architecture
-synthesizing patterns from DroidRun Mobile Harness, Android Automation Agent,
-Mobile-Agent v3.5, and ADB Agent Bridge:
+The on-device agent uses progressive disclosure and Codex's standard skill
+catalog:
 
 - **Layer 0: Engine Developer Instructions (`developerInstructions`)**: Dense,
   inviolable system prompt in `CodexEngine` establishing identity, wireless ADB
@@ -150,12 +149,19 @@ Mobile-Agent v3.5, and ADB Agent Bridge:
      empty, unexposed (canvas, games, webviews), or verifying images.
   3. *Tier 3 (Hardware Navigation)*: `key` events (`BACK`, `HOME`, `ENTER`) and
      calibrated swipes.
-- **Layer 3: Modular Skills & App Cards**: Stored under `.agents/skills/`
-  (`device-automation`, `recovery-and-safety`, `user-preferences`, `app-cards`)
-  and `cards/` (`whatsapp`, `chrome`, `maps`, `settings`, `youtube`).
+- **Layer 3: Modular Skills & App Cards**: Complete bundled skill sources live
+  under `app/src/main/assets/agent_stack/skills/<skill-name>/SKILL.md`. App
+  startup installs the app-managed defaults into the app-private
+  `$HOME/.agents/skills` before the Codex app-server starts. It removes only
+  app-managed legacy copies from the workspace `.agents/skills/`,
+  `.codex/skills/`, and `$CODEX_HOME/skills`; unrelated skills are preserved.
 - **Layer 4: Durable Preferences**: `preferences.json` in the session workspace
   retains user defaults (preferred messaging apps, addresses) to prevent
   redundant questioning while respecting intent fidelity.
-- **Automated Seeding**: `WorkspaceSeeder` populates new session workspaces
-  offline from bundled Android assets or embedded templates, preserving user
-  preferences across sessions.
+- **Catalog and composer**: For each session workspace, the pinned app-server
+  is queried through `skills/list` with that workspace as the CWD. The composer
+  uses the returned catalog and explicit `$skill-name` invocations; the turn
+  includes Codex's native skill input item with the catalog-provided name and
+  path. `skills/changed` refreshes the catalog. There is no hard-coded
+  slash-skill list. `WorkspaceSeeder` still populates `AGENTS.md`, app cards,
+  `RECOVERY.md`, and `preferences.json` offline without duplicating skills.

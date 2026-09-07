@@ -4,6 +4,7 @@ import dev.androidagent.app.update.AppUpdateInfo
 import dev.androidagent.app.update.UpdateStatus
 import dev.androidagent.core.AccountStatus
 import dev.androidagent.core.AgentModel
+import dev.androidagent.core.AgentSkill
 import dev.androidagent.core.AdbEndpoint
 import dev.androidagent.core.AdbStatus
 import dev.androidagent.core.ChatMessage
@@ -68,6 +69,7 @@ data class AgentUiState(
     val accountStatus: AccountStatus? = null,
     val availableModels: List<String> = emptyList(),
     val modelCatalog: List<AgentModel> = emptyList(),
+    val availableSkills: List<AgentSkill> = emptyList(),
     val selectedModel: String? = null,
     val selectedReasoningEffort: String? = null,
     val voiceState: VoiceState = VoiceState(),
@@ -83,6 +85,7 @@ data class AgentUiState(
     val isConnecting: Boolean = false,
     val isRefreshingAccount: Boolean = false,
     val isLoadingModels: Boolean = false,
+    val isLoadingSkills: Boolean = false,
     val isLoadingWorkspace: Boolean = false,
     val workspaceError: String? = null,
     val errorMessage: String? = null,

@@ -69,6 +69,15 @@ class AgentCoordinatorTest {
         rig.close()
     }
 
+    @Test fun explicitlyInvokedSkillIsPassedToTheEngine() = runTest {
+        val rig = Rig(this)
+        val skill = AgentSkill("device-automation", "Control Android", "/home/.agents/skills/device-automation/SKILL.md", "user")
+        rig.coordinator.send("one", "\$device-automation Read the screen", skill = skill)
+        runCurrent()
+        assertEquals(skill, rig.engine.skill)
+        rig.close()
+    }
+
     @Test fun uiControlWaitsForOverlayAndBackendReadsDoNotShowIt() = runTest {
         val rig = Rig(this)
         rig.coordinator.send("one", "Read and tap")
@@ -153,6 +162,7 @@ class AgentCoordinatorTest {
         override val events = stream.asSharedFlow()
         var turns = 0
         var reasoningEffort: String? = null
+        var skill: AgentSkill? = null
         var closed = false
         var waitForInterrupt: CompletableDeferred<Unit>? = null
         val answers = mutableListOf<ToolResult>()
@@ -167,6 +177,16 @@ class AgentCoordinatorTest {
         override suspend fun startTurn(threadId: String, prompt: String, images: List<File>, reasoningEffort: String?): String {
             this.reasoningEffort = reasoningEffort
             return startTurn(threadId, prompt, images)
+        }
+        override suspend fun startTurn(
+            threadId: String,
+            prompt: String,
+            images: List<File>,
+            reasoningEffort: String?,
+            skill: AgentSkill?,
+        ): String {
+            this.skill = skill
+            return startTurn(threadId, prompt, images, reasoningEffort)
         }
         override suspend fun steer(threadId: String, turnId: String, prompt: String) = Unit
         override suspend fun interrupt(threadId: String, turnId: String) { waitForInterrupt?.await() }
