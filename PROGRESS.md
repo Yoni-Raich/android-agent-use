@@ -317,3 +317,18 @@ Record actual commands and results. Mark untested features explicitly. Do not re
   SHA-256 `08C15ADE7ACCF6BAA6C33D0F8EB78187350CD807B26173F9768C7F32A486FEBA`.
   The APK contains WebRTC native libraries for `arm64-v8a` and `x86_64`.
   It was not installed or physically retested in this task.
+
+## Release Validation v0.3.2 - 2026-09-07
+- Bumped `versionCode=9`, `versionName=0.3.2` and committed the WebRTC AVAS
+  repair on `main` before building the release APK.
+- PASS: `./gradlew.bat test assembleDevRelease assembleDevDebugAndroidTest
+  :voice:lintDebug --no-daemon` (630 actionable tasks, 105 executed).
+- APK: `artifacts/android-agent-0.3.2.apk`, metadata
+  `dev.androidagent.app.dev`, versionCode 9, versionName 0.3.2.
+- SHA-256: `F43CD5085FB6B3A2B3E0C1C3D80471F6D7E17CF0C7AA1CEF7FAA9971750CC5BA`.
+- Zip alignment passed and APK Signature Scheme v3 verification passed with
+  the local Android debug key. This is installable for private testing, not
+  production signing.
+- GitHub Release `v0.3.2` was published with the matching APK asset.
+- NOT TESTED: physical signed-in WebRTC voice E2E, interruption/latency,
+  transcript accuracy, and voice device-tool E2E.
