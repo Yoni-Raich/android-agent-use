@@ -55,8 +55,8 @@ Do not overload your reasoning context with unused files. Load guidance on-deman
    - Google Maps: `cards/maps.md`
    - Android Settings: `cards/settings.md`
    - YouTube: `cards/youtube.md`
-3. **Deep Device Control**: For advanced gestures, IME typing nuances, or shell execution, read `.agents/skills/device-automation/SKILL.md`.
-4. **Failure & Recovery**: If an action fails, screen doesn't update, an ANR occurs, or a permission prompt appears, consult `.agents/skills/recovery-and-safety/SKILL.md`.
+3. **Deep Device Control**: For advanced gestures, IME typing nuances, or shell execution, use the `device-automation` skill from the Codex skill catalog.
+4. **Failure & Recovery**: If an action fails, the screen does not update, an ANR occurs, or a permission prompt appears, use the `recovery-and-safety` skill from the Codex skill catalog.
 
 ---
 

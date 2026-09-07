@@ -48,6 +48,9 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
             preferences.edit().putString("session", id).apply()
             mutable.update { it.copy(activeSessionId = id, messages = emptyList(), attachments = emptyList(), isDrawerOpen = false) }
             updateTitle()
+            if (graph.runtime.status.value.phase in setOf(RuntimePhase.READY, RuntimePhase.RUNNING)) {
+                runCatching { loadSkills(id) }
+            }
             graph.sessions.messages(id).collect { items -> mutable.update { it.copy(messages = items) } }
         } }
         viewModelScope.launch { graph.coordinator.state.collect { state -> mutable.update { it.copy(runState = state) } } }
@@ -58,6 +61,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { graph.engine.events.collect { event ->
             when (event) {
                 is EngineEvent.AccountChanged -> { mutable.update { it.copy(accountStatus = event.status, infoMessage = if (event.status.signedIn) "Signed in. You can start chatting." else null) }; if (event.status.signedIn) loadModels() }
+                EngineEvent.SkillsChanged -> runCatching { loadSkills(forceReload = false) }
                 is EngineEvent.Failure -> if (!graph.coordinator.state.value.active) error(event.message)
                 else -> Unit
             }
@@ -94,42 +98,24 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         val paths = attachments.mapNotNull { it.path?.let(::File) }
         val images = attachments.filter { it.mimeType?.startsWith("image/") == true }.mapNotNull { it.path?.let(::File) }
         val otherFiles = paths.filter { it !in images }
-        val promptText = when {
-            text.trim().equals("/skills", ignoreCase = true) ->
-                """List and explain all available on-device automation skills and capabilities in this Android environment:
-1. `device-automation`: Precise UI control via ADB (read_ui uiautomator XML hierarchy bounds calculation, tap, type_text Unicode typing, swipe, keyevent).
-2. `recovery-and-safety`: Safety boundaries, user confirmation gates for destructive or financial actions, back button recovery, loop prevention.
-3. `app-cards`: Deep interaction blueprints and navigation cards for WhatsApp, Chrome, Google Maps, Settings, and YouTube.
-4. `user-preferences`: Durable user settings and app defaults in preferences.json.
-Provide a clear, helpful overview of what you can do on this device."""
-            text.trim().startsWith("/device-automation", ignoreCase = true) ->
-                "Focus on the `device-automation` skill: " + text.removePrefix("/device-automation").trim()
-            text.trim().startsWith("/recovery-and-safety", ignoreCase = true) ->
-                "Focus on the `recovery-and-safety` skill: " + text.removePrefix("/recovery-and-safety").trim()
-            text.trim().startsWith("/app-cards", ignoreCase = true) ->
-                "Consult the app cards in cards/: " + text.removePrefix("/app-cards").trim()
-            text.trim().startsWith("/user-preferences", ignoreCase = true) ->
-                "Consult preferences.json: " + text.removePrefix("/user-preferences").trim()
-            text.trim().startsWith("/whatsapp", ignoreCase = true) ->
-                "Use the WhatsApp app card (cards/whatsapp.md) and device automation to: " + text.removePrefix("/whatsapp").trim()
-            text.trim().startsWith("/chrome", ignoreCase = true) ->
-                "Use the Chrome app card (cards/chrome.md) and device automation to: " + text.removePrefix("/chrome").trim()
-            text.trim().startsWith("/maps", ignoreCase = true) ->
-                "Use the Google Maps app card (cards/maps.md) and device automation to: " + text.removePrefix("/maps").trim()
-            text.trim().startsWith("/settings", ignoreCase = true) ->
-                "Use the Settings app card (cards/settings.md) and device automation to: " + text.removePrefix("/settings").trim()
-            text.trim().startsWith("/youtube", ignoreCase = true) ->
-                "Use the YouTube app card (cards/youtube.md) and device automation to: " + text.removePrefix("/youtube").trim()
-            else -> text
-        }
+        val promptText = text
         val prompt = if (otherFiles.isEmpty()) promptText else promptText + "\n\nAttached files in this session:\n" + otherFiles.joinToString("\n") { it.absolutePath }
         val snapshot = mutable.value
+        val invokedSkillName = text.trimStart()
+            .takeIf { it.startsWith("\$") }
+            ?.drop(1)
+            ?.takeWhile { !it.isWhitespace() }
+            ?.takeIf { it.isNotBlank() }
+        val invokedSkill = invokedSkillName?.let { name ->
+            snapshot.availableSkills.firstOrNull { it.enabled && it.name.equals(name, ignoreCase = true) }
+        }
         graph.coordinator.send(
             id,
             prompt,
             images,
             snapshot.selectedModel,
             selectedReasoningEffort(snapshot),
+            invokedSkill,
         )
         mutable.update { it.copy(attachments = emptyList(), errorMessage = null) }
     }
@@ -185,6 +171,7 @@ Provide a clear, helpful overview of what you can do on this device."""
                 val account = graph.engine.account()
                 mutable.update { it.copy(accountStatus = account) }
                 loadModels()
+                loadSkills()
             } finally { mutable.update { it.copy(isPreparingRuntime = false) } }
         }
     }
@@ -218,6 +205,17 @@ Provide a clear, helpful overview of what you can do on this device."""
             }
         }
         finally { mutable.update { it.copy(isLoadingModels = false) } }
+    }
+    private suspend fun loadSkills(sessionId: String? = current.value, forceReload: Boolean = true) {
+        val id = sessionId ?: return
+        mutable.update { it.copy(isLoadingSkills = true) }
+        try {
+            val workspace = graph.sessions.workspace(id)
+            val skills = graph.engine.skillCatalog(workspace, forceReload = forceReload)
+            mutable.update { it.copy(availableSkills = skills) }
+        } finally {
+            mutable.update { it.copy(isLoadingSkills = false) }
+        }
     }
     fun model(value: String) {
         val model = mutable.value.modelCatalog.firstOrNull { it.id == value }

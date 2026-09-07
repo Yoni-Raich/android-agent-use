@@ -63,6 +63,15 @@ data class AgentModel(
     val reasoningEfforts: List<ReasoningEffortOption> = emptyList(),
     val defaultReasoningEffort: String? = null,
 )
+
+/** Skill metadata returned by Codex's native skills/list catalog. */
+data class AgentSkill(
+    val name: String,
+    val description: String,
+    val path: String,
+    val scope: String,
+    val enabled: Boolean = true,
+)
 sealed interface EngineEvent {
     data class TurnStarted(val threadId: String, val turnId: String) : EngineEvent
     data class TextDelta(val text: String, val threadId: String? = null, val turnId: String? = null) : EngineEvent
@@ -71,6 +80,7 @@ sealed interface EngineEvent {
     data class Activity(val text: String) : EngineEvent
     data class TurnFinished(val status: String, val error: String? = null, val threadId: String? = null, val turnId: String? = null) : EngineEvent
     data class AccountChanged(val status: AccountStatus) : EngineEvent
+    data object SkillsChanged : EngineEvent
     data class Failure(val message: String, val threadId: String? = null, val turnId: String? = null) : EngineEvent
 }
 interface AgentEngine {
@@ -86,11 +96,20 @@ interface AgentEngine {
      * clients.
      */
     suspend fun modelCatalog(): List<AgentModel> = models().map { AgentModel(id = it) }
+    suspend fun skillCatalog(workspace: File, forceReload: Boolean = false): List<AgentSkill> = emptyList()
     suspend fun openSession(workspace: File, threadId: String?, model: String?, tools: List<ToolDefinition>): String
     suspend fun startTurn(threadId: String, prompt: String, images: List<File> = emptyList()): String
     /** Start a turn with an optional model-advertised reasoning effort. */
     suspend fun startTurn(threadId: String, prompt: String, images: List<File> = emptyList(), reasoningEffort: String?): String =
         startTurn(threadId, prompt, images)
+    /** Start a turn with an explicitly invoked Codex skill input item. */
+    suspend fun startTurn(
+        threadId: String,
+        prompt: String,
+        images: List<File> = emptyList(),
+        reasoningEffort: String?,
+        skill: AgentSkill?,
+    ): String = startTurn(threadId, prompt, images, reasoningEffort)
     suspend fun steer(threadId: String, turnId: String, prompt: String)
     suspend fun interrupt(threadId: String, turnId: String)
     suspend fun answerTool(requestId: String, result: ToolResult)

@@ -1,12 +1,16 @@
 ---
 name: app-cards
-description: Directory and routing for known application cards containing package names, view hierarchies, and workflows.
+description: Fast directory and routing for known application cards containing package names, view hierarchies, common selectors, and navigation workflows.
 ---
 
-# App Cards Directory
+# Android App Cards Directory
 
-- WhatsApp: `cards/whatsapp.md` (`com.whatsapp`)
-- Chrome: `cards/chrome.md` (`com.android.chrome`)
-- Google Maps: `cards/maps.md` (`com.google.android.apps.maps`)
-- Settings: `cards/settings.md` (`com.android.settings`)
-- YouTube: `cards/youtube.md` (`com.google.android.youtube`)
+When navigating popular Android applications, do not explore blindly. Read the matching app card located under `cards/<app>.md` for exact package names, key resource IDs, and verified interaction patterns:
+
+- **WhatsApp**: `cards/whatsapp.md`
+- **Google Chrome**: `cards/chrome.md`
+- **Google Maps**: `cards/maps.md`
+- **Android Settings**: `cards/settings.md`
+- **YouTube**: `cards/youtube.md`
+
+Each card details the package name, main screens, common search selectors, input fields, and action buttons.

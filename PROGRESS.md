@@ -332,3 +332,60 @@ Record actual commands and results. Mark untested features explicitly. Do not re
 - GitHub Release `v0.3.2` was published with the matching APK asset.
 - NOT TESTED: physical signed-in WebRTC voice E2E, interruption/latency,
   transcript accuracy, and voice device-tool E2E.
+
+## Floating control redesign - 2026-09-07
+- Replaced the crowded single-row overlay with a two-row native card: drag,
+  identity/status, Open and labeled Stop above a full-width steering composer.
+- Added 48dp action targets, drawn icons, pressed ripples, teal/graphite light
+  and dark surfaces, and stronger status contrast. Stop and steering callbacks,
+  foreground lifecycle, capture hiding and local input-focus release remain.
+- Window width now includes its padding and resizes on configuration changes.
+  Keyboard insets clamp the card position instead of adding transparent padding.
+  Absolute window positioning also keeps drag/tap avoidance consistent in RTL.
+- PASS: final `:overlay:testDebugUnitTest :overlay:lintDebug --no-daemon`.
+  Lint: 0 errors, 4 warnings. Scoped `git diff --check` passed.
+- Added instrumentation assertions for touch sizes, composer spacing and screen
+  bounds. NOT RUN: Q8G64TD6ZTB6H6ZL is not connected. Visual quality, keyboard,
+  rotation, and physical send/stop interactions still need device validation.
+- BLOCKED: full dev APK and instrumentation APK build failed twice in concurrent
+  engine changes: CodexEngine.kt:120 unresolved parseSkillCatalog; line 538
+  internal modifier on a local function. Those unrelated edits were preserved.
+  Logs are in overlay/build/overlay-design-app-build.log and
+  overlay/build/overlay-design-checks.log. No APK installed or release published.
+
+## Default skills standards fix - 2026-09-07
+- Implemented app-managed default skill packaging from complete `SKILL.md`
+  sources under `app/src/main/assets/agent_stack/skills/`.
+- App startup installs the defaults into the app-private
+  `$HOME/.agents/skills` before Codex app-server startup. App-managed legacy
+  copies are removed from workspace `.agents/skills/`, `.codex/skills/`, and
+  `$CODEX_HOME/skills`; unrelated skills are preserved.
+- The engine now requests the pinned app-server `skills/list` catalog for each
+  workspace. Composer suggestions use that real catalog and explicit
+  `$skill-name` invocations; the hard-coded slash-skill list is removed.
+- An explicit skill invocation is sent as both the unchanged `$skill-name`
+  prompt text and the native app-server `{type: "skill", name, path}` input.
+  `skills/changed` refreshes the active workspace catalog.
+- PASS: `./gradlew.bat test assembleDevDebug --no-daemon` (422 actionable
+  tasks, 63 executed). Kotlin recovered from a stale incremental-cache read by
+  doing the supported non-incremental fallback; the build finished successfully.
+- PASS: the debug APK contains exactly the four canonical full `SKILL.md`
+  assets. Each packaged SHA-256 matches its source, and no hidden legacy
+  `agent_stack/.agents` skill asset is present. `git diff --check` has no errors.
+- NOT TESTED: installation on physical device `Q8G64TD6ZTB6H6ZL`, live
+  `skills/list` discovery, composer selection, or an actual skill-driven turn.
+  No APK was published and no release version was changed.
+
+## Release Validation v0.3.3 - 2026-09-07
+- Bumped `versionCode=10`, `versionName=0.3.3` for the default-skills,
+  native skill-input, and floating-overlay changes.
+- PASS: `./gradlew.bat test assembleDevRelease assembleDevDebugAndroidTest
+  :voice:lintDebug --no-daemon` (630 actionable tasks, 113 executed).
+- APK: `artifacts/android-agent-0.3.3.apk`, metadata
+  `dev.androidagent.app.dev`, versionCode 10, versionName 0.3.3.
+- SHA-256: `F780B9BCA57E91A9938692BB42FA51FFFFA24E2D7D018188D8FB5CEEC9FE0F33`.
+- Zip alignment passed and APK Signature Scheme v3 verification passed with
+  the local Android debug key. This is installable for private testing, not
+  production signing.
+- NOT TESTED: physical installation/runtime behavior on
+  `Q8G64TD6ZTB6H6ZL`, live Codex account negotiation, or visual QA.

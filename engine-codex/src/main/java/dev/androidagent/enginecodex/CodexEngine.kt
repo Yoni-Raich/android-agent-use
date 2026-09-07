@@ -111,6 +111,15 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
         return parseModelCatalog(request("model/list", buildJsonObject {}))
     }
 
+    override suspend fun skillCatalog(workspace: File, forceReload: Boolean): List<AgentSkill> {
+        connect()
+        val result = request("skills/list", buildJsonObject {
+            put("cwds", buildJsonArray { add(workspace.absolutePath) })
+            put("forceReload", forceReload)
+        })
+        return parseSkillCatalog(result, workspace)
+    }
+
     override suspend fun openSession(workspace: File, threadId: String?, model: String?, tools: List<ToolDefinition>): String {
         connect()
         if (!threadId.isNullOrBlank()) {
@@ -138,7 +147,17 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
         startTurn(threadId, prompt, images, null)
 
     override suspend fun startTurn(threadId: String, prompt: String, images: List<File>, reasoningEffort: String?): String {
-        val result = request("turn/start", turnStartParams(threadId, prompt, images, reasoningEffort))
+        return startTurn(threadId, prompt, images, reasoningEffort, null)
+    }
+
+    override suspend fun startTurn(
+        threadId: String,
+        prompt: String,
+        images: List<File>,
+        reasoningEffort: String?,
+        skill: AgentSkill?,
+    ): String {
+        val result = request("turn/start", turnStartParams(threadId, prompt, images, reasoningEffort, skill))
         return result["turn"]?.jsonObject?.string("id")?.takeIf { it.isNotBlank() } ?: error("Codex returned no turn ID")
     }
 
@@ -378,6 +397,7 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
                 else scope.launch { runCatching { account() }.onSuccess { stream.emit(EngineEvent.AccountChanged(it)) } }
             }
             method == "account/updated" -> scope.launch { runCatching { account() }.onSuccess { stream.emit(EngineEvent.AccountChanged(it)) } }
+            method == "skills/changed" -> stream.emit(EngineEvent.SkillsChanged)
             method == "item/started" -> {
                 val type = (params["item"] as? JsonObject)?.string("type").orEmpty()
                 if (type !in setOf("agentMessage", "userMessage", "")) stream.emit(EngineEvent.Activity(when (type) { "reasoning" -> "Thinking"; "commandExecution" -> "Working in session files"; "fileChange" -> "Updating session files"; else -> "Working" }))
@@ -500,10 +520,16 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
             prompt: String,
             images: List<File>,
             reasoningEffort: String?,
+            skill: AgentSkill? = null,
         ): JsonObject = buildJsonObject {
             put("threadId", threadId)
             put("input", buildJsonArray {
                 add(buildJsonObject { put("type", "text"); put("text", prompt) })
+                if (skill != null) add(buildJsonObject {
+                    put("type", "skill")
+                    put("name", skill.name)
+                    put("path", skill.path)
+                })
                 images.forEach { file -> add(buildJsonObject { put("type", "localImage"); put("path", file.absolutePath) }) }
             })
             // Omitting effort keeps the app-server's model default in control.
@@ -525,6 +551,7 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
             } else {
                 require(offerSdp.isNullOrBlank()) { "A WebSocket voice session cannot include an SDP offer" }
             }
+
             put("threadId", threadId)
             put("outputModality", "audio")
             // Do not lose the final recognized words when the user taps Stop.
@@ -539,6 +566,32 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
                 })
             }
             if (!model.isNullOrBlank()) put("model", model)
+        }
+
+        internal fun parseSkillCatalog(result: JsonObject, workspace: File): List<AgentSkill> {
+            val entries = result["data"] as? JsonArray ?: return emptyList()
+            val expectedPath = workspace.absoluteFile.normalize().path
+            val entry = entries.mapNotNull { it as? JsonObject }.firstOrNull {
+                it.string("cwd").let { path ->
+                    path.isNotBlank() && File(path).absoluteFile.normalize().path == expectedPath
+                }
+            } ?: return emptyList()
+            return (entry["skills"] as? JsonArray).orEmpty()
+                .mapNotNull { it as? JsonObject }
+                .mapNotNull { skill ->
+                    val name = skill.string("name").trim()
+                    val path = skill.string("path").trim()
+                    if (name.isBlank() || path.isBlank()) return@mapNotNull null
+                    AgentSkill(
+                        name = name,
+                        description = skill.string("description").trim(),
+                        path = path,
+                        scope = skill.string("scope").trim(),
+                        enabled = (skill["enabled"] as? JsonPrimitive)?.booleanOrNull ?: true,
+                    )
+                }
+                .filter { it.enabled }
+                .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
         }
 
         /** Map the pinned thread/realtime/sdp notification without retaining SDP. */
@@ -632,15 +685,7 @@ Addressing Strategy:
 2. Tier 2 (Vision Fallback): Use screenshot only when the UI hierarchy is empty/unexposed (games, canvas, webview) or visual verification is needed.
 3. Hardware Keys: Use key(keycode="BACK") to dismiss soft keyboards or popups.
 
-Consult the workspace: read AGENTS.md, preferences.json, cards/<app>.md, .agents/skills/, and .codex/skills/ in the current working directory for task guidance, durable preferences, and recovery.
-
-Installed On-Device Skills:
-- `device-automation`: Precise UI automation via uiautomator XML hierarchy, bounds calculation, tap, type_text Unicode typing, swipe, key.
-- `recovery-and-safety`: Safety boundaries, sensitive/financial action confirmation, loop breaking, stuck state recovery.
-- `app-cards`: Pre-indexed navigation and task cards for common apps (WhatsApp, Chrome, Maps, Settings, YouTube).
-- `user-preferences`: User preference loading and localized defaults from preferences.json.
-
-Do NOT claim or report generic cloud developer skills (such as imagegen, openai-docs, plugin-creator, skill-creator, skill-installer). When asked about your skills or capabilities, always report these on-device Android automation skills and your device control tools.
+Use the skills catalog supplied by Codex. Read a skill's full SKILL.md when its description matches the task or when the user explicitly invokes it with `${'$'}skill-name`. Consult AGENTS.md and preferences.json in the current workspace for project guidance and durable preferences.
 
 Golden Rules:
 - Preserve user intent verbatim: never rewrite, extrapolate, or alter user message text or queries.

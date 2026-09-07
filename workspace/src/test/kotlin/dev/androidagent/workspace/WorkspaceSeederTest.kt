@@ -14,7 +14,7 @@ class WorkspaceSeederTest {
     val tempFolder = TemporaryFolder()
 
     @Test
-    fun seedPopulatesCompleteHarnessAndSkills() {
+    fun seedPopulatesWorkspaceHarnessWithoutSkillDuplicates() {
         val ws = tempFolder.newFolder("workspace")
         WorkspaceSeeder.seed(ws, null)
 
@@ -28,24 +28,8 @@ class WorkspaceSeederTest {
         val recoveryMd = File(ws, "RECOVERY.md")
         assertTrue("RECOVERY.md should exist", recoveryMd.isFile)
 
-        val deviceSkill = File(ws, ".agents/skills/device-automation/SKILL.md")
-        assertTrue("device-automation skill should exist", deviceSkill.isFile)
-        assertTrue("device-automation should have frontmatter", deviceSkill.readText().contains("name: device-automation"))
-
-        val recoverySkill = File(ws, ".agents/skills/recovery-and-safety/SKILL.md")
-        assertTrue("recovery-and-safety skill should exist", recoverySkill.isFile)
-
-        val prefSkill = File(ws, ".agents/skills/user-preferences/SKILL.md")
-        assertTrue("user-preferences skill should exist", prefSkill.isFile)
-
-        val appCardsSkill = File(ws, ".agents/skills/app-cards/SKILL.md")
-        assertTrue("app-cards skill should exist", appCardsSkill.isFile)
-
-        val codexDeviceSkill = File(ws, ".codex/skills/device-automation/SKILL.md")
-        assertTrue(".codex device-automation skill should exist", codexDeviceSkill.isFile)
-
-        val codexRecoverySkill = File(ws, ".codex/skills/recovery-and-safety/SKILL.md")
-        assertTrue(".codex recovery-and-safety skill should exist", codexRecoverySkill.isFile)
+        assertFalse("workspace must not duplicate user skills", File(ws, ".agents/skills/device-automation").exists())
+        assertFalse("workspace must not use legacy .codex skills", File(ws, ".codex/skills/device-automation").exists())
 
         val whatsappCard = File(ws, "cards/whatsapp.md")
         assertTrue("whatsapp.md card should exist", whatsappCard.isFile)
@@ -69,22 +53,47 @@ class WorkspaceSeederTest {
     }
 
     @Test
-    fun seedToCodexHomePopulatesSkills() {
-        val codexHome = tempFolder.newFolder("codex_home")
-        WorkspaceSeeder.seedToCodexHome(codexHome)
+    fun installDefaultSkillsUsesStandardUserRootAndCleansLegacyCopies() {
+        val home = tempFolder.newFolder("home")
+        val legacy = File(home, ".codex/skills/device-automation/SKILL.md")
+        legacy.parentFile!!.mkdirs()
+        legacy.writeText("legacy")
+        val contents = mapOf(
+            "device-automation" to "device body",
+            "recovery-and-safety" to "recovery body",
+            "user-preferences" to "preferences body",
+            "app-cards" to "cards body",
+        )
 
-        val deviceSkill = File(codexHome, "skills/device-automation/SKILL.md")
-        assertTrue(deviceSkill.isFile)
-        assertTrue(deviceSkill.readText().contains("name: device-automation"))
+        WorkspaceSeeder.installDefaultSkills(home) { relativePath ->
+            val name = relativePath.substringBefore('/')
+            "---\nname: $name\ndescription: $name description\n---\n\n${contents.getValue(name)}\n".toByteArray()
+        }
 
-        val recoverySkill = File(codexHome, "skills/recovery-and-safety/SKILL.md")
-        assertTrue(recoverySkill.isFile)
+        for ((name, body) in contents) {
+            val installed = File(home, ".agents/skills/$name/SKILL.md")
+            assertTrue("$name should be installed in the standard user root", installed.isFile)
+            assertTrue(installed.readText().contains(body))
+        }
+        assertFalse("legacy CODEX_HOME skill copy should be removed", legacy.exists())
+        assertFalse("deprecated CODEX_HOME skill root must not be populated", File(home, ".codex/skills/app-cards").exists())
+    }
 
-        val userPrefsSkill = File(codexHome, "skills/user-preferences/SKILL.md")
-        assertTrue(userPrefsSkill.isFile)
+    @Test
+    fun seedRemovesOnlyManagedWorkspaceSkillDuplicates() {
+        val ws = tempFolder.newFolder("workspace_cleanup")
+        val oldManaged = File(ws, ".agents/skills/device-automation/SKILL.md")
+        oldManaged.parentFile!!.mkdirs()
+        oldManaged.writeText("old managed copy")
+        val unrelated = File(ws, ".agents/skills/custom-user-skill/SKILL.md")
+        unrelated.parentFile!!.mkdirs()
+        unrelated.writeText("keep me")
 
-        val appCardsSkill = File(codexHome, "skills/app-cards/SKILL.md")
-        assertTrue(appCardsSkill.isFile)
+        WorkspaceSeeder.seed(ws, null)
+
+        assertFalse(oldManaged.exists())
+        assertTrue("unrelated skills must remain untouched", unrelated.isFile)
+        assertEquals("keep me", unrelated.readText())
     }
 
     @Test

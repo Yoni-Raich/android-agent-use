@@ -5,6 +5,42 @@ description: Manage persistent user preferences, default applications, and frequ
 
 # User Preferences System
 
-1. Check `preferences.json` in workspace before asking user for preferred app or address.
-2. If preference exists, use it silently.
-3. If preference is learned, update `preferences.json` in workspace.
+To provide a smooth, personalized experience without asking repetitive questions, the agent maintains a durable `preferences.json` file in the session workspace.
+
+---
+
+## 1. Preferences Structure (`preferences.json`)
+
+```json
+{
+  "apps": {
+    "messaging": "WhatsApp",
+    "browser": "Chrome",
+    "maps": "Google Maps",
+    "music": "YouTube"
+  },
+  "addresses": {
+    "home": "",
+    "work": ""
+  },
+  "contacts": {
+    "mom": "",
+    "partner": ""
+  },
+  "defaults": {
+    "confirm_before_send": true
+  }
+}
+```
+
+---
+
+## 2. Operational Rules
+
+1. **Check First**:
+   - When the user asks to "send a message" or "navigate", check `preferences.json` to see if a preferred app or saved destination exists.
+   - If found, proceed using that preference without asking the user.
+2. **Ask & Save**:
+   - If the preference is missing and the user specifies it (e.g. "I always use Chrome"), update `preferences.json` in the workspace so subsequent tasks remember this choice.
+3. **Updating Preferences**:
+   - Use standard shell/file tools in the session workspace to maintain and update the JSON structure.

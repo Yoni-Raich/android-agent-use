@@ -46,6 +46,7 @@ class AgentCoordinator(
         images: List<File> = emptyList(),
         model: String? = null,
         reasoningEffort: String? = null,
+        skill: AgentSkill? = null,
     ) {
         if (prompt.isBlank() && images.isEmpty()) return
         synchronized(lifecycleLock) {
@@ -66,7 +67,7 @@ class AgentCoordinator(
             awaitingTurn = false
             startupEvents.clear()
             textRevision = 0L
-            runJob = scope.launch { run(token, runCompletion, sessionId, prompt, images, model, reasoningEffort) }
+            runJob = scope.launch { run(token, runCompletion, sessionId, prompt, images, model, reasoningEffort, skill) }
         }
     }
 
@@ -168,6 +169,7 @@ class AgentCoordinator(
         images: List<File>,
         model: String?,
         reasoningEffort: String?,
+        skill: AgentSkill?,
     ) {
         try {
             // Keep the control surface visible for the whole active run. This
@@ -203,7 +205,7 @@ class AgentCoordinator(
             }
             overlay.updateState(OverlayState(OverlayPhase.THINKING))
             beginTurn(token)
-            val startedTurn = engine.startTurn(openedThread, prompt, images, reasoningEffort)
+            val startedTurn = engine.startTurn(openedThread, prompt, images, reasoningEffort, skill)
             if (!activateTurn(token, startedTurn)) return
             ensureCurrent(token)
             runCompletion.await()
@@ -592,7 +594,7 @@ class AgentCoordinator(
                     completion?.complete(Unit)
                 }
             }
-            is EngineEvent.AccountChanged -> Unit
+            is EngineEvent.AccountChanged, EngineEvent.SkillsChanged -> Unit
         }
     }
 
@@ -705,7 +707,7 @@ class AgentCoordinator(
         is EngineEvent.TurnFinished -> event.threadId
         is EngineEvent.Approval -> event.threadId
         is EngineEvent.Failure -> event.threadId
-        is EngineEvent.Activity, is EngineEvent.AccountChanged -> null
+        is EngineEvent.Activity, is EngineEvent.AccountChanged, EngineEvent.SkillsChanged -> null
     }
 
     private fun turnIdOf(event: EngineEvent): String? = when (event) {
@@ -715,7 +717,7 @@ class AgentCoordinator(
         is EngineEvent.TurnFinished -> event.turnId
         is EngineEvent.Approval -> event.turnId
         is EngineEvent.Failure -> event.turnId
-        is EngineEvent.Activity, is EngineEvent.AccountChanged -> null
+        is EngineEvent.Activity, is EngineEvent.AccountChanged, EngineEvent.SkillsChanged -> null
     }
 
     private fun message(session: String, role: String, text: String, attachments: List<String> = emptyList()) =
