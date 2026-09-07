@@ -411,3 +411,32 @@ Record actual commands and results. Mark untested features explicitly. Do not re
   production signing.
 - NOT TESTED: physical installation/runtime behavior on
   `Q8G64TD6ZTB6H6ZL`, live WhatsApp workflow latency, or visual QA.
+
+## Release Validation v0.3.6 - 2026-09-07
+- Bumped `versionCode=13`, `versionName=0.3.6` for the `read_ui` staged-dump fix
+  and unchanged-screen suppression. `0.3.5` was an intermediate on-device test
+  build carrying the staged-dump fix alone; it was installed on the phone for
+  measurement but never tagged or published.
+- PASS: `./gradlew.bat test assembleDevRelease assembleDevDebugAndroidTest :voice:lintDebug --no-daemon` (630 actionable tasks, 70 executed).
+- PASS: `python -m unittest tools.test_prepare_runtime`; `git diff --check` clean.
+- APK: `artifacts/android-agent-0.3.6.apk`, metadata
+  `dev.androidagent.app.dev`, versionCode 13, versionName 0.3.6.
+- SHA-256: `58E5BB1FA20E9589AB93CA720546A25932490075950C67AAC58E84C9E5EF0BFC`.
+- Zip alignment passed and APK Signature Scheme v3 verification passed with
+  the local Android debug key. This is installable for private testing, not
+  production signing.
+- TESTED ON HARDWARE (`00152154B002517`, Nothing A059, Android 16): first
+  on-device evidence in this project that `read_ui` returns a hierarchy. Two
+  traced WhatsApp runs produced 13 successful observations (7-37 KB each), and
+  the agent opened the correct contact and sent the message end to end. Under
+  v0.3.4 `/sdcard/window_dump.xml` was never written at all, because the
+  `DIRECT_FALLBACK_MAX_MS` guard skipped the only working path.
+- MEASURED: per-observation cadence is ~11 s (11.7 s over 8 observations on the
+  first run, 10.7 s over 4 on the second) of which only ~2.2 s is ADB. Device
+  work is roughly 21% of wall time; the rest is model inference. Total task time
+  tracks step count, not per-call latency.
+- NOT TESTED: the unchanged-screen suppression never fired on hardware. Both
+  traced runs saw a different screen at every observation, so the dedupe path
+  has unit coverage only. Reproducing it needs a contact that forces a search.
+- NOT TESTED: voice/realtime, visual QA, and any workflow other than the
+  WhatsApp send.
