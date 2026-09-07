@@ -76,13 +76,14 @@ Voice is isolated behind `RealtimeVoiceEngine` and the separate `voice` module.
 The pinned Codex 0.153.4 app-server remains the single JSON-RPC stdio process.
 The default app path creates an Android WebRTC peer connection with a local
 microphone track and the `oai-events` data channel, then starts
-`thread/realtime/start` with `outputModality: "audio"`, protocol V1, and
-`transport: { type: "webrtc", sdp: "..." }`. App-server returns the remote
-answer through `thread/realtime/sdp`; the Android WebRTC audio device module
-handles the negotiated microphone and speaker media. V2 WebSocket voice remains
-available only as an explicit `RealtimeTransport.WEBSOCKET` fallback; it still
-needs API-key auth on the pinned app-server and does not fix the ChatGPT-account
-error.
+`thread/realtime/start` with `outputModality: "audio"`, protocol V3, and
+`transport: { type: "webrtc", sdp: "..." }`. The pinned app-server maps V3
+to the AVAS request header `OpenAI-Alpha: quicksilver=v2`, then returns the
+remote answer through `thread/realtime/sdp`. The Android WebRTC audio device
+module handles the negotiated microphone and speaker media. V2 WebSocket voice
+remains available only as an explicit `RealtimeTransport.WEBSOCKET` fallback;
+it still needs API-key auth on the pinned app-server and does not fix the
+ChatGPT-account error.
 
 Realtime is enabled in the app-private `CODEX_HOME/config.toml` through a small
 startup migration. It adds only `[features] realtime_conversation = true`,

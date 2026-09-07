@@ -529,9 +529,9 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
             put("outputModality", "audio")
             // Do not lose the final recognized words when the user taps Stop.
             put("flushTranscriptTailOnSessionEnd", true)
-            // The pinned app-server rejects Realtime Voice V2 over WebRTC. V1 is
-            // the account-authenticated AVAS path that accepts a client SDP offer.
-            put("version", if (transport == RealtimeTransport.WEBRTC) "v1" else "v2")
+            // The pinned app-server rejects Realtime Voice V2 over WebRTC. V3
+            // selects the AVAS path that adds OpenAI-Alpha: quicksilver=v2.
+            put("version", if (transport == RealtimeTransport.WEBRTC) "v3" else "v2")
             if (transport == RealtimeTransport.WEBRTC) {
                 put("transport", buildJsonObject {
                     put("type", "webrtc")

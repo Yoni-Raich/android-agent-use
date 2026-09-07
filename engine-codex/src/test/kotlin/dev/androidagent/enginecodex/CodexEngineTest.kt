@@ -99,7 +99,7 @@ class CodexEngineTest {
         assertFalse(params.containsKey("transport"))
     }
 
-    @Test fun realtimeStartUsesWebRtcV1AndSdpOffer() {
+    @Test fun realtimeStartUsesWebRtcV3AndSdpOffer() {
         val params = CodexEngine.realtimeStartParams(
             "thread-1",
             null,
@@ -108,7 +108,7 @@ class CodexEngineTest {
         )
 
         assertEquals("audio", params["outputModality"]?.jsonPrimitive?.content)
-        assertEquals("v1", params["version"]?.jsonPrimitive?.content)
+        assertEquals("v3", params["version"]?.jsonPrimitive?.content)
         assertEquals("webrtc", params["transport"]?.jsonObject?.get("type")?.jsonPrimitive?.content)
         assertEquals("v=0\\r\\n...offer", params["transport"]?.jsonObject?.get("sdp")?.jsonPrimitive?.content)
         assertFalse(params.containsKey("model"))

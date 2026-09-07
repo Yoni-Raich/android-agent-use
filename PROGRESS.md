@@ -280,7 +280,7 @@ Record actual commands and results. Mark untested features explicitly. Do not re
 ## WebRTC realtime voice - 2026-09-07
 - Added the default native WebRTC voice transport for the pinned Codex
   app-server. Android now creates a peer connection with a local microphone
-  track and `oai-events` data channel, sends a V1
+  track and `oai-events` data channel, sends a V3
   `thread/realtime/start` request with the local SDP offer, and applies the
   `thread/realtime/sdp` answer notification.
 - The existing app-server WebSocket PCM path remains available only through
@@ -302,3 +302,18 @@ Record actual commands and results. Mark untested features explicitly. Do not re
   capture, latency, interruption, transcript accuracy, or voice device-tool
   E2E. No install, visual check, commit, push, or release was made.
 
+## WebRTC AVAS header repair - 2026-09-07
+- Device testing exposed the pinned app-server error
+  `invalid_quicksilver_alpha_header`: WebRTC V1 selected
+  `OpenAI-Alpha: quicksilver=v1`, but AVAS now requires
+  `OpenAI-Alpha: quicksilver=v2`.
+- Official Codex source comparison confirmed that WebRTC V3 selects the
+  required `quicksilver=v2` header while V2 remains unsupported for WebRTC.
+  Updated only the WebRTC request from V1 to V3; the explicit WebSocket V2
+  fallback is unchanged. No binary patch or API key is needed.
+- Focused request-shape tests now assert WebRTC V3 and still assert WebSocket
+  V2. Fresh build passed with `test assembleDevDebug :voice:lintDebug
+  --no-daemon`. APK: `app/build/outputs/apk/dev/debug/app-dev-debug.apk`,
+  SHA-256 `08C15ADE7ACCF6BAA6C33D0F8EB78187350CD807B26173F9768C7F32A486FEBA`.
+  The APK contains WebRTC native libraries for `arm64-v8a` and `x86_64`.
+  It was not installed or physically retested in this task.
