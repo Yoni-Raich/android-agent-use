@@ -28,6 +28,7 @@ import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import java.io.File
 import java.io.StringReader
+import java.security.MessageDigest
 import java.util.Base64
 import java.util.concurrent.atomic.AtomicLong
 import org.xmlpull.v1.XmlPullParser
@@ -57,6 +58,14 @@ class AndroidDeviceTools(
     @Volatile private var runId: String? = null
     private val observationRevision = AtomicLong(0L)
 
+    /**
+     * Digest of the last semantic observation sent to the model, so an
+     * unchanged screen can be acknowledged instead of resent. Cleared on
+     * [beginRun] and after any failed observation, so a run always starts from
+     * a full payload and never answers "unchanged" across a gap in knowledge.
+     */
+    @Volatile private var lastObservation: ObservationFingerprint? = null
+
     override val definitions: List<ToolDefinition> = TOOL_DEFINITIONS
 
     override fun beginRun(runId: String, workspace: File) {
@@ -65,6 +74,7 @@ class AndroidDeviceTools(
             this.runId = runId
             this.workspace = workspace.absoluteFile
             workspace.absoluteFile.mkdirs()
+            lastObservation = null
             revoked = false
         }
     }
@@ -121,16 +131,22 @@ class AndroidDeviceTools(
     private suspend fun readUi(arguments: JsonObject): ToolResult {
         val timeout = arguments.timeoutMsOrDefault(READ_UI_DEFAULT_TIMEOUT_MS)
         val raw = arguments["raw"]?.jsonPrimitive?.booleanOrNull ?: false
+        val force = arguments["force"]?.jsonPrimitive?.booleanOrNull ?: false
         val revision = observationRevision.incrementAndGet()
         val observationId = "ui-$revision"
         val startedAt = System.nanoTime()
 
         return try {
-            withTimeout(timeout) {
-                readUiWithinBudget(raw, revision, observationId, startedAt, timeout)
+            val result = withTimeout(timeout) {
+                readUiWithinBudget(raw, force, revision, observationId, startedAt, timeout)
             }
+            // A failed observation means the screen is unknown, so the next
+            // successful one must carry a full payload rather than a diff.
+            if (!result.success) lastObservation = null
+            result
         } catch (error: TimeoutCancellationException) {
             currentCoroutineContext().ensureActive()
+            lastObservation = null
             uiFailure(
                 observationId = observationId,
                 revision = revision,
@@ -141,6 +157,7 @@ class AndroidDeviceTools(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
+            lastObservation = null
             uiFailure(
                 observationId = observationId,
                 revision = revision,
@@ -153,89 +170,50 @@ class AndroidDeviceTools(
 
     private suspend fun readUiWithinBudget(
         raw: Boolean,
+        force: Boolean,
         revision: Long,
         observationId: String,
         startedAt: Long,
         totalBudgetMs: Long,
     ): ToolResult {
-        // /dev/tty prints the hierarchy to stdout without staging a file.
-        val direct = runUiDumpCommand(
-            "uiautomator dump --compressed /dev/tty",
+        // Staging the dump to a file and reading it back is the only path that
+        // returns a hierarchy across shell transports. Writing the dump to
+        // /dev/tty (or /proc/self/fd/1) makes uiautomator report success and
+        // exit 0 while emitting no hierarchy unless the shell service happens to
+        // forward raw stdout, so that shortcut is never attempted: on the
+        // supported device it cost ~2.2s per call and always returned nothing.
+        val attempt = runUiDumpCommand(
+            "uiautomator dump --compressed ${quotedRemote(UI_DUMP_PATH)} && cat ${quotedRemote(UI_DUMP_PATH)}",
             remainingBudget(startedAt, totalBudgetMs),
         )
-        val directCompleted = when (direct) {
+        val completed = when (attempt) {
             is UiDumpAttempt.TimedOut -> return uiFailure(
                 observationId, revision, startedAt, "ui_timeout",
-                "UI hierarchy timed out; no fallback dump was attempted",
+                "UI hierarchy dump timed out within the total budget",
             )
-            is UiDumpAttempt.Completed -> direct
+            is UiDumpAttempt.Completed -> attempt
         }
 
-        val directResult = directCompleted.result
-        if (isIdleFailure(directResult.output)) {
+        val dump = completed.result
+        if (isIdleFailure(dump.output)) {
             return uiFailure(
                 observationId, revision, startedAt, "ui_idle_failure",
-                "UI Automator could not get idle state; no fallback dump was attempted",
+                "UI Automator could not get idle state; no additional dump was attempted",
             )
         }
-        val directXml = extractHierarchyXml(directResult.output)
-        if (directResult.exitCode == 0 && directXml != null) {
-            return completeUiObservation(
-                directXml, "direct", raw, observationId, revision, startedAt,
-            )
-        }
-        if (directXml != null) {
-            return uiFailure(
-                observationId, revision, startedAt, "ui_dump_failure",
-                "Direct UI hierarchy dump failed with exit ${directResult.exitCode}",
-            )
-        }
-
-        // A second dump is allowed only when the direct path failed quickly for
-        // a non-idle reason. Its timeout is the remaining total budget.
-        if (directCompleted.elapsedMs > DIRECT_FALLBACK_MAX_MS) {
-            return uiFailure(
-                observationId, revision, startedAt, "ui_dump_unsupported",
-                "Direct UI hierarchy path returned no hierarchy; fallback was skipped after a slow attempt",
-            )
-        }
-        val remaining = remainingBudget(startedAt, totalBudgetMs)
-        if (remaining <= 0L) {
-            return uiFailure(
-                observationId, revision, startedAt, "ui_timeout",
-                "UI hierarchy budget was exhausted before the fallback dump",
-            )
-        }
-        val fallback = runUiDumpCommand(
-            "uiautomator dump --compressed ${quotedRemote(UI_DUMP_PATH)} && cat ${quotedRemote(UI_DUMP_PATH)}",
-            remaining,
-        )
-        val fallbackCompleted = when (fallback) {
-            is UiDumpAttempt.TimedOut -> return uiFailure(
-                observationId, revision, startedAt, "ui_timeout",
-                "Fallback UI hierarchy dump timed out within the total budget",
-            )
-            is UiDumpAttempt.Completed -> fallback
-        }
-        if (isIdleFailure(fallbackCompleted.result.output)) {
-            return uiFailure(
-                observationId, revision, startedAt, "ui_idle_failure",
-                "UI Automator could not get idle state during fallback; no additional dump was attempted",
-            )
-        }
-        val fallbackXml = extractHierarchyXml(fallbackCompleted.result.output)
+        val xml = extractHierarchyXml(dump.output)
             ?: return uiFailure(
                 observationId, revision, startedAt, "ui_dump_failure",
                 "UI hierarchy dump returned no hierarchy XML",
             )
-        if (fallbackCompleted.result.exitCode != 0) {
+        if (dump.exitCode != 0) {
             return uiFailure(
                 observationId, revision, startedAt, "ui_dump_failure",
-                "Fallback UI hierarchy dump failed with exit ${fallbackCompleted.result.exitCode}",
+                "UI hierarchy dump failed with exit ${dump.exitCode}",
             )
         }
         return completeUiObservation(
-            fallbackXml, "file-fallback", raw, observationId, revision, startedAt,
+            xml, "file", raw, force, observationId, revision, startedAt,
         )
     }
 
@@ -256,15 +234,35 @@ class AndroidDeviceTools(
         xml: String,
         source: String,
         raw: Boolean,
+        force: Boolean,
         observationId: String,
         revision: Long,
         startedAt: Long,
     ): ToolResult {
         // raw=true is an explicit compatibility/debug path. It does not claim
-        // that semantic parsing succeeded.
+        // that semantic parsing succeeded, and it never participates in
+        // unchanged-screen suppression.
         if (raw) return ToolResult(bound(xml))
         return try {
             val parsed = parseUiHierarchy(xml)
+            val fingerprint = ObservationFingerprint(
+                digest = observationDigest(parsed.activePackage, parsed.nodes),
+                revision = revision,
+            )
+            val previous = lastObservation
+            if (!force && previous != null && previous.digest == fingerprint.digest) {
+                // The screen is byte-identical to what the model already holds.
+                // Acknowledge it instead of resending the whole node list.
+                return ToolResult(
+                    bound(
+                        unchangedObservationJson(
+                            parsed.activePackage, parsed.nodes.size, source,
+                            observationId, revision, elapsedMs(startedAt),
+                            previous.revision,
+                        ),
+                    ),
+                )
+            }
             var nodes = parsed.nodes
             var truncated = false
             var text = semanticObservationJson(
@@ -279,6 +277,7 @@ class AndroidDeviceTools(
                     elapsedMs(startedAt), truncated,
                 )
             }
+            lastObservation = fingerprint
             ToolResult(bound(text))
         } catch (error: Exception) {
             uiFailure(
@@ -366,6 +365,48 @@ class AndroidDeviceTools(
         activePackage?.let { put("activePackage", it) }
         put("truncated", truncated)
         put("nodes", buildJsonArray { nodes.forEach { add(it.toJson()) } })
+    }.toString()
+
+    /**
+     * Digest of exactly what the model would receive, so a screen that merely
+     * re-renders identically is recognised. Bounds are part of the node JSON,
+     * so any real movement changes the digest.
+     */
+    private fun observationDigest(activePackage: String?, nodes: List<ParsedUiNode>): String {
+        val payload = buildJsonObject {
+            activePackage?.let { put("activePackage", it) }
+            put("nodes", buildJsonArray { nodes.forEach { add(it.toJson()) } })
+        }.toString()
+        return MessageDigest.getInstance("SHA-256")
+            .digest(payload.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it.toInt() and 0xFF) }
+    }
+
+    private fun unchangedObservationJson(
+        activePackage: String?,
+        nodeCount: Int,
+        source: String,
+        observationId: String,
+        revision: Long,
+        elapsedMs: Long,
+        unchangedSinceRevision: Long,
+    ): String = buildJsonObject {
+        put("ok", true)
+        put("observationId", observationId)
+        put("revision", revision)
+        put("elapsedMs", elapsedMs)
+        put("source", source)
+        put("stable", true)
+        activePackage?.let { put("activePackage", it) }
+        put("unchanged", true)
+        put("unchangedSinceRevision", unchangedSinceRevision)
+        put("nodeCount", nodeCount)
+        put(
+            "hint",
+            "Screen is identical to revision $unchangedSinceRevision. Reuse those nodes; " +
+                "if the previous action was meant to change the screen it did not take effect. " +
+                "Call read_ui with force=true to resend the full node list.",
+        )
     }.toString()
 
     private fun uiFailure(
@@ -460,6 +501,9 @@ class AndroidDeviceTools(
             clickableAncestor = null,
         )
     }
+
+    /** Identity of the last semantic observation handed to the model. */
+    private data class ObservationFingerprint(val digest: String, val revision: Long)
 
     private sealed interface UiDumpAttempt {
         data class Completed(val result: CommandResult, val elapsedMs: Long) : UiDumpAttempt
@@ -853,7 +897,6 @@ class AndroidDeviceTools(
         const val MAX_PUSH_BYTES = 64 * 1024 * 1024
         const val MAX_APK_BYTES = 256 * 1024 * 1024
         const val UI_DUMP_PATH = "/sdcard/window_dump.xml"
-        private const val DIRECT_FALLBACK_MAX_MS = 1_500L
         private const val MAX_UI_FIELD_CHARS = 256
         private const val MAX_UI_XML_CHARS = 512 * 1024
         private const val MAX_UI_XML_DEPTH = 128
@@ -1021,8 +1064,8 @@ class AndroidDeviceTools(
             tool("device_status", "Read ADB connection state. Read-only.", emptyMap(), emptyList()),
             tool(
                 "read_ui",
-                "Read a bounded compact semantic UI observation. Returns labeled/actionable nodes by default; use raw=true only for debug XML. Timeout or idle failures are typed and do not trigger a second full dump.",
-                mapOf("timeoutMs" to "integer", "raw" to "boolean"),
+                "Read a bounded compact semantic UI observation. Returns labeled/actionable nodes by default; use raw=true only for debug XML. When the screen is identical to the previous observation the reply is \"unchanged\":true with \"unchangedSinceRevision\" instead of the node list — reuse the nodes from that revision, or pass force=true to resend them. Timeout or idle failures are typed and do not trigger a second dump.",
+                mapOf("timeoutMs" to "integer", "raw" to "boolean", "force" to "boolean"),
                 emptyList(),
             ),
             tool("screenshot", "Capture a PNG screenshot. Returns imageBase64. Read-only.", emptyMap(), emptyList()),
