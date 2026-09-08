@@ -504,3 +504,63 @@ error from twenty minutes ago says nothing about the turn that just failed. A
 host rejected by the allowlist surfaces as **403**, not 502, so a 502 is never
 a sign of a misconfigured host list. Only the category reaches the UI — the
 buffer holds metadata, never tunnel bytes or credentials.
+
+## Running a known sequence without a turn per step
+
+`run_workflow` executes a declared list of steps locally. `save_workflow` and
+`list_workflows` keep sequences in `<homeDirectory>/workflows/<package>.json`,
+one file per package so a package's selectors and its workflows age out
+together when the app is redesigned.
+
+Four constraints shape it.
+
+**The allowed step set is closed.** Only navigation, gesture, text and
+observation tools may appear in a workflow. A workflow that could run any tool
+would be a second, weaker agent loop with none of the coordinator's
+guarantees - no approval routing, no per-tool control banner, no revoke
+semantics of its own. `shell`, `install_apk`, the knowledge tools and
+`run_workflow` itself are all refused before anything runs.
+
+**A committed step is never re-run because a later one failed.** This is
+`act_and_observe`'s rule extended rather than changed. The result carries the
+completed prefix, the failing index, and `lastCommittedStepMayHaveRun` - true
+for the tools that change something - so the model resumes from where it
+stopped instead of replaying a send or a tap.
+
+**Every step is bounded and so is the whole run.** The coordinator holds a
+process-wide lock for the duration of one tool call and budgets two seconds
+for cancel, so a workflow that ran for minutes would make Stop feel broken.
+The total budget is clamped to 90 seconds.
+
+**Revoke aborts between steps.** `isRevoked` is consulted before each one, and
+a stopped workflow reports what had already run rather than a bare failure.
+
+The engine dispatches steps straight at the composite rather than back through
+the coordinator, so it does not re-enter `toolLock`. The router is resolved per
+call rather than captured, both because the composite contains this gateway -
+which would otherwise be a construction cycle - and so a step reaches whichever
+backend currently serves that tool.
+
+## Connected Apps: the surface exists, the answer does not
+
+`.codex-work/runtime/probe_apps.py` probes a running on-phone app-server for
+`app/list`, `app/installed`, `plugin/list`, `plugin/installed`,
+`mcpServerStatus/list` and `experimentalFeature/list`.
+
+All six answer on the shipped build (rust-v0.153.4) rather than erroring, so
+the surface is present. `experimentalFeature/list` returns 135 flags, which is
+the most substantial thing there.
+
+But the probe runs against a scratch `CODEX_HOME` under `/data/local/tmp`,
+which has no `auth.json` - it is anonymous, and an anonymous server returns
+zero connectors regardless of what the account has. So the zeroes it reports
+are **not** an answer to "does this account have Gmail or GitHub connected".
+The probe now calls `account/read` first and says so in its own output, because
+reading those zeroes as a finding is the obvious mistake and it is worth
+preventing rather than documenting.
+
+Answering the question properly needs an authenticated session. Copying the
+app's `auth.json` into `/data/local/tmp` would do it and is the wrong trade:
+that directory is world-readable on the device. The right route is to make the
+calls from inside the app, where `CodexEngine` already holds a signed-in
+session, behind a debug-only path.
