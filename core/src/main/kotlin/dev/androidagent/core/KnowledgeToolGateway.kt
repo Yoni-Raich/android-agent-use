@@ -84,6 +84,7 @@ class KnowledgeToolGateway(
                 ?: throw IllegalArgumentException("selector is required"),
             does = arguments.string("does") ?: "",
             intent = arguments.string("intent"),
+            hint = arguments.string("hint"),
             fallbacks = runCatching {
                 arguments["fallbacks"]!!.jsonArray.mapNotNull { it.jsonPrimitive.contentOrNull }
             }.getOrDefault(emptyList()),
@@ -121,13 +122,17 @@ class KnowledgeToolGateway(
                 "remember_capability",
                 "Record one thing you worked out about an app, so the next chat does not " +
                     "rediscover it. The selector must be a resourceId or a contentDescription " +
-                    "from read_ui — never coordinates, which stop being true on the next render.",
+                    "from read_ui, never a bare coordinate pair — that stops being true on the " +
+                    "next render. If the screen exposes nothing addressable at all (a canvas, a " +
+                    "game, an unexposed WebView), use whatever description fits as the selector " +
+                    "and put the coordinate in hint.",
                 mapOf(
                     "package" to "string",
                     "screen" to "string",
                     "selector" to "string",
                     "does" to "string",
                     "intent" to "string",
+                    "hint" to "string",
                     "fallbacks" to "array",
                 ),
                 listOf("package", "selector"),

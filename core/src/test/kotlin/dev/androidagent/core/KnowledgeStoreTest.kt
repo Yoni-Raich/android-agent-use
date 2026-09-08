@@ -79,14 +79,50 @@ class KnowledgeStoreTest {
         assertEquals(listOf("com.android.chrome", "com.whatsapp"), subject.packages())
     }
 
-    @Test fun aCoordinateIsRefusedAsASelector() {
+    @Test fun aBareCoordinateIsRefusedAsASelector() {
         // Storing one would quietly undo the reason this store exists: it stops
         // being true on the next render.
-        for (bad in listOf("540,1200", "[540,1200]", "(540, 1200)", "540;1200")) {
+        for (bad in listOf("540,1200", "[540,1200]", "(540, 1200)", "540;1200", " 540 , 1200 ")) {
             assertThrows(IllegalArgumentException::class.java) {
                 store().upsert(record(selector = bad))
             }
         }
+    }
+
+    @Test fun anOrdinaryLabelThatContainsDigitsIsNotACoordinate() {
+        // Regression: the first version of the check matched a digit pair
+        // anywhere in the selector, so real contentDescriptions were refused.
+        val labels = listOf(
+            "1,234 messages",
+            "3,000 photos",
+            "12,5 km to destination",
+            "Chat with Danny, 2 unread",
+            "Row 4, column 2 of the grid",
+        )
+        for (label in labels) {
+            val subject = store()
+            clock += 1
+            subject.upsert(record(selector = label))
+            assertTrue("$label should be storable", subject.read("com.whatsapp").any { it.selector == label })
+        }
+    }
+
+    @Test fun aScreenWithNothingAddressableCanStillBeRecorded() {
+        // A canvas, a game, an unexposed WebView. Refusing the record outright
+        // would lose the partial knowledge as well as the coordinate.
+        val subject = store()
+        subject.upsert(
+            record(selector = "game canvas: fire button").copy(hint = "roughly 980,1840 on a 1080x2400 screen"),
+        )
+        val back = subject.read("com.whatsapp").single()
+        assertEquals("roughly 980,1840 on a 1080x2400 screen", back.hint)
+    }
+
+    @Test fun theHintReachesTheSummarySoItIsUsableNotJustStored() {
+        val subject = store()
+        subject.upsert(record().copy(hint = "bottom right, below the composer"))
+        val entry = subject.summary("com.whatsapp")["records"]!!.jsonArray.single().jsonObject
+        assertEquals("bottom right, below the composer", entry["hint"]!!.jsonPrimitive.content)
     }
 
     @Test fun aBlankSelectorIsRefused() {
@@ -129,13 +165,13 @@ class KnowledgeStoreTest {
         val summary = subject.summary("com.whatsapp")
         val entry = summary["records"]!!.jsonArray.single().jsonObject
         assertTrue(entry["stale"]!!.jsonPrimitive.booleanOrNull == true)
-        assertTrue(summary["hint"]!!.jsonPrimitive.content.contains("verify", ignoreCase = true))
+        assertTrue(summary["guidance"]!!.jsonPrimitive.content.contains("verify", ignoreCase = true))
     }
 
     @Test fun anEmptySummaryTellsTheModelToRecordWhatItLearns() {
         val summary = store().summary("com.example.absent")
         assertEquals(0, summary["known"]!!.jsonPrimitive.intOrNull)
-        assertTrue(summary["hint"]!!.jsonPrimitive.content.contains("remember_capability"))
+        assertTrue(summary["guidance"]!!.jsonPrimitive.content.contains("remember_capability"))
     }
 
     @Test fun theSummaryIsBoundedSoItCannotFloodThePrompt() {

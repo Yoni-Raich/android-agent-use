@@ -44,7 +44,8 @@ class KnowledgeStore(
      * One thing the agent knows how to do in one app.
      *
      * @param selector the durable address — a resource id, or a content
-     *   description when the app exposes no id. Never coordinates.
+     *   description when the app exposes no id. Never a bare coordinate pair;
+     *   a screen that exposes nothing addressable puts that in [hint] instead.
      * @param lastVerified when this was last seen to work. Selectors age out
      *   with app updates, and stale confidence is worse than no confidence, so
      *   this is mandatory rather than optional.
@@ -56,6 +57,16 @@ class KnowledgeStore(
         val does: String,
         val intent: String? = null,
         val fallbacks: List<String> = emptyList(),
+        /**
+         * Free-form context that is useful but not addressable — including
+         * coordinates, which are refused as a [selector] and allowed here.
+         *
+         * Some screens expose no id and no description at all: a canvas, a
+         * game, an unexposed WebView. Refusing to record anything about those
+         * loses the partial knowledge too, so they get a place to put it, on
+         * the condition that it is never mistaken for a durable address.
+         */
+        val hint: String? = null,
         val lastVerified: Long = 0L,
     ) {
         fun toJson(): JsonObject = buildJsonObject {
@@ -63,6 +74,7 @@ class KnowledgeStore(
             put("selector", selector)
             put("does", does)
             intent?.let { put("intent", it) }
+            hint?.let { put("hint", it) }
             if (fallbacks.isNotEmpty()) {
                 put("fallbacks", JsonArray(fallbacks.map { JsonPrimitive(it) }))
             }
@@ -154,6 +166,7 @@ class KnowledgeStore(
                             put("selector", record.selector)
                             put("does", record.does)
                             record.intent?.let { put("intent", it) }
+                            record.hint?.let { put("hint", it) }
                             if (record.fallbacks.isNotEmpty()) {
                                 put("fallbacks", JsonArray(record.fallbacks.map { JsonPrimitive(it) }))
                             }
@@ -166,14 +179,14 @@ class KnowledgeStore(
             )
             if (records.isEmpty()) {
                 put(
-                    "hint",
+                    "guidance",
                     "Nothing is known about $packageName yet. Work it out from read_ui, then " +
                         "record what worked with remember_capability so the next chat does not " +
                         "have to rediscover it.",
                 )
             } else {
                 put(
-                    "hint",
+                    "guidance",
                     "A record marked stale:true is a hint to check, not a fact. Verify it against " +
                         "the current screen before relying on it, and re-record it once confirmed.",
                 )
@@ -190,6 +203,7 @@ class KnowledgeStore(
         fallbacks = runCatching {
             json["fallbacks"]!!.jsonArray.mapNotNull { it.jsonPrimitive.contentOrNull }
         }.getOrDefault(emptyList()),
+        hint = json.text("hint"),
         lastVerified = json["lastVerified"]?.jsonPrimitive?.longOrNull ?: 0L,
     )
 
@@ -199,11 +213,22 @@ class KnowledgeStore(
         require(record.screen.length <= MAX_FIELD_CHARS) { "screen is too long" }
         require(record.does.length <= MAX_FIELD_CHARS) { "does is too long" }
         require((record.intent?.length ?: 0) <= MAX_FIELD_CHARS) { "intent is too long" }
+        require((record.hint?.length ?: 0) <= MAX_FIELD_CHARS) { "hint is too long" }
         require(record.fallbacks.size <= MAX_FALLBACKS) { "too many fallbacks" }
-        // A coordinate is not a durable address, and storing one would quietly
-        // undo the reason this store exists.
+        // A bare coordinate pair is not a durable address: it stops being true
+        // on the next render. It is refused as the key and allowed in `hint`,
+        // so a screen that genuinely exposes nothing addressable can still be
+        // recorded rather than lost entirely.
+        //
+        // The match is anchored on the whole string on purpose. An earlier
+        // version accepted a coordinate pair anywhere in the selector and so
+        // rejected ordinary labels: "1,234 messages", "3,000 photos" and
+        // "12,5 km to destination" are contentDescriptions, not coordinates.
         require(!COORDINATE_RE.matches(record.selector.trim())) {
-            "selector must be a resourceId or contentDescription, never coordinates"
+            "selector must be a resourceId or a contentDescription, never a bare " +
+                "coordinate pair, which stops being true on the next render. Put the " +
+                "coordinate in \"hint\" and use whatever label or id the screen does " +
+                "expose as the selector."
         }
     }
 
@@ -239,7 +264,13 @@ class KnowledgeStore(
         private const val MAX_FILE_CHARS = 512 * 1024
 
         private val PACKAGE_RE = Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+")
-        private val COORDINATE_RE = Regex("[\\[(]?\\s*\\d+\\s*[,;]\\s*\\d+.*")
+        /**
+         * A selector that is nothing but a coordinate pair, optionally
+         * bracketed. Anchored to the whole string, because a label that merely
+         * contains digits and a comma is an ordinary label.
+         */
+        private val COORDINATE_RE =
+            Regex("[\\[(]?\\s*\\d{1,5}\\s*[,;]\\s*\\d{1,5}\\s*[\\])]?")
 
         /** Where the store lives for a given runtime home. */
         fun directoryIn(homeDirectory: File): File = File(homeDirectory, DIRECTORY)
