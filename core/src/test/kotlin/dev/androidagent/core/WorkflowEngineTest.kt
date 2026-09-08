@@ -117,13 +117,53 @@ class WorkflowEngineTest {
     @Test fun aToolOutsideTheAllowedSetIsRefusedBeforeItRuns() {
         // A workflow that could run any tool would be a second agent loop with
         // none of the coordinator's guarantees.
-        for (tool in listOf("shell", "install_apk", "pull_file", "remember_capability", "run_workflow")) {
+        for (tool in listOf("shell", "install_apk", "pull_file", "remember_capability", "run_workflow", "open_intent")) {
             calls.clear()
             val result = runBlocking { engine().run(steps(tool)) }
             assertFalse("$tool should be refused", result.success)
             assertEquals("tool_not_allowed", parse(result)["errorType"]!!.jsonPrimitive.content)
             assertTrue("$tool must not be invoked", calls.isEmpty())
         }
+    }
+
+    @Test fun theEntireWorkflowIsValidatedBeforeAnyStepRuns() {
+        val result = runBlocking { engine().run(steps("open_app", "shell")) }
+        assertFalse(result.success)
+        assertTrue(calls.isEmpty())
+        assertEquals(1, parse(result)["failedAtStep"]!!.jsonPrimitive.intOrNull)
+    }
+
+    @Test fun malformedArgumentsAreRejectedBeforeAnyStepRuns() {
+        val arguments = buildJsonObject {
+            put("steps", buildJsonArray {
+                add(buildJsonObject { put("tool", "open_app") })
+                add(buildJsonObject { put("tool", "read_ui"); put("arguments", JsonArray(emptyList())) })
+            })
+        }
+        val result = runBlocking { engine().run(arguments) }
+        assertFalse(result.success)
+        assertTrue(calls.isEmpty())
+        assertEquals("malformed_step", parse(result)["errorType"]!!.jsonPrimitive.content)
+    }
+
+    @Test fun screenshotMediaIsReturnedToTheCaller() {
+        val engine = WorkflowEngine(
+            invokeTool = { _, _ -> ToolResult("captured", imageBase64 = "image-data", attachmentPaths = listOf("shot.png")) },
+            store = WorkflowStore(temp.root),
+            isRevoked = { false },
+        )
+        val result = runBlocking { engine.run(steps("screenshot")) }
+        assertEquals("image-data", result.imageBase64)
+        assertEquals(listOf("shot.png"), result.attachmentPaths)
+    }
+
+    @Test fun savingAForbiddenWorkflowIsRejected() {
+        val save = buildJsonObject {
+            put("name", "unsafe")
+            put("package", "com.example")
+            put("steps", buildJsonArray { add(buildJsonObject { put("tool", "open_intent") }) })
+        }
+        assertThrows(IllegalArgumentException::class.java) { engine().save(save) }
     }
 
     @Test fun aStepThatHangsIsBoundedRatherThanHoldingTheLockForever() {
