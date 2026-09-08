@@ -1476,6 +1476,16 @@ private fun AgentSettingsSheet(state: AgentUiState, actions: AgentUiActions) {
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
+                // Proxy metadata only: category, host and port. The buffer this
+                // is derived from never holds tunnel bytes, headers or
+                // credentials, and that has to stay true of anything shown here.
+                state.networkDiagnostic?.let { diagnostic ->
+                    StatusLine(
+                        title = "Network",
+                        detail = diagnostic,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
                 Button(
                     onClick = actions.onPrepareRuntime,
                     enabled = !state.isPreparingRuntime,

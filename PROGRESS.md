@@ -561,3 +561,62 @@ enabled on a phone, so nothing below has device evidence:
 - Emitted node `text` and `contentDescription` now pass through `SecretRedactor.redactUiText`, and `password` nodes never emit text. This changes the observation digest, so the first `read_ui` after upgrade re-sends a full node list instead of answering `unchanged`.
 - `tap`/`swipe` on the ADB backend now call `overlay.avoidTouch` first. That method existed with no callers, so this is a behaviour change to a path that has shipped for several releases.
 - New tools reach new chats only. `dynamicTools` is absent from `ThreadResumeParams`, so existing chats keep the old tool list by design.
+
+## Intent layer, knowledge store, a11y capture and proxy diagnostics - 2026-09-08
+
+Closes #23, #24, #25 and #28. Verified commands, all on the dev machine with
+no phone attached:
+
+```
+./gradlew.bat :core:test --no-daemon                      -> BUILD SUCCESSFUL (91 tests)
+./gradlew.bat test assembleDevRelease assembleDevDebugAndroidTest     :voice:lintDebug --no-daemon                          -> BUILD SUCCESSFUL
+python -m unittest tools.test_prepare_runtime             -> OK (2 tests)
+git diff --check                                          -> clean
+```
+
+New JVM tests: `IntentPolicyTest` (16), `KnowledgeStoreTest` (16),
+`ProxyDiagnosticsTest` (7).
+
+One design decision worth recording because it deviates from the issue text.
+#24 asked for an allowlist of URI schemes. A positive allowlist does not
+survive contact with the feature: app deep links use private schemes and
+enumerating them blocks exactly the case the layer exists for. The rule is
+structural instead - anything that reads local data, injects a component, or
+executes is refused. `docs/ARCHITECTURE.md` carries the reasoning.
+
+### NOT TESTED ON HARDWARE
+
+Nothing in this change has run on a phone. `adb devices` was empty throughout.
+Specifically unverified:
+
+- `AccessibilityService.takeScreenshot` end to end: whether the PNG is valid,
+  whether the overlay is genuinely absent from the frame, the real rate limit,
+  and what error code a `FLAG_SECURE` window actually returns. The mapping of
+  code 5 to a secure window is taken from the platform documentation, not
+  observed.
+- Whether the `HardwareBuffer` close ordering is correct on this device. A leak
+  here is a graphics-memory leak that no JVM test can catch.
+- `resolve_intent` and `open_intent` against real apps. Whether Waze, WhatsApp
+  and Maps deep links resolve, and whether `QUERY_ALL_PACKAGES` behaves as
+  expected on Android 16.
+- Whether a background activity launch is actually permitted under the
+  `SYSTEM_ALERT_WINDOW` exemption, and whether the typed `launch_denied`
+  failure fires when that permission is revoked.
+- That the knowledge store directory survives an app update in practice.
+- The proxy diagnostic against a real failure. The mapping is unit-tested; that
+  the runtime records `dns` versus `connection` in the situation the user hit
+  is not, because it needs a phone reproducing the 502.
+
+### Not implemented, and why
+
+- #26 (workflow engine) depends on #25 and is a larger piece of work than the
+  rest of this change combined. Not started.
+- #21 (quota indicator) is self-contained UI work with no dependency on any of
+  the above. Not started.
+- #27 (Connected Apps probe) cannot be answered without a phone: the shipped
+  app-server binary is `aarch64-unknown-linux-musl` and does not run on the dev
+  machine.
+- #12 (auto-rotate) needs hardware to confirm the accessibility backend removed
+  the cause.
+- Seeding the knowledge store from the five bundled app cards, proposed in #25,
+  is not done. The store starts empty.

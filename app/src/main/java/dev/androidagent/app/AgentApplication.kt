@@ -6,6 +6,8 @@ import dev.androidagent.a11y.A11yDeviceTools
 import dev.androidagent.adb.AndroidAdbTransport
 import dev.androidagent.core.AgentCoordinator
 import dev.androidagent.core.CompositeDeviceToolGateway
+import dev.androidagent.core.KnowledgeStore
+import dev.androidagent.core.KnowledgeToolGateway
 import dev.androidagent.core.ObservationState
 import dev.androidagent.core.SessionRunQueue
 import dev.androidagent.devicetools.AndroidDeviceTools
@@ -48,9 +50,15 @@ class AgentGraph(private val app: Application) {
         { x, y -> overlay.avoidTouch(x, y) },
     ) { hidden -> overlay.setCaptureHidden(hidden) }
     val a11yTools = A11yDeviceTools(app, observations) { x, y -> overlay.avoidTouch(x, y) }
+    // Under homeDirectory, which is global across chats and is the one place
+    // WorkspaceSeeder does not rewrite on every access.
+    val knowledge = KnowledgeStore(KnowledgeStore.directoryIn(runtime.homeDirectory))
+    val knowledgeTools = KnowledgeToolGateway(knowledge)
     // Accessibility first: it needs no ADB, keeps the phone's own settings
-    // untouched, and falls through to ADB for anything it cannot do.
-    val tools = CompositeDeviceToolGateway(listOf(a11yTools, adbTools))
+    // untouched, and falls through to ADB for anything it cannot do. The
+    // knowledge gateway shares no tool name with either device backend, so its
+    // position in the chain only decides where its names appear in the list.
+    val tools = CompositeDeviceToolGateway(listOf(knowledgeTools, a11yTools, adbTools))
     val voice = AndroidRealtimeVoiceController(app, engine, scope)
     val coordinator: AgentCoordinator
         get() = runCoordinator
