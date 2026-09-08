@@ -26,15 +26,17 @@ class AgentGraph(private val app: Application) {
     val runtime = AndroidRuntimeHost(app)
     val engine = CodexEngine(runtime)
     val adb = AndroidAdbTransport(app)
-    val tools = AndroidDeviceTools(adb, BuildConfig.APPLICATION_ID + "/dev.androidagent.app.ime.AgentInputMethodService") { hidden -> overlay.setCaptureHidden(hidden) }
-    val voice = AndroidRealtimeVoiceController(app, engine, scope)
     private lateinit var runCoordinator: AgentCoordinator
+    // Declared before the gateways: they take `overlay` as a constructor argument,
+    // so it must already be initialised rather than captured through a lambda.
     val overlay = FloatingControlOverlay(
         app,
         onStop = { queue.pause(); runCoordinator.stop(); if (voice.state.value.active) scope.launch { voice.stop() } },
         onSend = { text -> runCoordinator.steer(text) },
         onOpenApp = { app.startActivity(Intent(app, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)) },
     )
+    val tools = AndroidDeviceTools(adb, BuildConfig.APPLICATION_ID + "/dev.androidagent.app.ime.AgentInputMethodService") { hidden -> overlay.setCaptureHidden(hidden) }
+    val voice = AndroidRealtimeVoiceController(app, engine, scope)
     val coordinator: AgentCoordinator
         get() = runCoordinator
     val queue: SessionRunQueue
