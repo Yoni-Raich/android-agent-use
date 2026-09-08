@@ -46,7 +46,7 @@ class WorkflowEngine(
      * of the coordinator's guarantees.
      */
     private val allowedTools = setOf(
-        "open_app", "open_intent", "resolve_intent",
+        "open_app", "resolve_intent",
         "tap", "tap_node", "swipe", "scroll_node",
         "type_text", "set_text", "key",
         "read_ui", "wait_for_change", "screenshot",
@@ -57,7 +57,7 @@ class WorkflowEngine(
      * reported as "already committed", never retried.
      */
     private val committing = setOf(
-        "open_app", "open_intent", "tap", "tap_node", "swipe",
+        "open_app", "tap", "tap_node", "swipe",
         "scroll_node", "type_text", "set_text", "key",
     )
 
@@ -70,8 +70,13 @@ class WorkflowEngine(
 
         val totalBudget = (arguments["totalBudgetMs"]?.jsonPrimitive?.longOrNull ?: DEFAULT_TOTAL_MS)
             .coerceIn(1_000L, MAX_TOTAL_MS)
+        validateSteps(steps)?.let { invalid ->
+            return outcome(false, emptyList(), invalid.index, invalid.error, invalid.message)
+        }
         val startedAt = System.nanoTime()
         val completed = mutableListOf<JsonObject>()
+        val attachments = mutableListOf<String>()
+        var imageBase64: String? = null
 
         for ((index, element) in steps.withIndex()) {
             currentCoroutineContext().ensureActive()
@@ -85,23 +90,8 @@ class WorkflowEngine(
                     message = "Run stopped. The steps already completed are listed; nothing after them ran.",
                 )
             }
-            val step = runCatching { element.jsonObject }.getOrNull()
-                ?: return outcome(
-                    false, completed, index, "malformed_step",
-                    "Step $index is not an object.",
-                )
-            val tool = step["tool"]?.jsonPrimitive?.contentOrNull
-                ?: return outcome(
-                    false, completed, index, "malformed_step",
-                    "Step $index has no \"tool\".",
-                )
-            if (tool !in allowedTools) {
-                return outcome(
-                    false, completed, index, "tool_not_allowed",
-                    "\"$tool\" cannot run inside a workflow. Allowed: " +
-                        allowedTools.sorted().joinToString(", ") + ".",
-                )
-            }
+            val step = element.jsonObject
+            val tool = step["tool"]!!.jsonPrimitive.content
             val args = step["arguments"] as? JsonObject ?: buildJsonObject { }
             val elapsed = (System.nanoTime() - startedAt) / 1_000_000L
             if (elapsed >= totalBudget) {
@@ -111,8 +101,17 @@ class WorkflowEngine(
                         "Nothing at or after that step ran.",
                 )
             }
+            val remaining = totalBudget - elapsed
+            if (remaining < 500L) {
+                return outcome(
+                    false, completed, index, "budget_exhausted",
+                    "Less than 500ms remains before step $index, so it did not run.",
+                    imageBase64 = imageBase64,
+                    attachments = attachments,
+                )
+            }
             val stepBudget = (step["timeoutMs"]?.jsonPrimitive?.longOrNull ?: DEFAULT_STEP_MS)
-                .coerceIn(500L, totalBudget - elapsed)
+                .coerceIn(500L, remaining)
 
             val result = try {
                 withTimeoutOrNull(stepBudget) { invokeTool(tool, args) }
@@ -145,8 +144,14 @@ class WorkflowEngine(
                 put("tool", tool)
                 put("result", result.text.take(MAX_STEP_TEXT))
             }
+            result.imageBase64?.let { imageBase64 = it }
+            attachments += result.attachmentPaths
         }
-        return outcome(true, completed, failedAt = null, error = null, message = null)
+        return outcome(
+            true, completed, failedAt = null, error = null, message = null,
+            imageBase64 = imageBase64,
+            attachments = attachments,
+        )
     }
 
     /** Persist a sequence that worked, keyed by package, beside the knowledge store. */
@@ -157,6 +162,9 @@ class WorkflowEngine(
             ?: throw IllegalArgumentException("package is required")
         val steps = arguments["steps"]?.let { runCatching { it.jsonArray }.getOrNull() }
             ?: throw IllegalArgumentException("steps is required and must be an array")
+        require(steps.isNotEmpty()) { "steps cannot be empty" }
+        require(steps.size <= MAX_STEPS) { "a workflow is limited to $MAX_STEPS steps" }
+        validateSteps(steps)?.let { throw IllegalArgumentException(it.message) }
         val saved = store.save(
             WorkflowStore.Workflow(
                 name = name,
@@ -218,6 +226,8 @@ class WorkflowEngine(
         error: String?,
         message: String?,
         committed: Boolean = false,
+        imageBase64: String? = null,
+        attachments: List<String> = emptyList(),
     ): ToolResult = ToolResult(
         buildJsonObject {
             put("ok", ok)
@@ -241,8 +251,32 @@ class WorkflowEngine(
                 )
             }
         }.toString(),
+        imageBase64 = imageBase64,
         success = ok,
+        attachmentPaths = attachments.distinct().take(MAX_ATTACHMENTS),
     )
+
+    private fun validateSteps(steps: JsonArray): InvalidStep? {
+        for ((index, element) in steps.withIndex()) {
+            val step = runCatching { element.jsonObject }.getOrNull()
+                ?: return InvalidStep(index, "malformed_step", "Step $index is not an object.")
+            val tool = runCatching { step["tool"]?.jsonPrimitive?.contentOrNull }.getOrNull()
+                ?: return InvalidStep(index, "malformed_step", "Step $index has no \"tool\".")
+            if (tool !in allowedTools) {
+                return InvalidStep(
+                    index, "tool_not_allowed",
+                    "\"$tool\" cannot run inside a workflow. Allowed: " +
+                        allowedTools.sorted().joinToString(", ") + ".",
+                )
+            }
+            if (step["arguments"] != null && step["arguments"] !is JsonObject) {
+                return InvalidStep(index, "malformed_step", "Step $index arguments must be an object.")
+            }
+        }
+        return null
+    }
+
+    private data class InvalidStep(val index: Int, val error: String, val message: String)
 
     companion object {
         const val MAX_STEPS = 24
@@ -257,5 +291,6 @@ class WorkflowEngine(
         const val MAX_TOTAL_MS = 90_000L
 
         private const val MAX_STEP_TEXT = 1_500
+        private const val MAX_ATTACHMENTS = 24
     }
 }
