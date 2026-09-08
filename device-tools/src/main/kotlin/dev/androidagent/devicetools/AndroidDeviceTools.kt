@@ -16,6 +16,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -50,6 +51,7 @@ class AndroidDeviceTools(
     private val adb: AdbTransport,
     /** Full IME component, for example `com.example/.AgentInputMethodService`. */
     private val inputMethodComponent: String? = null,
+    private val observationVisibility: suspend (Boolean) -> Unit = {},
 ) : DeviceToolGateway {
 
     private val lock = Any()
@@ -101,6 +103,7 @@ class AndroidDeviceTools(
             "device_status" -> deviceStatus()
             "read_ui" -> readUi(arguments)
             "screenshot" -> screenshot(arguments)
+            "act_and_observe" -> actAndObserve(arguments)
             "tap" -> tap(arguments)
             "swipe" -> swipe(arguments)
             "type_text" -> typeText(arguments)
@@ -121,6 +124,29 @@ class AndroidDeviceTools(
     }
 
     // ---- tools ----
+
+    private suspend fun actAndObserve(arguments: JsonObject): ToolResult {
+        val action = arguments["action"]?.jsonPrimitive?.contentOrNull
+        require(action in setOf("tap", "swipe", "key", "open_app", "type_text")) { "Choose one supported action." }
+        val args = arguments["arguments"] as? JsonObject ?: error("Action arguments are required.")
+        val result = invoke(action!!, args)
+        if (!result.success) return result // Never retry a side effect or observe after a failed commit.
+        checkActive()
+        val observation = try {
+            observationVisibility(true)
+            readUi(buildJsonObject {})
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            ToolResult("Observation failed: ${failure.message}. Do not repeat the completed action.", success = false)
+        } finally { withContext(NonCancellable) { observationVisibility(false) } }
+        return ToolResult(buildJsonObject {
+            put("actionCompleted", true)
+            put("actionResult", result.text)
+            put("observationSucceeded", observation.success)
+            put("observation", runCatching { Json.parseToJsonElement(observation.text) }.getOrElse { JsonPrimitive(observation.text) })
+        }.toString(), success = observation.success)
+    }
 
     private fun deviceStatus(): ToolResult {
         val s = adb.status.value
@@ -547,7 +573,11 @@ class AndroidDeviceTools(
         }
         check(png.size <= MAX_SCREENSHOT_BYTES) { "Screenshot exceeds size limit" }
         val encoded = Base64.getEncoder().encodeToString(png)
-        return ToolResult("Screenshot captured (${png.size} bytes, PNG)", imageBase64 = encoded)
+        checkActive()
+        val image = File(checkNotNull(workspace), "screenshots/${java.util.UUID.randomUUID()}.png")
+        image.parentFile!!.mkdirs()
+        image.writeBytes(png)
+        return ToolResult("Screenshot captured (${png.size} bytes, PNG)", imageBase64 = encoded, attachmentPaths = listOf(image.absolutePath))
     }
 
     private suspend fun tap(arguments: JsonObject): ToolResult {
@@ -734,15 +764,19 @@ class AndroidDeviceTools(
         val activity = arguments.get("activity")?.jsonPrimitive?.content?.trim()?.takeIf { it.isNotEmpty() }
         val timeout = arguments.timeoutMsOrDefault()
         val result = if (activity == null) {
-            userExecute("monkey -p ${shellQuote(pkg)} -c android.intent.category.LAUNCHER 1", timeout)
+            // Monkey is a fuzzing harness and changes device state on cleanup.
+            // Resolve a normal launcher intent in the owner's profile instead.
+            userExecute("am start --user 0 -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p ${shellQuote(pkg)}", timeout)
         } else {
-            val component = if (activity.startsWith(".")) pkg + activity else activity
+            val component = if ('/' in activity) activity else "$pkg/$activity"
             requireValidComponent(component)
-            userExecute("am start --user current -n ${shellQuote(component)}", timeout)
+            require(component.substringBefore('/') == pkg) { "Activity must belong to the requested package." }
+            userExecute("am start --user 0 -W -n ${shellQuote(component)}", timeout)
         }
+        val opened = result.exitCode == 0 && !Regex("(?im)^(Error|Exception|SecurityException)").containsMatchIn(result.output)
         return ToolResult(
-            text = bound("Opened $pkg${result.output.ifBlank { "" }.prefix(" :: ")}"),
-            success = result.exitCode == 0,
+            text = bound("${if (opened) "Opened" else "Could not open"} $pkg${result.output.ifBlank { "" }.prefix(" :: ")}"),
+            success = opened,
         )
     }
 
@@ -1090,6 +1124,15 @@ class AndroidDeviceTools(
                 bytes[6] == 0x1A.toByte() && bytes[7] == 0x0A.toByte()
 
         val TOOL_DEFINITIONS: List<ToolDefinition> = listOf(
+            ToolDefinition("act_and_observe", "Perform ONE known action and return a fresh UI observation in one call. Saves a model round trip. Never batch speculative actions. If actionCompleted=true but observation failed, do not repeat the action.", buildJsonObject {
+                put("type", "object")
+                put("properties", buildJsonObject {
+                    put("action", buildJsonObject { put("type", "string"); put("enum", JsonArray(listOf("tap", "swipe", "key", "open_app", "type_text").map(::JsonPrimitive))) })
+                    put("arguments", buildJsonObject { put("type", "object"); put("additionalProperties", true) })
+                })
+                put("required", JsonArray(listOf("action", "arguments").map(::JsonPrimitive)))
+                put("additionalProperties", false)
+            }),
             tool("device_status", "Read ADB connection state. Read-only.", emptyMap(), emptyList()),
             tool(
                 "read_ui",

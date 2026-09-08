@@ -70,6 +70,9 @@ class FloatingControlOverlay(
     private var captureHidden = false
     private var finishRunnable: Runnable? = null
     private var appForeground = false
+    private var collapsed = false
+    private var expandedCard: View? = null
+    private var bubble: TextView? = null
     private var runActive = false
     private var currentStatus = "Ready"
     private var imeBottomInsetPx = 0
@@ -81,6 +84,7 @@ class FloatingControlOverlay(
             // keeps permission denial ahead of any visible/device action.
             requireOverlayPermission()
             currentStatus = status.ifBlank { "Ready" }
+            if (!runActive) collapsed = false
             runActive = true
             if (appForeground) {
                 // The app owns the foreground surface, so keep the run state
@@ -115,7 +119,9 @@ class FloatingControlOverlay(
             finishRunnable?.let(mainHandler::removeCallbacks)
             finishRunnable = null
             currentStatus = state.label
+            val hadControl = runActive
             runActive = false
+            if (!hadControl) { removeViews(); return@runOnMain }
             if (appForeground) {
                 removeViews()
                 return@runOnMain
@@ -447,6 +453,14 @@ class FloatingControlOverlay(
                 dp(48),
             ).apply { topMargin = dp(12) }
         }
+        val minimize = TextView(appContext).apply {
+            text = "−"; textSize = 26f; gravity = Gravity.CENTER
+            setTextColor(onCard); contentDescription = "Minimize agent controls"
+            layoutParams = LinearLayout.LayoutParams(dp(48), dp(48))
+            background = actionRipple(accent)
+            setOnClickListener { setCollapsed(true) }
+        }
+        composer.addView(minimize)
         composer.addView(input)
         composer.addView(sendButton)
 
@@ -459,6 +473,22 @@ class FloatingControlOverlay(
                 FrameLayout.LayoutParams.WRAP_CONTENT,
             ),
         )
+        expandedCard = card
+        val compact = TextView(appContext).apply {
+            text = "A"; textSize = 22f; gravity = Gravity.CENTER
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setTextColor(onCard)
+            background = roundedBackground(if (dark) Color.parseColor("#172B29") else Color.parseColor("#E1F5EE"), statusColor(status), 32f)
+            contentDescription = "Expand agent controls · $status"
+            isClickable = true
+            setOnClickListener { setCollapsed(false) }
+            setOnLongClickListener { onStop(); true }
+        }
+        bubble = compact
+        root.addView(compact, FrameLayout.LayoutParams(dp(56), dp(56)))
+        attachDrag(compact)
+        card.visibility = if (collapsed) View.GONE else View.VISIBLE
+        compact.visibility = if (collapsed) View.VISIBLE else View.GONE
         ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
             val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
@@ -478,7 +508,7 @@ class FloatingControlOverlay(
         captureHidden = false
 
         controlParams = WindowManager.LayoutParams(
-            panelWidthPx(),
+            if (collapsed) dp(64) else panelWidthPx(),
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
@@ -719,6 +749,8 @@ class FloatingControlOverlay(
         attachListener = null
         removeWindow(controlRoot)
         controlRoot = null
+        expandedCard = null
+        bubble = null
         statusView = null
         statusDot = null
         inputView = null
@@ -788,9 +820,19 @@ class FloatingControlOverlay(
     private fun bottomLimit(bounds: android.graphics.Rect, height: Int, margin: Int): Int =
         (bounds.height() - imeBottomInsetPx - height - margin).coerceAtLeast(margin)
 
+    private fun setCollapsed(value: Boolean) {
+        disableInputFocus()
+        hideKeyboard()
+        collapsed = value
+        expandedCard?.visibility = if (value) View.GONE else View.VISIBLE
+        bubble?.visibility = if (value) View.VISIBLE else View.GONE
+        resizeControlWindow()
+        controlRoot?.post { clampPosition() }
+    }
+
     private fun resizeControlWindow() {
         val lp = controlParams ?: return
-        lp.width = panelWidthPx()
+        lp.width = if (collapsed) dp(64) else panelWidthPx()
         clampPosition(lp)
         updateControlLayout(controlRoot, lp)
     }
@@ -806,6 +848,10 @@ class FloatingControlOverlay(
         val value = status.ifBlank { "Ready" }
         statusView?.text = value
         statusDot?.background = dotDrawable(statusColor(value))
+        bubble?.apply {
+            contentDescription = "Expand agent controls · $value"
+            background = roundedBackground(if (isDark()) Color.parseColor("#172B29") else Color.parseColor("#E1F5EE"), statusColor(value), 32f)
+        }
     }
 
     private fun statusColor(status: String): Int {

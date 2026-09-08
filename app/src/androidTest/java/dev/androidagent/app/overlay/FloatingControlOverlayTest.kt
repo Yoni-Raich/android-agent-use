@@ -58,6 +58,15 @@ class FloatingControlOverlayTest {
             assertTrue("Send stays on screen", send.right <= device.displayWidth)
 
             saveScreenshot(device, targetContext, "overlay-glass-pill-visible")
+            device.findObject(By.desc("Minimize agent controls")).click()
+            waitForIdle(instrumentation)
+            assertFalse(device.hasObject(By.desc("Stop run")))
+            val bubble = device.findObject(By.descStartsWith("Expand agent controls"))
+            assertTrue(bubble.visibleBounds.width() >= target)
+            saveScreenshot(device, targetContext, "overlay-bubble")
+            bubble.click()
+            waitForIdle(instrumentation)
+            assertTrue(device.hasObject(By.desc("Stop run")))
 
             overlay.setAppForeground(true)
             waitForIdle(instrumentation)
@@ -78,6 +87,23 @@ class FloatingControlOverlayTest {
             overlay.hide()
             fixture.finish()
         }
+    }
+
+    @Test fun manualExitDuringThinkingDoesNotShowOverlayOrReopenApp() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val device = UiDevice.getInstance(instrumentation)
+        var opened = 0
+        val overlay = FloatingControlOverlay(instrumentation.targetContext, {}, {}, { opened++ })
+        try {
+            overlay.setAppForeground(true)
+            overlay.updateState(OverlayState(OverlayPhase.THINKING))
+            overlay.setAppForeground(false)
+            waitForIdle(instrumentation)
+            assertFalse(device.hasObject(By.desc("Stop run")))
+            overlay.finish(OverlayState(OverlayPhase.DONE))
+            waitForIdle(instrumentation)
+            assertEquals(0, opened)
+        } finally { overlay.hide() }
     }
 
     private fun waitForIdle(instrumentation: Instrumentation) {

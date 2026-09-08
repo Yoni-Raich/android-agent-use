@@ -61,6 +61,8 @@ class MainActivity : ComponentActivity() {
         onSend = { text, attachments -> ensureService(); model.send(text, attachments) },
         onSteer = { model.graph.coordinator.steer(it) },
         onStop = model::stop,
+        onCancelQueued = model::cancelQueued,
+        onResumeQueue = { model.resumeQueue() },
         onVoiceToggle = ::toggleVoice,
         onOpenSettings = { model.editUi { it.copy(isSettingsOpen = true) } },
         onCloseSettings = { model.editUi { it.copy(isSettingsOpen = false) } },

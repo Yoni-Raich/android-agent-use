@@ -37,6 +37,8 @@ interface SessionStore {
     suspend fun rename(sessionId: String, title: String)
     suspend fun deleteSession(sessionId: String)
     fun workspace(sessionId: String): File
+    suspend fun loadQueuedTurns(): List<QueuedTurn> = emptyList()
+    suspend fun saveQueuedTurns(turns: List<QueuedTurn>) {}
 }
 
 enum class RuntimePhase { MISSING, PREPARING, READY, RUNNING, ERROR }
@@ -50,7 +52,7 @@ interface RuntimeHost {
 }
 
 data class ToolDefinition(val name: String, val description: String, val inputSchema: JsonObject)
-data class ToolResult(val text: String, val imageBase64: String? = null, val success: Boolean = true)
+data class ToolResult(val text: String, val imageBase64: String? = null, val success: Boolean = true, val attachmentPaths: List<String> = emptyList())
 data class AccountStatus(val signedIn: Boolean, val label: String, val loginUrl: String? = null, val userCode: String? = null)
 
 /** A reasoning effort advertised by the connected engine for one model. */
@@ -65,6 +67,7 @@ data class AgentModel(
 )
 
 /** Skill metadata returned by Codex's native skills/list catalog. */
+@Serializable
 data class AgentSkill(
     val name: String,
     val description: String,
@@ -72,12 +75,19 @@ data class AgentSkill(
     val scope: String,
     val enabled: Boolean = true,
 )
+data class TokenUsage(val total: Long, val input: Long, val output: Long, val cachedInput: Long = 0, val contextWindow: Long? = null)
+data class UsageLimit(val name: String, val usedPercent: Double?, val resetsAt: Long? = null, val windowMinutes: Long? = null)
+data class RunMetrics(val firstResponseMs: Long?, val totalMs: Long, val toolCalls: Int, val toolMs: Long)
+
 sealed interface EngineEvent {
     data class TurnStarted(val threadId: String, val turnId: String) : EngineEvent
-    data class TextDelta(val text: String, val threadId: String? = null, val turnId: String? = null) : EngineEvent
+    data class TextDelta(val text: String, val threadId: String? = null, val turnId: String? = null, val itemId: String? = null) : EngineEvent
+    data class MessageCompleted(val text: String, val threadId: String, val turnId: String, val itemId: String, val phase: String? = null) : EngineEvent
+    data class UsageChanged(val threadId: String?, val usage: TokenUsage? = null, val limits: List<UsageLimit>? = null) : EngineEvent
+    data class GeneratedImage(val threadId: String, val turnId: String, val itemId: String, val base64: String, val savedPath: String?) : EngineEvent
     data class ToolCall(val requestId: String, val name: String, val arguments: JsonObject, val threadId: String? = null, val turnId: String? = null) : EngineEvent
     data class Approval(val requestId: String, val method: String, val details: JsonObject, val threadId: String? = null, val turnId: String? = null) : EngineEvent
-    data class Activity(val text: String) : EngineEvent
+    data class Activity(val text: String, val threadId: String? = null, val turnId: String? = null) : EngineEvent
     data class TurnFinished(val status: String, val error: String? = null, val threadId: String? = null, val turnId: String? = null) : EngineEvent
     data class AccountChanged(val status: AccountStatus) : EngineEvent
     data object SkillsChanged : EngineEvent
@@ -87,6 +97,7 @@ interface AgentEngine {
     val events: Flow<EngineEvent>
     suspend fun connect()
     suspend fun account(): AccountStatus
+    suspend fun refreshUsage() {}
     suspend fun login(): AccountStatus
     suspend fun logout()
     suspend fun models(): List<String>
@@ -205,7 +216,7 @@ data class OverlayState(val phase: OverlayPhase, val detail: String? = null) {
         get() = detail?.trim()?.takeIf { it.isNotEmpty() }?.let { "${phase.title} · $it" } ?: phase.title
 
     private val OverlayPhase.title: String
-        get() = name.lowercase().replaceFirstChar { it.uppercase() }
+        get() = if (this == OverlayPhase.THINKING || this == OverlayPhase.RUNNING) "Working" else name.lowercase().replaceFirstChar { it.uppercase() }
 }
 interface DeviceToolGateway {
     val definitions: List<ToolDefinition>
