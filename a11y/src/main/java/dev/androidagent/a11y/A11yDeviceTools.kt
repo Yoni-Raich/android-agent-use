@@ -59,7 +59,15 @@ class A11yDeviceTools(
      * is dropped on revoke so a stopped run leaves nothing behind.
      */
     @Volatile private var handles: Map<String, A11yNodeView> = emptyMap()
-    @Volatile private var handlesObservationId: String? = null
+
+    /**
+     * Every observation id these handles answer to.
+     *
+     * An unchanged reply tells the model to reuse the nodes from an earlier
+     * revision, so that earlier id has to keep working — otherwise following
+     * our own advice would be refused as stale.
+     */
+    @Volatile private var handleObservationIds: Set<String> = emptySet()
 
     override val definitions: List<ToolDefinition> = TOOL_DEFINITIONS
 
@@ -122,6 +130,10 @@ class A11yDeviceTools(
             "type_text" -> typeText(arguments)
             "key" -> pressKey(arguments)
             "open_app" -> openApp(arguments)
+            "tap_node" -> tapNode(arguments)
+            "set_text" -> setText(arguments)
+            "scroll_node" -> scrollNode(arguments)
+            "wait_for_change" -> waitForChange(arguments)
             else -> throw ToolNotServiceable(
                 "a11y_unsupported",
                 "The accessibility backend does not implement \"$name\".",
@@ -168,7 +180,8 @@ class A11yDeviceTools(
         synchronized(lock) {
             if (!revoked) {
                 handles = result.handles
-                handlesObservationId = observationId
+                handleObservationIds =
+                    if (rendered.unchanged) handleObservationIds + observationId else setOf(observationId)
             }
         }
         rendered.fingerprint?.let { observations.record(it) }
@@ -289,6 +302,133 @@ class A11yDeviceTools(
         }
     }
 
+    // ---- node addressing ----
+
+    private suspend fun tapNode(arguments: JsonObject): ToolResult {
+        val (node, view) = resolveNode(arguments)
+        if (view.node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+            return ToolResult("Tapped $node")
+        }
+        // A labelled node is often not the clickable one. Fall back to its
+        // centre rather than reporting a failure the model cannot act on.
+        val bounds = view.boundsInScreen
+        val x = (bounds[0] + bounds[2]) / 2
+        val y = (bounds[1] + bounds[3]) / 2
+        requireNotOurOwnUi(x, y)
+        val landed = requireService().dispatchTap(x, y)
+        return ToolResult(
+            "Node $node did not accept a click; tapped its centre $x,$y instead",
+            success = landed,
+        )
+    }
+
+    private suspend fun setText(arguments: JsonObject): ToolResult {
+        val text = arguments["text"]?.jsonPrimitive?.contentOrNull
+            ?: throw IllegalArgumentException("text is required")
+        require(text.length <= MAX_TEXT_CHARS) { "text must be at most $MAX_TEXT_CHARS characters" }
+        val submit = arguments["submit"]?.jsonPrimitive?.booleanOrNull ?: false
+        val (node, view) = resolveNode(arguments)
+        if (!view.isEditable) {
+            return ToolResult("Node $node is not an editable field; nothing was typed.", success = false)
+        }
+        val extras = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+        }
+        if (!view.node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, extras)) {
+            return ToolResult("Node $node rejected the text; nothing was typed.", success = false)
+        }
+        // ACTION_SET_TEXT replaces the whole field and some composers drop it,
+        // so report what the field holds instead of assuming the write took.
+        val verified = runCatching { view.node.refresh(); view.node.text?.toString() }.getOrNull() == text
+        var submitted = false
+        if (submit) {
+            submitted = view.node.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)
+        }
+        return ToolResult(
+            buildJsonObject {
+                put("nodeId", node)
+                put("typed", text.length)
+                put("verified", verified)
+                if (submit) put("submitted", submitted)
+            }.toString(),
+        )
+    }
+
+    private suspend fun scrollNode(arguments: JsonObject): ToolResult {
+        val direction = arguments["direction"]?.jsonPrimitive?.contentOrNull?.trim()?.lowercase()
+            ?: throw IllegalArgumentException("direction is required")
+        val action = SCROLL_ACTIONS[direction]
+            ?: throw IllegalArgumentException(
+                "direction must be one of " + SCROLL_ACTIONS.keys.sorted().joinToString(", "),
+            )
+        val (node, view) = resolveNode(arguments)
+        if (!view.isScrollable) {
+            return ToolResult("Node $node is not scrollable.", success = false)
+        }
+        val scrolled = view.node.performAction(action)
+        return ToolResult(
+            if (scrolled) "Scrolled $node $direction"
+            else "Node $node would not scroll $direction; it may already be at the end.",
+            success = scrolled,
+        )
+    }
+
+    private suspend fun waitForChange(arguments: JsonObject): ToolResult {
+        val timeout = (arguments["timeoutMs"]?.jsonPrimitive?.intOrNull?.toLong() ?: QUIESCENCE_TIMEOUT_MS)
+            .coerceIn(100L, MAX_WAIT_MS)
+        val service = requireService()
+        val before = service.idleMs
+        val settled = withTimeoutOrNull(timeout) {
+            // Wait for something to move, then for it to stop moving.
+            while (service.idleMs >= before) delay(QUIESCENCE_POLL_MS)
+            while (service.idleMs < QUIESCENCE_IDLE_MS) delay(QUIESCENCE_POLL_MS)
+            true
+        } ?: false
+        return ToolResult(
+            buildJsonObject {
+                put("changed", settled)
+                put(
+                    "hint",
+                    if (settled) "The screen changed and settled. Call read_ui."
+                    else "Nothing changed in time. The previous action may not have landed.",
+                )
+            }.toString(),
+        )
+    }
+
+    /**
+     * Resolve a nodeId against the observation it came from.
+     *
+     * Both ids are required. A nodeId alone is meaningless once the screen has
+     * been re-read, and quietly acting on a stale one is exactly how an agent
+     * taps the wrong thing.
+     */
+    private fun resolveNode(arguments: JsonObject): Pair<String, RealNodeView> {
+        val nodeId = arguments["nodeId"]?.jsonPrimitive?.contentOrNull?.trim()
+            ?: throw IllegalArgumentException("nodeId is required")
+        val observationId = arguments["observationId"]?.jsonPrimitive?.contentOrNull?.trim()
+            ?: throw IllegalArgumentException("observationId is required")
+        val accepted = handleObservationIds
+        if (accepted.isEmpty()) {
+            throw IllegalStateException("No observation is held. Call read_ui before addressing a node.")
+        }
+        if (observationId !in accepted) {
+            throw IllegalStateException(
+                "$nodeId belongs to observation $observationId, which is no longer current " +
+                    "(holding ${accepted.sorted().joinToString(", ")}). " +
+                    "Call read_ui and use the node ids it returns.",
+            )
+        }
+        val view = handles[nodeId] as? RealNodeView
+            ?: throw IllegalStateException(
+                "$nodeId is not in the current observation. Call read_ui and pick a node it lists.",
+            )
+        if (!runCatching { view.node.refresh() }.getOrDefault(false)) {
+            throw IllegalStateException("$nodeId is no longer on screen. Call read_ui and pick a current node.")
+        }
+        return nodeId to view
+    }
+
     // ---- helpers ----
 
     private suspend fun requireService(): AgentAccessibilityService =
@@ -318,7 +458,7 @@ class A11yDeviceTools(
 
     private fun clearHandles() {
         handles = emptyMap()
-        handlesObservationId = null
+        handleObservationIds = emptySet()
     }
 
     private suspend fun checkActive() {
@@ -348,6 +488,16 @@ class A11yDeviceTools(
         private const val QUIESCENCE_POLL_MS = 50L
         private const val MAX_COORDINATE = 20_000
         private const val MAX_TEXT_CHARS = 4_000
+        private const val MAX_WAIT_MS = 30_000L
+
+        private val SCROLL_ACTIONS = mapOf(
+            "forward" to AccessibilityNodeInfo.ACTION_SCROLL_FORWARD,
+            "backward" to AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD,
+            "up" to AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP.id,
+            "down" to AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_DOWN.id,
+            "left" to AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_LEFT.id,
+            "right" to AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_RIGHT.id,
+        )
 
         private val PACKAGE_RE = Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+")
 
@@ -389,6 +539,34 @@ class A11yDeviceTools(
             ),
             tool("key", "Send a keyevent by name or numeric code.", mapOf("keycode" to "string"), listOf("keycode")),
             tool("open_app", "Launch an app by package, optionally with activity.", mapOf("package" to "string", "activity" to "string"), listOf("package")),
+            tool(
+                "tap_node",
+                "Tap a node from the most recent read_ui by its id instead of computing a coordinate. " +
+                    "Pass the observationId the node came from; a node from an older observation is refused.",
+                mapOf("nodeId" to "string", "observationId" to "string"),
+                listOf("nodeId", "observationId"),
+            ),
+            tool(
+                "set_text",
+                "Replace the text of an editable node from the most recent read_ui. Reports verified=false " +
+                    "when the field did not take the value, which some chat and Compose inputs do not.",
+                mapOf("nodeId" to "string", "observationId" to "string", "text" to "string", "submit" to "boolean"),
+                listOf("nodeId", "observationId", "text"),
+            ),
+            tool(
+                "scroll_node",
+                "Scroll a scrollable node from the most recent read_ui. More reliable than a swipe gesture " +
+                    "inside a list. direction: forward, backward, up, down, left or right.",
+                mapOf("nodeId" to "string", "observationId" to "string", "direction" to "string"),
+                listOf("nodeId", "observationId", "direction"),
+            ),
+            tool(
+                "wait_for_change",
+                "Block until the screen changes and settles, or the timeout expires. Use it after an action " +
+                    "that starts a transition instead of polling read_ui. changed=false means nothing moved.",
+                mapOf("timeoutMs" to "integer"),
+                emptyList(),
+            ),
         )
 
         private fun tool(

@@ -337,3 +337,67 @@ carrying a remedy and each backend's reason.
 
 `device_status` is answered by the composite, since it is the only object that
 sees every backend.
+
+## Accessibility control path
+
+`:a11y` hosts an `AccessibilityService` that observes and drives the screen
+in-process, so the agent works with Wireless Debugging off. It is the preferred
+backend; ADB remains for shell, `logcat`, `dumpsys`, file transfer, APK
+installs and anything privileged, and covers whatever accessibility cannot do.
+
+The backend implements the *existing* tool names instead of introducing new
+ones. Codex binds the tool list at `thread/start` and never re-sends it on
+`thread/resume`, so every chat opened before this shipped still asks for
+`read_ui` and `tap`. Naming the accessibility versions differently would leave
+those chats dead the moment ADB is unavailable. The `source` field distinguishes
+`accessibility` from `uiautomator`.
+
+`read_ui` waits for the screen to settle before traversing and reports
+`stable:false` when it did not, which is what that previously-hardcoded field
+was always meant to carry.
+
+The system owns the service instance, so the gateway resolves it through
+`A11yServiceHandle` on every call rather than holding one. That also makes "the
+user just switched it off" an ordinary state instead of a crash. `detach` is
+identity-compared so a late `onDestroy` from a replaced instance cannot clear
+the live one.
+
+### Keeping the agent off its own UI
+
+Four layers, because tree filtering alone is not enough. The traversal drops
+windows and nodes belonging to our own package and anything not visible to the
+user, which covers the overlay, the chat UI and the agent IME — the overlay
+window stays in the window manager even when hidden from screenshots, so
+filtering is the only thing that removes it. But a coordinate gesture hits
+whatever is topmost regardless of the tree, so both backends now call
+`overlay.avoidTouch` before a tap or swipe, and the accessibility path refuses
+a point still inside one of our windows afterwards. `avoidTouch` existed but
+had no callers, so the ADB path carried the same defect.
+
+### Node addressing
+
+`tap_node`, `set_text`, `scroll_node` and `wait_for_change` act on a node
+rather than a coordinate. Every one requires both a `nodeId` and the
+`observationId` it came from: a node id alone is meaningless once the screen
+has been re-read, and quietly acting on a stale one is how an agent taps the
+wrong thing. Handles are held for the current observation only and dropped on
+revoke. An `unchanged` reply keeps the earlier observation id valid as well,
+since that reply explicitly tells the model to reuse those nodes.
+
+`set_text` uses `ACTION_SET_TEXT`, replacing five shell commands and a global
+IME switch with one call that leaves the user's keyboard alone. Some Compose
+and chat composers accept the action and keep their old value, so the result
+reports `verified` from a read-back instead of assuming the write took.
+
+### What the service does when no run is active
+
+It runs for as long as the user leaves it enabled, which is most of the phone's
+uptime. Outside a run it never reads event text, retains a node or tree, logs
+anything derived from an event, or writes to disk; `onAccessibilityEvent` only
+stamps a timestamp. A `runActive` flag is pushed on `beginRun` and `revoke`,
+and re-pushed at run start so an instance that reconnected after a self-update
+is not left idle-gated.
+
+`declaredEnabled && !connected` is the Android 13+ restricted-setting signature
+for a sideloaded build. No API reports it, so that divergence is the detector,
+and it gets its own message and a route to App info.
