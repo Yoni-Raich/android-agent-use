@@ -843,3 +843,17 @@ session.
 
 - #21 (circular quota indicator) is untouched. It is self-contained UI work
   with no dependency on anything here.
+
+## Release v0.6.0 - 2026-09-08
+
+- Merged PR #29 (`84b10ff`) and PR #30 (`e9269a5`) into `main`.
+- Bumped `versionCode=16`, `versionName=0.6.0`.
+- PASS: `./gradlew.bat test assembleDevRelease assembleDevDebugAndroidTest :voice:lintDebug --no-daemon`.
+- PASS: `python -m unittest tools.test_prepare_runtime` (2 tests).
+- PASS: `git diff --check`.
+- APK metadata: `dev.androidagent.app.dev`, versionCode 16, versionName 0.6.0.
+- APK Signature Scheme v3: verified with the debug key (test-only signing).
+- Zip alignment: verified.
+- Artifact: `artifacts/android-agent-0.6.0.apk`.
+- SHA-256: `870E40E2A617FD3DF2484D60F83FFD8361AD4D15BB658C7D668359D53D274BD3`.
+- No physical-device install/E2E: approved Nothing A059 serial `00152154B002517` was not connected.
