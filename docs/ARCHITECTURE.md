@@ -296,3 +296,44 @@ never a batch: a failed action returns immediately and is not retried or
 observed. When the action commits but the observation fails, the result says
 `actionCompleted: true` with `observationSucceeded: false`, so the model cannot
 mistake a lost observation for a lost action and repeat a side effect.
+
+## One observation model, many backends
+
+`UiNode`, `UiObservation` and `UiObservationSerializer` live in `:core` so every
+device backend reduces to one node model and renders through one serialiser.
+The uiautomator XML dump and, later, the accessibility node tree therefore
+produce the same envelope, the same `clickableAncestor` rule and the same typed
+failure taxonomy, and the seeded app cards keep working whichever backend
+answered. The node *lists* still differ — different traversal roots and
+inclusion rules — which is what the `source` field records.
+
+`ObservationState` is shared by every gateway rather than owned by one. A
+per-gateway revision counter would make `revision` jump backwards when a call
+falls through from one backend to another, and `unchangedSinceRevision` could
+then name a revision produced by a different backend holding a different node
+set. For the same reason `ObservationFingerprint` carries a `backend`, and
+unchanged-suppression only fires within one backend.
+
+Two privacy rules live in the serialiser so no backend can forget them: a node
+marked `password` never emits its text, and every emitted `text` and
+`contentDescription` passes through `SecretRedactor`. On-screen text leaves the
+device, so a visible token is redacted at the point of emission rather than at
+each call site.
+
+## Routing between device backends
+
+`CompositeDeviceToolGateway` sends each tool to the first backend that declares
+it and falls through to the next only when that backend raises
+`ToolNotServiceable` — which is a promise that nothing was dispatched. Any
+other exception propagates, because an action that may already have committed
+must never be retried on a second backend.
+
+The advertised tool surface is deliberately static. Codex binds the tool list at
+`thread/start` and never re-sends it on `thread/resume`, so a surface that
+shrank when a backend went away would leave every open thread holding a list
+that no longer matches reality with no way to correct it. Availability is
+reported at invoke time instead, as a typed `backend_unavailable` failure
+carrying a remedy and each backend's reason.
+
+`device_status` is answered by the composite, since it is the only object that
+sees every backend.
