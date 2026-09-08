@@ -9,6 +9,8 @@ import dev.androidagent.core.CompositeDeviceToolGateway
 import dev.androidagent.core.KnowledgeStore
 import dev.androidagent.core.KnowledgeToolGateway
 import dev.androidagent.core.ObservationState
+import dev.androidagent.core.WorkflowStore
+import dev.androidagent.core.WorkflowToolGateway
 import dev.androidagent.core.SessionRunQueue
 import dev.androidagent.devicetools.AndroidDeviceTools
 import dev.androidagent.enginecodex.CodexEngine
@@ -58,7 +60,15 @@ class AgentGraph(private val app: Application) {
     // untouched, and falls through to ADB for anything it cannot do. The
     // knowledge gateway shares no tool name with either device backend, so its
     // position in the chain only decides where its names appear in the list.
-    val tools = CompositeDeviceToolGateway(listOf(knowledgeTools, a11yTools, adbTools))
+    val workflows = WorkflowStore(WorkflowStore.directoryIn(runtime.homeDirectory))
+    // The engine dispatches steps back at the composite, which also contains
+    // this gateway, so the router is resolved per call rather than captured.
+    val workflowTools = WorkflowToolGateway(workflows) { tools }
+    // Explicit type: the workflow gateway's router lambda refers back to this
+    // property, and an inferred type would make that a recursive definition.
+    val tools: CompositeDeviceToolGateway = CompositeDeviceToolGateway(
+        listOf(workflowTools, knowledgeTools, a11yTools, adbTools),
+    )
     val voice = AndroidRealtimeVoiceController(app, engine, scope)
     val coordinator: AgentCoordinator
         get() = runCoordinator
