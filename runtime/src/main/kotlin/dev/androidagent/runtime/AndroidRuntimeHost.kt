@@ -90,6 +90,8 @@ class AndroidRuntimeHost(private val appContext: Context) : RuntimeHost {
     private var process: Process? = null
     private var proxy: LocalhostConnectProxy? = null
     private val proxyEvents = ArrayDeque<String>()
+    private val mutableProxyEvents = MutableStateFlow<List<String>>(emptyList())
+    val proxyEventState: StateFlow<List<String>> = mutableProxyEvents
     private var prepared = false
 
     override suspend fun prepare() {
@@ -288,10 +290,12 @@ class AndroidRuntimeHost(private val appContext: Context) : RuntimeHost {
     }
 
     private fun recordProxyEvent(event: String) {
-        synchronized(proxyEvents) {
+        val snapshot = synchronized(proxyEvents) {
             if (proxyEvents.size >= MAX_PROXY_EVENTS) proxyEvents.removeFirst()
             proxyEvents.addLast(event)
+            proxyEvents.toList()
         }
+        mutableProxyEvents.value = snapshot
         if (event.startsWith("CONNECT ")) Log.i(TAG, event)
         else if (event.startsWith("proxy-error:")) Log.w(TAG, event)
     }

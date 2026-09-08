@@ -446,13 +446,11 @@ Three rules carry most of the weight:
   confirmation. `ACTION_DIAL` reaches the same screen and leaves the
   irreversible press to the user, so the capability is kept and the
   irreversible half is not.
-- **Sending asks first.** A messaging scheme, `SENDTO`, or a prefilled payload
-  on a known messaging host returns `confirmation_required` naming what would
-  happen. `userConfirmed` downgrades that to allowed and can never unblock a
-  denial. This gate is prompt-level, not enforced: the model sets the flag, and
-  a real guarantee needs an approval round trip through the engine, which a
-  device tool has no channel for. It is a speed bump against a link scraped off
-  a page being fired unnoticed.
+- **Sending and payment ask first.** A messaging scheme, `SENDTO`, payment
+  amount, or prefilled payload pauses the exact tool call on an app-owned
+  approval. The card is bound to the current run, turn, action, URI and optional
+  package, and the permission is consumed once. The model has no confirmation
+  flag; denial, timeout, Stop, or a stale request id prevents dispatch.
 
 `QUERY_ALL_PACKAGES` is required: on API 30+ `queryIntentActivities` returns
 nothing for undeclared packages, so both tools would report "nothing handles

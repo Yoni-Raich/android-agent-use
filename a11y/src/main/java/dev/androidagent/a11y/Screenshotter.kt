@@ -35,13 +35,9 @@ internal object Screenshotter {
 
     private const val DEFAULT_ENCODE_BUFFER = 512 * 1024
 
-    /**
-     * `ERROR_TAKE_SCREENSHOT_SECURE_WINDOW` is API 34 and this module builds
-     * against minSdk 30, so it is named by value. Referencing the constant
-     * would compile — constants inline — but naming it here keeps the reason
-     * next to the number.
-     */
-    private const val SECURE_WINDOW_ERROR = 5
+    /** API 34 constants, named by value because this module supports API 30. */
+    private const val INVALID_WINDOW_ERROR = 5
+    private const val SECURE_WINDOW_ERROR = 6
 
     /**
      * Capture the default display as PNG bytes.
@@ -134,6 +130,11 @@ internal object Screenshotter {
         AccessibilityService.ERROR_TAKE_SCREENSHOT_INVALID_DISPLAY -> ToolNotServiceable(
             "screenshot_invalid_display",
             "The default display is not available for capture.",
+        )
+        INVALID_WINDOW_ERROR -> ToolNotServiceable(
+            "screenshot_invalid_window",
+            "The target window disappeared before Android could capture it. Try again or use " +
+                "the ADB backend.",
         )
         AccessibilityService.ERROR_TAKE_SCREENSHOT_NO_ACCESSIBILITY_ACCESS -> ToolNotServiceable(
             "screenshot_no_access",

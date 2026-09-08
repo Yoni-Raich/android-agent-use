@@ -4,6 +4,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.test.*
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.*
 import org.junit.Test
 import java.io.File
@@ -248,6 +249,80 @@ class AgentCoordinatorTest {
         rig.close()
     }
 
+    @Test fun localIntentApprovalIsBoundToItsRequestAndDispatchesOnlyOnce() = runTest {
+        val rig = Rig(this)
+        rig.coordinator.send("one", "Open the message")
+        runCurrent()
+        var dispatches = 0
+        val result = async {
+            rig.coordinator.authorizeLocalIntent(
+                LocalIntentRequest(
+                    action = "android.intent.action.VIEW",
+                    uri = "mailto:test@example.com?subject=Hello",
+                    packageName = "com.example.mail",
+                    reason = "Open a prefilled message.",
+                ),
+            ) {
+                dispatches++
+                ToolResult("launched")
+            }
+        }
+        runCurrent()
+
+        val approval = checkNotNull(rig.coordinator.state.value.approval)
+        assertEquals("open_intent", approval.method)
+        assertEquals("mailto:test@example.com?subject=Hello", approval.details["uri"]!!.jsonPrimitive.content)
+        rig.coordinator.approve("stale-id", true)
+        runCurrent()
+        assertFalse(result.isCompleted)
+
+        rig.coordinator.approve(approval.requestId, true)
+        runCurrent()
+        assertTrue(result.await().success)
+        assertEquals(1, dispatches)
+        assertNull(rig.coordinator.state.value.approval)
+        assertTrue(rig.engine.approvalAnswers.isEmpty())
+        rig.coordinator.approve(approval.requestId, true)
+        assertEquals(1, dispatches)
+        rig.close()
+    }
+
+    @Test fun denyingOrStoppingALocalIntentNeverDispatchesIt() = runTest {
+        val rig = Rig(this)
+        rig.coordinator.send("one", "Open the message")
+        runCurrent()
+        var dispatches = 0
+        val denied = async {
+            rig.coordinator.authorizeLocalIntent(
+                LocalIntentRequest("android.intent.action.SENDTO", "mailto:test@example.com", null, "Send a message."),
+            ) {
+                dispatches++
+                ToolResult("launched")
+            }
+        }
+        runCurrent()
+        rig.coordinator.approve(rig.coordinator.state.value.approval!!.requestId, false)
+        runCurrent()
+        assertFalse(denied.await().success)
+        assertEquals(0, dispatches)
+
+        val stopped = async {
+            rig.coordinator.authorizeLocalIntent(
+                LocalIntentRequest("android.intent.action.VIEW", "https://pay.example/?amount=10", null, "Start a payment."),
+            ) {
+                dispatches++
+                ToolResult("launched")
+            }
+        }
+        runCurrent()
+        assertNotNull(rig.coordinator.state.value.approval)
+        rig.coordinator.stop()
+        runCurrent()
+        assertFalse(stopped.await().success)
+        assertEquals(0, dispatches)
+        rig.close()
+    }
+
     private class Rig(test: TestScope) {
         val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(test.testScheduler))
         val engine = FakeEngine()
@@ -269,6 +344,7 @@ class AgentCoordinatorTest {
         var closed = false
         var waitForInterrupt: CompletableDeferred<Unit>? = null
         val answers = mutableListOf<ToolResult>()
+        val approvalAnswers = mutableListOf<Pair<String, Boolean>>()
         suspend fun emit(value: EngineEvent) = stream.emit(value)
         override suspend fun connect() = Unit
         override suspend fun account() = AccountStatus(true, "Test")
@@ -305,7 +381,9 @@ class AgentCoordinatorTest {
         override suspend fun steer(threadId: String, turnId: String, prompt: String) = Unit
         override suspend fun interrupt(threadId: String, turnId: String) { waitForInterrupt?.await() }
         override suspend fun answerTool(requestId: String, result: ToolResult) { answers.add(result) }
-        override suspend fun answerApproval(requestId: String, allow: Boolean) = Unit
+        override suspend fun answerApproval(requestId: String, allow: Boolean) {
+            approvalAnswers += requestId to allow
+        }
         override suspend fun close() { closed = true }
     }
     private class FakeStore : SessionStore {

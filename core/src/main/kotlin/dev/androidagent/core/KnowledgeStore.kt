@@ -12,6 +12,10 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import java.io.File
+import java.io.FileOutputStream
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.Locale
 
 /**
@@ -86,14 +90,7 @@ class KnowledgeStore(
     fun read(packageName: String): List<Record> {
         val file = fileFor(packageName) ?: return emptyList()
         if (!file.isFile) return emptyList()
-        val text = runCatching { file.readText() }.getOrNull() ?: return emptyList()
-        if (text.length > MAX_FILE_CHARS) return emptyList()
-        val parsed = runCatching { Json.parseToJsonElement(text).jsonObject }
-            .getOrNull() ?: return emptyList()
-        val records = runCatching { parsed["records"]!!.jsonArray }.getOrNull() ?: return emptyList()
-        return records.mapNotNull { element ->
-            runCatching { recordFrom(packageName, element.jsonObject) }.getOrNull()
-        }.sortedByDescending { it.lastVerified }
+        return runCatching { readExisting(file, packageName) }.getOrDefault(emptyList())
     }
 
     /**
@@ -111,7 +108,8 @@ class KnowledgeStore(
         }
         validate(record)
         val stamped = record.copy(lastVerified = now())
-        val merged = (read(record.packageName).filterNot { it.selector == stamped.selector } + stamped)
+        val existing = if (file.isFile) readExisting(file, record.packageName) else emptyList()
+        val merged = (existing.filterNot { it.selector == stamped.selector } + stamped)
             .sortedByDescending { it.lastVerified }
             .take(MAX_RECORDS_PER_PACKAGE)
         file.parentFile?.mkdirs()
@@ -122,12 +120,7 @@ class KnowledgeStore(
         }
         // Written whole and replaced, so a crash mid-write cannot leave a
         // half-parsed file that read() would silently discard.
-        val temp = File(file.parentFile, file.name + ".tmp")
-        temp.writeText(payload.toString())
-        if (!temp.renameTo(file)) {
-            file.writeText(payload.toString())
-            temp.delete()
-        }
+        writeAtomically(file, payload.toString())
         return stamped
     }
 
@@ -215,6 +208,7 @@ class KnowledgeStore(
         require((record.intent?.length ?: 0) <= MAX_FIELD_CHARS) { "intent is too long" }
         require((record.hint?.length ?: 0) <= MAX_FIELD_CHARS) { "hint is too long" }
         require(record.fallbacks.size <= MAX_FALLBACKS) { "too many fallbacks" }
+        require(record.fallbacks.all { it.length <= MAX_FIELD_CHARS }) { "a fallback is too long" }
         // A bare coordinate pair is not a durable address: it stops being true
         // on the next render. It is refused as the key and allowed in `hint`,
         // so a screen that genuinely exposes nothing addressable can still be
@@ -241,6 +235,39 @@ class KnowledgeStore(
         val trimmed = packageName.trim()
         if (!PACKAGE_RE.matches(trimmed)) return null
         return File(root, trimmed.lowercase(Locale.ROOT) + SUFFIX)
+    }
+
+    /** Strict reads protect an existing cache from being replaced after parse failure. */
+    private fun readExisting(file: File, packageName: String): List<Record> {
+        val text = file.readText()
+        require(text.length <= MAX_FILE_CHARS) { "knowledge file is too large" }
+        val parsed = Json.parseToJsonElement(text).jsonObject
+        val records = parsed["records"]?.jsonArray ?: error("knowledge file has no records array")
+        return records.map { element -> recordFrom(packageName, element.jsonObject) }
+            .sortedByDescending { it.lastVerified }
+    }
+
+    private fun writeAtomically(file: File, text: String) {
+        require(text.length <= MAX_FILE_CHARS) { "knowledge file is too large" }
+        val temp = File(file.parentFile, file.name + ".tmp")
+        try {
+            FileOutputStream(temp).use { output ->
+                output.write(text.toByteArray(Charsets.UTF_8))
+                output.fd.sync()
+            }
+            try {
+                Files.move(
+                    temp.toPath(),
+                    file.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(temp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
+        } finally {
+            if (temp.exists()) temp.delete()
+        }
     }
 
     private fun JsonObject.text(key: String): String? =
