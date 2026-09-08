@@ -208,3 +208,91 @@ list, so this suppression removes repeated payloads the model has already read.
 Each result includes monotonic elapsed time and an observation revision. This
 removes raw XML token cost and caps the observed 22-second idle-wait tail, but
 it does not prove a faster real WhatsApp workflow until measured on Q8.
+
+## Session queue and exclusive device ownership
+
+The MVP still allows one active run per phone, because one phone screen cannot
+be shared. `SessionRunQueue` makes that limit a queue instead of a rejection:
+the UI accepts a turn for any chat, and `AgentCoordinator` publishes an
+`available` flag that gates dispatch. Sending into the chat that is already
+running still steers it. FIFO order is durable in a `run_queue` SQLite table,
+and a turn is dequeued before it starts, so a process crash cannot replay a
+side effect. A queue restored at startup is paused and needs an explicit
+Resume, and a local stop pauses the queue rather than releasing the next run at
+the user unannounced. Deleting a chat cancels its queued turns.
+
+## Assistant message segmentation
+
+`item/completed` from the app-server, not only text deltas, drives assistant
+message boundaries. Each `agentMessage` item becomes its own stored message, so
+commentary before a tool call stays above that tool row and the answer after it
+starts a new block. A completed item whose full text differs from the
+accumulated deltas replaces them rather than appending, so a full final message
+never duplicates its own stream. A turn that ends with no assistant text is
+recorded as an explicit "no final reply" message, and an errored or interrupted
+turn says so, so a run never ends on a bare activity line. The active status
+label is "Working" everywhere, including the overlay.
+
+## Usage and quota
+
+`thread/tokenUsage/updated` and `account/rateLimits/updated` map to a single
+`UsageChanged` event; `account/rateLimits/read` fetches the same shape on
+demand at sign-in and refresh. Token usage is kept per engine thread and shown
+for the visible chat only. A missing `usedPercent` is surfaced as unknown and
+never rendered as zero. `RunMetrics` records first-response latency, total run
+time, and tool count/time per session.
+
+## Rich chat presentation
+
+Assistant markdown is rendered with Markwon (tables, strikethrough, prism4j
+syntax highlighting) inside an `AndroidView`, and images with Coil. The link
+resolver opens only `https`, `http`, and `mailto` URLs, so markdown from an
+untrusted screen cannot launch a file or intent URL. Generated images and
+screenshots are stored inside the session workspace and attached to the
+message; a generated image is accepted only from inside that workspace and
+under a size cap. Image generation is enabled through the app-server
+`features.image_generation` config, and the agent is instructed never to
+present a screenshot as generated artwork.
+
+## Overlay bubble and manual exit
+
+The floating card collapses to a 56dp bubble that keeps the status colour, can
+be dragged, and long-presses to stop; expanding restores the card. Collapse
+state resets when a new run starts. The overlay is no longer shown at run
+start: a read-only chat turn never takes over the screen, and the first device
+action is what checks overlay permission and shows the card. Leaving the app
+manually during a read-only turn therefore shows nothing and does not reopen
+the app on completion.
+
+## Voice audio routing
+
+`CommunicationAudioRoute` owns only the route this voice session selected. On
+API 31+ it uses `setCommunicationDevice` over `availableCommunicationDevices`,
+ranking wired and USB headsets first, then Bluetooth/BLE, then built-in
+speaker, and it keeps an external device the user picked in platform UI. Below
+31 it falls back to Bluetooth SCO and speakerphone flags. An
+`AudioDeviceCallback` re-selects when a headset is plugged or unplugged
+mid-call. On release it restores the previous device only if the session's own
+device is still selected, so a route the user changed during the call is left
+alone. Voice now fails loudly when audio focus is denied instead of talking
+into a device it does not own, and losing focus stops the session. Stop
+silences capture and playback before any network acknowledgement, and a second
+stop while stopping is a no-op.
+
+## App launch
+
+`open_app` resolves a normal launcher intent with `am start` instead of
+`monkey`. Monkey is a fuzzing harness whose cleanup changes device state, which
+is the same class of hidden side effect as the `uiautomator` rotation thaw. An
+explicit activity must belong to the requested package. Launch success requires
+both a zero exit code and no `Error`/`Exception` line in the output, so a
+failed launch is never reported as "Opened".
+
+## Combined act-and-observe
+
+`act_and_observe` performs one already-decided action and returns a fresh
+observation in the same tool call, removing a model round trip per step. It is
+never a batch: a failed action returns immediately and is not retried or
+observed. When the action commits but the observation fails, the result says
+`actionCompleted: true` with `observationSucceeded: false`, so the model cannot
+mistake a lost observation for a lost action and repeat a side effect.

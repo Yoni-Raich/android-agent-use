@@ -19,6 +19,8 @@ class AgentCoordinator(
 ) {
     private val mutableState = MutableStateFlow(RunState())
     val state: StateFlow<RunState> = mutableState.asStateFlow()
+    private val availableState = MutableStateFlow(true)
+    val available = availableState.asStateFlow()
     private val epoch = AtomicLong()
     private val lifecycleLock = Any()
     private val toolLock = Mutex()
@@ -29,6 +31,14 @@ class AgentCoordinator(
     private var completion: CompletableDeferred<Unit>? = null
     private var thread: String? = null
     private var turn: String? = null
+    private var assistantItemId: String? = null
+    private var lastMessageWasFinal = false
+    private var runStartedNanos = 0L
+    private var firstResponseMs: Long? = null
+    private var toolCalls = 0
+    private var toolMs = 0L
+    private val metricsState = MutableStateFlow<Map<String, RunMetrics>>(emptyMap())
+    val metrics = metricsState.asStateFlow()
     private var assistantId: String? = null
     private val assistantText = StringBuilder()
     private var assistantOutcome = "complete"
@@ -39,7 +49,13 @@ class AgentCoordinator(
     private var textRevision = 0L
     private var textFlushJob: Job? = null
 
-    init { scope.launch { engine.events.collect(::handleEvent) } }
+    init { scope.launch { engine.events.collect { event ->
+        try { handleEvent(event) } catch (cancelled: CancellationException) {
+            // A local stop can invalidate an event while its storage write suspends.
+            // Keep collecting for the next run unless the app scope itself ended.
+            currentCoroutineContext().ensureActive()
+        }
+    } } }
 
     fun send(
         sessionId: String,
@@ -55,6 +71,8 @@ class AgentCoordinator(
                 if (state.value.sessionId == sessionId && state.value.phase != RunPhase.STOPPING) steer(prompt)
                 return
             }
+            if (!availableState.value) return
+            availableState.value = false
             val token = epoch.incrementAndGet()
             val runCompletion = CompletableDeferred<Unit>()
             mutableState.value = RunState(RunPhase.STARTING, sessionId, "Starting Codex")
@@ -62,6 +80,12 @@ class AgentCoordinator(
             thread = null
             turn = null
             assistantId = null
+            assistantItemId = null
+            lastMessageWasFinal = false
+            runStartedNanos = System.nanoTime()
+            firstResponseMs = null
+            toolCalls = 0
+            toolMs = 0L
             assistantText.clear()
             assistantOutcome = "complete"
             controlTakeover = false
@@ -80,7 +104,8 @@ class AgentCoordinator(
     fun beginVoice(sessionId: String, threadId: String, workspace: File) {
         require(threadId.isNotBlank()) { "Voice thread ID is required." }
         synchronized(lifecycleLock) {
-            check(!state.value.active) { "Another agent run is already active." }
+            check(availableState.value && !state.value.active) { "Another agent run is already active." }
+            availableState.value = false
             val token = epoch.incrementAndGet()
             tools.beginRun(token.toString(), workspace)
             voiceMode = true
@@ -158,6 +183,7 @@ class AgentCoordinator(
                     }
                 }
                 runCatching { overlay.finish(OverlayState(OverlayPhase.DONE, "Voice ended")) }
+                availableState.value = true
             }
         }
     }
@@ -173,9 +199,9 @@ class AgentCoordinator(
         skill: AgentSkill?,
     ) {
         try {
-            // Keep the control surface visible for the whole active run. This
-            // also checks overlay permission before Codex can request a device action.
-            overlay.showState(OverlayState(OverlayPhase.STARTING))
+            // Read-only chat does not take over the user's screen. The first
+            // device action checks and shows the overlay before dispatch.
+            overlay.updateState(OverlayState(OverlayPhase.STARTING))
             sessions.append(message(sessionId, "user", prompt, attachments = images.map { it.absolutePath }))
             val session = sessions.getSession(sessionId) ?: error("Chat no longer exists")
             if (session.title == "New chat") sessions.rename(sessionId, prompt.take(48).ifBlank { "Image chat" })
@@ -191,18 +217,9 @@ class AgentCoordinator(
             }
             sessions.setThread(sessionId, openedThread)
             ensureCurrent(token)
-            val messageId = UUID.randomUUID().toString()
             synchronized(lifecycleLock) {
                 ensureCurrentLocked(token)
-                assistantText.clear()
-                assistantOutcome = "complete"
-                textRevision = 0L
-                assistantId = messageId
-            }
-            sessions.append(ChatMessage(messageId, sessionId, "assistant", "", System.currentTimeMillis(), "streaming"))
-            synchronized(lifecycleLock) {
-                ensureCurrentLocked(token)
-                mutableState.value = state.value.copy(phase = RunPhase.THINKING, status = "Thinking")
+                mutableState.value = state.value.copy(phase = RunPhase.THINKING, status = "Working")
             }
             overlay.updateState(OverlayState(OverlayPhase.THINKING))
             beginTurn(token)
@@ -331,6 +348,7 @@ class AgentCoordinator(
                     }
                 }
                 runCatching { overlay.finish(OverlayState(OverlayPhase.DONE, "Stopped")) }
+                availableState.value = true
             }
         }
     }
@@ -457,11 +475,41 @@ class AgentCoordinator(
                 }
             }
             is EngineEvent.TextDelta -> if (matches(event.threadId, event.turnId) && !isVoiceMode()) {
-                synchronized(lifecycleLock) {
-                    assistantText.append(event.text)
-                    textRevision++
+                appendAssistant(event.text, event.itemId)
+            }
+            is EngineEvent.MessageCompleted -> if (matches(event.threadId, event.turnId) && !isVoiceMode()) {
+                if (assistantItemId != event.itemId || assistantText.toString() != event.text) {
+                    if (assistantItemId == event.itemId) {
+                        synchronized(lifecycleLock) { assistantText.clear(); textRevision++ }
+                    }
+                    appendAssistant(event.text, event.itemId)
                 }
-                scheduleAssistantFlush()
+                lastMessageWasFinal = event.phase == "final_answer"
+                flushAssistantSegment(clear = false)
+            }
+            is EngineEvent.GeneratedImage -> if (matches(event.threadId, event.turnId)) {
+                val token = epoch.get()
+                val sessionId = state.value.sessionId ?: return
+                flushAssistantSegment()
+                val image = try { withContext(Dispatchers.IO) {
+                    val workspace = sessions.workspace(sessionId).canonicalFile
+                    val saved = event.savedPath?.let(::File)?.canonicalFile?.takeIf {
+                        it.toPath().startsWith(workspace.toPath()) && it.isFile && it.length() <= 20L * 1024 * 1024
+                    }
+                    saved ?: run {
+                        require(event.base64.length <= 28 * 1024 * 1024) { "Generated image exceeds the preview limit." }
+                        val bytes = java.util.Base64.getDecoder().decode(event.base64)
+                        require(bytes.isNotEmpty()) { "Generated image is empty." }
+                        val ext = if (bytes.size > 2 && bytes[0] == 0xff.toByte() && bytes[1] == 0xd8.toByte()) "jpg" else "png"
+                        File(workspace, "images/${UUID.randomUUID()}.$ext").apply { parentFile!!.mkdirs(); writeBytes(bytes) }
+                    }
+                } } catch (cancelled: CancellationException) { throw cancelled }
+                catch (failure: Exception) {
+                    sessions.append(message(sessionId, "system", "Could not show the generated image: ${failure.message}"))
+                    return
+                }
+                ensureCurrent(token)
+                sessions.append(message(sessionId, "assistant", "Generated image", listOf(image.absolutePath)))
             }
             is EngineEvent.ToolCall -> {
                 if (!matches(event.threadId, event.turnId)) {
@@ -470,6 +518,8 @@ class AgentCoordinator(
                 }
                 val token = synchronized(lifecycleLock) { epoch.get() }
                 val sessionId = synchronized(lifecycleLock) { state.value.sessionId } ?: return
+                flushAssistantSegment()
+                lastMessageWasFinal = false
                 launchTool {
                     toolLock.withLock {
                         if (!isCurrentTurn(token, event.threadId.orEmpty(), event.turnId.orEmpty())) return@withLock
@@ -504,7 +554,10 @@ class AgentCoordinator(
                             synchronized(lifecycleLock) {
                                 mutableState.value = state.value.copy(phase = if (visible) RunPhase.CONTROLLING else RunPhase.TOOL, controlling = visible, status = status)
                             }
-                            result = tools.invoke(event.name, event.arguments)
+                            val toolStart = System.nanoTime()
+                            toolCalls++
+                            try { result = tools.invoke(event.name, event.arguments) }
+                            finally { toolMs += (System.nanoTime() - toolStart) / 1_000_000 }
                         } catch (cancelled: CancellationException) {
                             throw cancelled
                         } catch (error: Exception) {
@@ -513,20 +566,21 @@ class AgentCoordinator(
                             if (captureHidden) runCatching { overlay.setCaptureHidden(false) }
                             synchronized(lifecycleLock) {
                                 if (isCurrentTurnLocked(token, event.threadId.orEmpty(), event.turnId.orEmpty())) {
-                                    mutableState.value = state.value.copy(phase = RunPhase.THINKING, controlling = false, status = "Thinking")
+                                    mutableState.value = state.value.copy(phase = RunPhase.THINKING, controlling = false, status = "Working")
                                     overlay.updateState(OverlayState(OverlayPhase.THINKING))
                                 }
                             }
                         }
                         if (isCurrentTurn(token, event.threadId.orEmpty(), event.turnId.orEmpty())) {
-                            sessions.append(message(sessionId, "tool", "${event.name}: ${result.text.take(4_000)}"))
+                            sessions.append(message(sessionId, "tool", "${event.name}: ${result.text.take(4_000)}", attachments = result.attachmentPaths))
                             engine.answerTool(event.requestId, result)
                         }
                     }
                 }
             }
             is EngineEvent.Activity -> synchronized(lifecycleLock) {
-                if (isCurrentLocked(epoch.get()) && !state.value.controlling) {
+                if (isCurrentLocked(epoch.get()) && !state.value.controlling &&
+                    (event.threadId == null || (event.threadId == thread && event.turnId == turn))) {
                     mutableState.value = state.value.copy(status = event.text)
                     overlay.updateState(OverlayState(OverlayPhase.RUNNING, event.text))
                 }
@@ -595,7 +649,7 @@ class AgentCoordinator(
                     completion?.complete(Unit)
                 }
             }
-            is EngineEvent.AccountChanged, EngineEvent.SkillsChanged -> Unit
+            is EngineEvent.AccountChanged, is EngineEvent.UsageChanged, EngineEvent.SkillsChanged -> Unit
         }
     }
 
@@ -606,6 +660,36 @@ class AgentCoordinator(
     }
 
     private fun isVoiceMode(): Boolean = synchronized(lifecycleLock) { voiceMode }
+
+    private suspend fun appendAssistant(text: String, itemId: String?) {
+        if (text.isEmpty()) return
+        val token = epoch.get()
+        if (itemId != null && assistantItemId != null && itemId != assistantItemId) flushAssistantSegment()
+        ensureCurrent(token)
+        if (assistantId == null) {
+            val session = state.value.sessionId ?: return
+            val id = UUID.randomUUID().toString()
+            synchronized(lifecycleLock) { assistantId = id; assistantItemId = itemId }
+            sessions.append(ChatMessage(id, session, "assistant", "", System.currentTimeMillis(), "streaming"))
+        }
+        synchronized(lifecycleLock) {
+            ensureCurrentLocked(token)
+            if (firstResponseMs == null) firstResponseMs = (System.nanoTime() - runStartedNanos) / 1_000_000
+            assistantText.append(text)
+            textRevision++
+        }
+        scheduleAssistantFlush()
+    }
+
+    private suspend fun flushAssistantSegment(clear: Boolean = true) {
+        val flush = synchronized(lifecycleLock) { textFlushJob.also { it?.cancel(); textFlushJob = null } }
+        flush?.join()
+        val id = assistantId
+        if (id != null) assistantFlushLock.withLock { sessions.updateMessage(id, assistantText.toString(), "complete") }
+        if (clear) synchronized(lifecycleLock) {
+            assistantId = null; assistantItemId = null; assistantText.clear(); textRevision = 0
+        }
+    }
 
     private fun scheduleAssistantFlush() {
         synchronized(lifecycleLock) {
@@ -657,6 +741,14 @@ class AgentCoordinator(
                 assistantFlushLock.withLock { sessions.updateMessage(id, final.text, final.outcome) }
             }
         }
+        if (final.text.isBlank()) {
+            val text = when (final.outcome) {
+                "error" -> "The task could not finish. ${state.value.status}"
+                "interrupted" -> "Stopped. Actions already completed were not undone."
+                else -> "The run ended without a final reply. Check the activity details for the actions that completed."
+            }
+            sessions.append(message(sessionId, "assistant", text))
+        }
         val terminalOverlay = synchronized(lifecycleLock) {
             when {
                 state.value.phase == RunPhase.ERROR -> OverlayState(OverlayPhase.ERROR, state.value.status)
@@ -683,6 +775,8 @@ class AgentCoordinator(
             }
         }
         runCatching { overlay.finish(terminalOverlay) }
+        metricsState.value = metricsState.value + (sessionId to RunMetrics(firstResponseMs, (System.nanoTime() - runStartedNanos) / 1_000_000, toolCalls, toolMs))
+        availableState.value = true
     }
 
     private fun launchControl(block: suspend CoroutineScope.() -> Unit): Job {
@@ -708,7 +802,10 @@ class AgentCoordinator(
         is EngineEvent.TurnFinished -> event.threadId
         is EngineEvent.Approval -> event.threadId
         is EngineEvent.Failure -> event.threadId
-        is EngineEvent.Activity, is EngineEvent.AccountChanged, EngineEvent.SkillsChanged -> null
+        is EngineEvent.MessageCompleted -> event.threadId
+        is EngineEvent.GeneratedImage -> event.threadId
+        is EngineEvent.Activity -> event.threadId
+        is EngineEvent.UsageChanged, is EngineEvent.AccountChanged, EngineEvent.SkillsChanged -> null
     }
 
     private fun turnIdOf(event: EngineEvent): String? = when (event) {
@@ -718,7 +815,10 @@ class AgentCoordinator(
         is EngineEvent.TurnFinished -> event.turnId
         is EngineEvent.Approval -> event.turnId
         is EngineEvent.Failure -> event.turnId
-        is EngineEvent.Activity, is EngineEvent.AccountChanged, EngineEvent.SkillsChanged -> null
+        is EngineEvent.MessageCompleted -> event.turnId
+        is EngineEvent.GeneratedImage -> event.turnId
+        is EngineEvent.Activity -> event.turnId
+        is EngineEvent.UsageChanged, is EngineEvent.AccountChanged, EngineEvent.SkillsChanged -> null
     }
 
     private fun message(session: String, role: String, text: String, attachments: List<String> = emptyList()) =

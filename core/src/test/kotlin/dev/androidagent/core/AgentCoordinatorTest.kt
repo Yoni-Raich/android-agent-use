@@ -93,7 +93,7 @@ class AgentCoordinatorTest {
         val rig = Rig(this)
         rig.coordinator.send("one", "Read and tap")
         runCurrent()
-        assertEquals(1, rig.overlay.shown)
+        assertEquals(0, rig.overlay.shown)
         assertTrue(rig.overlay.states.any { it.phase == OverlayPhase.THINKING })
         rig.engine.emit(EngineEvent.ToolCall("read", "read_ui", buildJsonObject {}, "thread", "turn"))
         runCurrent()
@@ -128,8 +128,8 @@ class AgentCoordinatorTest {
         rig.engine.emit(EngineEvent.ToolCall("tap", "tap", buildJsonObject {}, "thread", "turn"))
         runCurrent()
         assertEquals(0, rig.tools.executions)
-        assertEquals(RunPhase.ERROR, rig.coordinator.state.value.phase)
-        assertEquals(OverlayPhase.ERROR, rig.overlay.finished.last().phase)
+        assertTrue(rig.engine.answers.any { !it.success })
+        assertTrue(rig.coordinator.state.value.active)
         rig.close()
     }
 
@@ -155,6 +155,78 @@ class AgentCoordinatorTest {
         runCurrent()
         assertFalse(rig.coordinator.state.value.active)
         assertFalse(rig.engine.closed)
+        rig.close()
+    }
+
+    @Test fun assistantMessagesStayAfterTheirToolsAndFullFinalDoesNotDuplicateDeltas() = runTest {
+        val rig = Rig(this)
+        rig.coordinator.send("one", "Read")
+        runCurrent()
+        rig.engine.emit(EngineEvent.TextDelta("I will read.", "thread", "turn", "commentary"))
+        rig.engine.emit(EngineEvent.MessageCompleted("I will read.", "thread", "turn", "commentary", "commentary"))
+        rig.engine.emit(EngineEvent.ToolCall("tool", "read_ui", buildJsonObject {}, "thread", "turn"))
+        runCurrent()
+        rig.engine.emit(EngineEvent.TextDelta("The screen is ready.", "thread", "turn", "final"))
+        rig.engine.emit(EngineEvent.MessageCompleted("The screen is ready.", "thread", "turn", "final", "final_answer"))
+        rig.engine.emit(EngineEvent.TurnFinished("completed", threadId = "thread", turnId = "turn"))
+        runCurrent()
+        assertEquals(listOf("user", "assistant", "tool", "assistant"), rig.store.messages.map { it.role })
+        assertEquals("The screen is ready.", rig.store.messages.last().text)
+        assertEquals("complete", rig.store.messages.last().state)
+        assertTrue(rig.coordinator.available.value)
+        rig.close()
+    }
+
+    @Test fun emptyFinalReportsMissingReplyWithoutClaimingSuccess() = runTest {
+        val rig = Rig(this)
+        rig.coordinator.send("one", "Do it")
+        runCurrent()
+        rig.engine.emit(EngineEvent.TurnFinished("completed", threadId = "thread", turnId = "turn"))
+        runCurrent()
+        assertEquals("assistant", rig.store.messages.last().role)
+        assertTrue(rig.store.messages.last().text.contains("without a final reply"))
+        rig.close()
+    }
+
+    @Test fun queuedSessionsKeepExclusiveOwnershipAndCancelIndependently() = runTest {
+        val rig = Rig(this)
+        val queue = SessionRunQueue(rig.scope, rig.coordinator, rig.store)
+        runCurrent()
+        queue.submit(QueuedTurn(sessionId = "one", prompt = "First"))
+        runCurrent()
+        val cancelled = QueuedTurn(sessionId = "two", prompt = "Cancel me")
+        queue.submit(cancelled)
+        queue.submit(QueuedTurn(sessionId = "two", prompt = "Second"))
+        queue.cancel(cancelled.id)
+        assertEquals(1, rig.engine.turns)
+        assertEquals(1, rig.store.queued.size)
+        rig.engine.emit(EngineEvent.TurnFinished("completed", threadId = "thread", turnId = "turn"))
+        runCurrent()
+        assertEquals(2, rig.engine.turns)
+        assertEquals("two", rig.coordinator.state.value.sessionId)
+        assertFalse(rig.store.messages.any { it.text == "Cancel me" })
+        assertTrue(rig.store.queued.isEmpty())
+        rig.close()
+    }
+
+    @Test fun restoredQueueAndLocalStopWaitForExplicitResume() = runTest {
+        val rig = Rig(this)
+        rig.store.queued = listOf(QueuedTurn(sessionId = "one", prompt = "Restored"))
+        val queue = SessionRunQueue(rig.scope, rig.coordinator, rig.store)
+        runCurrent()
+        assertTrue(queue.paused.value)
+        assertEquals(0, rig.engine.turns)
+        queue.resume()
+        runCurrent()
+        queue.submit(QueuedTurn(sessionId = "two", prompt = "Later"))
+        queue.pause()
+        rig.coordinator.stop()
+        runCurrent()
+        assertEquals(1, rig.engine.turns)
+        assertEquals(1, queue.turns.value.size)
+        queue.resume()
+        runCurrent()
+        assertEquals(2, rig.engine.turns)
         rig.close()
     }
 
@@ -219,6 +291,9 @@ class AgentCoordinatorTest {
         override suspend fun close() { closed = true }
     }
     private class FakeStore : SessionStore {
+        var queued = emptyList<QueuedTurn>()
+        override suspend fun loadQueuedTurns() = queued
+        override suspend fun saveQueuedTurns(turns: List<QueuedTurn>) { queued = turns }
         override val sessions = MutableStateFlow(listOf(ChatSession("one", "One", 0, 0), ChatSession("two", "Two", 0, 0)))
         val messages = mutableListOf<ChatMessage>()
         override suspend fun createSession() = sessions.value.first()

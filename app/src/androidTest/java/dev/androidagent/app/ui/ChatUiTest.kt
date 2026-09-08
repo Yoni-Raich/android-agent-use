@@ -20,6 +20,45 @@ import org.junit.Test
 import java.io.File
 
 class ChatUiTest {
+    @Test fun newChatRequiresConfirmationWhileAnotherSessionRuns() {
+        var created = 0
+        compose.setContent { AndroidAgentScreen(fixture.copy(runState = RunState(RunPhase.THINKING, "ui-fixture")), AgentUiActions(onNewChat = { created++ })) }
+        compose.onNodeWithContentDescription("New chat").performClick()
+        compose.onNodeWithText("Start a new chat?").assertIsDisplayed()
+        compose.runOnIdle { assertEquals(0, created) }
+        compose.onNodeWithText("New chat").performClick()
+        compose.runOnIdle { assertEquals(1, created) }
+    }
+
+    @Test fun dedicatedVoiceStopIsVisibleAndDispatchesLocalStop() {
+        var stopped = 0
+        compose.setContent { AndroidAgentScreen(fixture.copy(voiceState = VoiceState(VoicePhase.SPEAKING, "Speaking", "voice")), AgentUiActions(onStop = { stopped++ })) }
+        compose.onNodeWithText("Stop voice").assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals(1, stopped) }
+        screenshot("voice-stop")
+    }
+
+    @Test fun workStatusStaysOutsideTheScrollingConversation() {
+        compose.setContent { AndroidAgentScreen(fixture.copy(
+            runState = RunState(RunPhase.TOOL, "ui-fixture", "Reading current screen"),
+            messages = (1..60).map { ChatMessage("m$it", "ui-fixture", "user", "Message $it", it.toLong()) }), AgentUiActions()) }
+        compose.onAllNodes(hasScrollAction()).onFirst().performScrollToIndex(0)
+        compose.onNodeWithText("Reading current screen").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Stop agent").assertIsDisplayed()
+    }
+
+    @Test fun richMarkdownAndQueuedSessionControlsRender() {
+        var cancelled = ""
+        val task = dev.androidagent.core.QueuedTurn(id = "queued", sessionId = "other", prompt = "Queued work")
+        compose.setContent { AndroidAgentScreen(fixture.copy(messages = listOf(ChatMessage("rich", "ui-fixture", "assistant",
+            "# שלום World\n\n*Italic* and **bold** and [link](https://example.com)\n\n> Quoted text\n\n1. First\n   - Nested\n2. Second\n\n| Name | Value |\n| --- | --- |\n| בדיקה | 42 |\n\n```kotlin\nval answer = 42\n```", 1)),
+            queuedTurns = listOf(task), queuePaused = true), AgentUiActions(onCancelQueued = { cancelled = it })) }
+        compose.onNodeWithText("Resume queue").assertIsDisplayed()
+        compose.onNodeWithText("Cancel task").performClick()
+        compose.runOnIdle { assertEquals("queued", cancelled) }
+        screenshot("rich-markdown-queue")
+    }
+
     @get:Rule val compose = createComposeRule()
     private val fixture = AgentUiState(
         activeSessionId = "ui-fixture", activeSessionTitle = "תכנון היום",

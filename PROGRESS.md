@@ -483,3 +483,45 @@ Record actual commands and results. Mark untested features explicitly. Do not re
   thaw and the restore are both unverified on a phone. Confirming needs:
   `settings put system accelerometer_rotation 0`, run one agent observation,
   then re-read the setting and check it is still `0`.
+
+## Release Validation v0.4.0 - 2026-09-08
+- Bumped `versionCode=14`, `versionName=0.4.0` for the open-issues batch: chat
+  presentation (#2, #3, #4, #5, #6, #7, #8), session queue (#9), usage and
+  quota (#17), overlay bubble and manual-exit rule (#13, #14), voice stop and
+  audio routing (#15, #16), and the `monkey` removal that follows #12.
+- PASS: `./gradlew.bat test assembleDevRelease assembleDevDebugAndroidTest :voice:lintDebug --no-daemon` (630 actionable tasks, 64 executed).
+- PASS: `python -m unittest tools.test_prepare_runtime` (2 tests); `git diff --check` clean.
+- APK: `artifacts/android-agent-0.4.0.apk`, metadata `dev.androidagent.app.dev`,
+  versionCode 14, versionName 0.4.0 (`aapt2 dump badging`).
+- SHA-256: `9DB0A540475FA620F3E293CC3CDDED93B273BC45E63107182EDCB7EABFA677F8`.
+- Zip alignment passed and APK Signature Scheme v3 verification passed with the
+  local Android debug key. Installable for private testing, not production
+  signing.
+- NOT TESTED ON HARDWARE. No device was attached during this validation
+  (`adb devices` empty), so nothing in this release has device evidence. The
+  new unit and Compose-fixture tests do not prove real chat, ADB, voice, or
+  device control.
+- NOT TESTED: the instrumented tests were only compiled
+  (`assembleDevDebugAndroidTest`), never run. That covers the overlay bubble,
+  the manual-exit overlay rule, the "New chat" confirmation, the voice Stop
+  button, the pinned status row, and the markdown/queue fixture — all unproven
+  on a phone.
+- NOT TESTED: audio routing to Bluetooth or wired headsets (#16) cannot be
+  unit-tested. Only the route-priority ordering has coverage; the actual
+  `setCommunicationDevice` behaviour, the SCO fallback below API 31, and the
+  focus-loss stop are unverified.
+- NOT TESTED: image generation (#7). The `features.image_generation` config and
+  the `item/completed` imageGeneration mapping are unverified against a live
+  app-server; only the parsers have tests.
+- NOT TESTED: quota values (#17). `parseRateLimits` has unit coverage for the
+  shape, but no live `account/rateLimits/read` response was observed.
+- NOT TESTED: the `run_queue` SQLite migration from schema version 1 to 2 has
+  no test against a pre-existing v1 database file.
+- STILL OPEN from #12: `read_ui` is guarded against the `uiautomator` rotation
+  thaw, and `open_app` no longer uses `monkey`, but the generic `shell` tool can
+  still reach `uiautomator dump` directly. Neither the thaw nor the restore has
+  been observed on a phone.
+- Verification recipe for the next hardware session: lock orientation, run one
+  observation, confirm `settings get system accelerometer_rotation` is still
+  `0`; open an app with `open_app` and confirm the result text is "Opened";
+  start voice with a Bluetooth headset connected and confirm audio routes to it.

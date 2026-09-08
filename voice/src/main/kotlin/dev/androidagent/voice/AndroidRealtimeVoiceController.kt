@@ -51,6 +51,7 @@ class AndroidRealtimeVoiceController(
 ) {
     private val app = context.applicationContext
     private val audioManager = app.getSystemService(AudioManager::class.java)
+    private val audioRoute = CommunicationAudioRoute(audioManager)
     private val lifecycle = Mutex()
     private val mutableState = MutableStateFlow(VoiceState())
     val state: StateFlow<VoiceState> = mutableState.asStateFlow()
@@ -207,9 +208,11 @@ class AndroidRealtimeVoiceController(
 
     suspend fun stop() {
         val threadId = lifecycle.withLock {
+            if (state.value.phase == VoicePhase.STOPPING) return
             val current = activeThreadId ?: return
             mutableState.value = VoiceState(VoicePhase.STOPPING, "Ending voice", current)
-            stopCapture()
+            // Silence capture and playback before waiting for any network acknowledgement.
+            releaseLocalAudio()
             current
         }
         try {
@@ -400,6 +403,11 @@ class AndroidRealtimeVoiceController(
         @Suppress("DEPRECATION")
         run { previousSpeakerphoneState = audioManager.isSpeakerphoneOn }
         val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+            .setOnAudioFocusChangeListener { focus ->
+                if (focus == AudioManager.AUDIOFOCUS_LOSS || focus == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
+                    scope.launch { stop() }
+                }
+            }
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
@@ -409,9 +417,10 @@ class AndroidRealtimeVoiceController(
             .build()
         focusRequest = request
         audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-        audioManager.requestAudioFocus(request)
-        @Suppress("DEPRECATION")
-        run { audioManager.isSpeakerphoneOn = true }
+        check(audioManager.requestAudioFocus(request) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+            "Another app is using communication audio. Try voice again when it finishes."
+        }
+        audioRoute.start()
     }
 
     private fun stopCapture() {
@@ -452,10 +461,11 @@ class AndroidRealtimeVoiceController(
         player?.release()
         player = null
         playerFormat = null
+        audioRoute.close()
         focusRequest?.let(audioManager::abandonAudioFocusRequest)
         focusRequest = null
         @Suppress("DEPRECATION")
-        previousSpeakerphoneState?.let { speakerphone -> audioManager.isSpeakerphoneOn = speakerphone }
+        if (android.os.Build.VERSION.SDK_INT < 31) previousSpeakerphoneState?.let { speakerphone -> audioManager.isSpeakerphoneOn = speakerphone }
         previousSpeakerphoneState = null
         previousAudioMode?.let { audioManager.mode = it }
         previousAudioMode = null
