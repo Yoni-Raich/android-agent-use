@@ -632,6 +632,56 @@ is present, and the floating card works.
 Recorded here because reading the `dumpsys package` line alone leads straight
 to the wrong conclusion, which is exactly what happened while writing this.
 
+### Instrumented suite added, and what running it proved
+
+`app/src/androidTest/.../A11yToolsHardwareTest.kt` drives the tools themselves
+on the device: a real `screenshot` decoded as a PNG, six captures in a row to
+exercise the `HardwareBuffer` path, `read_ui` asserting `source:"accessibility"`
+and that our own package is absent, `resolve_intent` from **our** process
+rather than from shell, the blocked-scheme and confirmation gates, and the
+knowledge store on real device storage.
+
+```
+ANDROID_SERIAL=00152154B002517 ./gradlew.bat :app:connectedDevDebugAndroidTest   -Pandroid.testInstrumentationRunnerArguments.class=dev.androidagent.app.A11yToolsHardwareTest
+-> Starting 8 tests on A059 - 16 ... 7 skipped, 0 failed
+```
+
+Only `theKnowledgeStoreRoundTripsOnDeviceStorage` actually ran, and passed. The
+other seven skipped, and the reason is the finding:
+
+**Installing the androidTest APK disabled the accessibility service.** Before
+the run, `dumpsys accessibility` showed the service bound with
+`capabilities=161`. After it:
+
+```
+settings get secure enabled_accessibility_services  -> null
+settings get secure accessibility_enabled           -> 0
+ps -A | grep androidagent                           -> (no process)
+```
+
+This is the self-update hazard the plan listed as a hand-test item, now
+observed: an app update drops the service and it does **not** come back on its
+own. Every self-update therefore costs the user a manual re-enable.
+
+**And it cannot be restored from adb.** Writing the setting is silently
+rejected - the value reads back `null` in the same shell invocation:
+
+```
+settings put secure enabled_accessibility_services dev.androidagent.app.dev/...
+settings get secure enabled_accessibility_services  -> null
+```
+
+That is Android 13+ restricted-settings enforcement for a sideloaded package,
+and it is direct confirmation of the constraint the `A11yStatus` design was
+built around: there is no programmatic route back in. The user has to re-enable
+it in Settings > Accessibility, and where the toggle is blocked, first use
+App info > ⋮ > Allow restricted settings.
+
+Consequence for CI: `connectedDevDebugAndroidTest` cannot self-provision this
+state. The suite is written to skip rather than fail when the service is
+absent, so it reports honestly instead of going red on a device where the user
+simply has not granted it.
+
 ### STILL NOT TESTED ON HARDWARE
 
 The remaining items need an agent run driven from the app UI, which this
