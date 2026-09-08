@@ -230,6 +230,24 @@ class AgentCoordinatorTest {
         rig.close()
     }
 
+    @Test fun theGatewayDecidesWhichToolsTakeTheOverlayOffTheCapturedSurface() = runTest {
+        val rig = Rig(this)
+        rig.coordinator.send("one", "Read the screen")
+        runCurrent()
+        rig.engine.emit(EngineEvent.ToolCall("1", "read_ui", buildJsonObject {}, "thread", "turn"))
+        runCurrent()
+        // read_ui captures the screen, so the overlay steps aside and comes back.
+        assertEquals(listOf(true, false), rig.overlay.captureHistory)
+        assertFalse(rig.overlay.captureHidden)
+
+        rig.overlay.captureHistory.clear()
+        rig.engine.emit(EngineEvent.ToolCall("2", "tap", buildJsonObject {}, "thread", "turn"))
+        runCurrent()
+        // tap captures nothing, so the card stays where it is.
+        assertTrue(rig.overlay.captureHistory.isEmpty())
+        rig.close()
+    }
+
     private class Rig(test: TestScope) {
         val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(test.testScheduler))
         val engine = FakeEngine()
@@ -315,6 +333,7 @@ class AgentCoordinatorTest {
         override fun beginRun(runId: String, workspace: File) { revoked = false }
         override fun revoke() { revoked = true }
         override fun needsControl(name: String) = name == "tap"
+        override fun hidesOverlayDuringCapture(name: String) = name == "read_ui"
         override suspend fun invoke(name: String, arguments: kotlinx.serialization.json.JsonObject): ToolResult {
             check(!revoked)
             if (needsControl(name)) controlWasVisible = overlay.visible
@@ -328,6 +347,8 @@ class AgentCoordinatorTest {
         var shown = 0
         var visible = false
         var fail = false
+        var captureHidden = false
+        val captureHistory = mutableListOf<Boolean>()
         val states = mutableListOf<OverlayState>()
         val finished = mutableListOf<OverlayState>()
         override suspend fun show(status: String) { if (fail) error("Overlay permission required"); waitForShow?.await(); shown++; visible = true }
@@ -336,5 +357,6 @@ class AgentCoordinatorTest {
         override fun updateState(state: OverlayState) { states += state; update(state.label) }
         override fun finish(state: OverlayState) { finished += state; updateState(state); hide() }
         override fun hide() { visible = false }
+        override suspend fun setCaptureHidden(hidden: Boolean) { captureHidden = hidden; captureHistory += hidden }
     }
 }

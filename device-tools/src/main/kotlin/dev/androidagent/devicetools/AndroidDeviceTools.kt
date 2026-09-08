@@ -4,8 +4,13 @@ import dev.androidagent.adb.AdbFileTransport
 import dev.androidagent.core.AdbTransport
 import dev.androidagent.core.CommandResult
 import dev.androidagent.core.DeviceToolGateway
+import dev.androidagent.core.ObservationFingerprint
+import dev.androidagent.core.ObservationState
 import dev.androidagent.core.ToolDefinition
 import dev.androidagent.core.ToolResult
+import dev.androidagent.core.UiNode
+import dev.androidagent.core.UiObservation
+import dev.androidagent.core.UiObservationSerializer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.CancellationException
@@ -29,9 +34,7 @@ import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import java.io.File
 import java.io.StringReader
-import java.security.MessageDigest
 import java.util.Base64
-import java.util.concurrent.atomic.AtomicLong
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
 
@@ -51,6 +54,10 @@ class AndroidDeviceTools(
     private val adb: AdbTransport,
     /** Full IME component, for example `com.example/.AgentInputMethodService`. */
     private val inputMethodComponent: String? = null,
+    /** Shared with every other gateway so revisions never move backwards. */
+    private val observations: ObservationState = ObservationState(),
+    /** Moves the floating card out of the way before a gesture lands on it. */
+    private val avoidTouch: (Int, Int) -> Unit = { _, _ -> },
     private val observationVisibility: suspend (Boolean) -> Unit = {},
 ) : DeviceToolGateway {
 
@@ -58,16 +65,6 @@ class AndroidDeviceTools(
     @Volatile private var revoked = true
     @Volatile private var workspace: File? = null
     @Volatile private var runId: String? = null
-    private val observationRevision = AtomicLong(0L)
-
-    /**
-     * Digest of the last semantic observation sent to the model, so an
-     * unchanged screen can be acknowledged instead of resent. Cleared on
-     * [beginRun] and after any failed observation, so a run always starts from
-     * a full payload and never answers "unchanged" across a gap in knowledge.
-     */
-    @Volatile private var lastObservation: ObservationFingerprint? = null
-
     override val definitions: List<ToolDefinition> = TOOL_DEFINITIONS
 
     override fun beginRun(runId: String, workspace: File) {
@@ -76,7 +73,7 @@ class AndroidDeviceTools(
             this.runId = runId
             this.workspace = workspace.absoluteFile
             workspace.absoluteFile.mkdirs()
-            lastObservation = null
+            observations.reset()
             revoked = false
         }
     }
@@ -92,6 +89,16 @@ class AndroidDeviceTools(
             "push_file", "install_apk" -> true
             else -> true
         }
+
+    override fun hidesOverlayDuringCapture(name: String): Boolean =
+        // Both capture the composited screen, so the overlay must step aside.
+        name == "read_ui" || name == "screenshot"
+
+    override fun statusLine(): String? {
+        val s = adb.status.value
+        val port = s.port?.toString() ?: "-"
+        return "ADB: phase=${s.phase} port=$port ${s.message}"
+    }
 
     override suspend fun invoke(name: String, arguments: JsonObject): ToolResult {
         val ws = workspace
@@ -158,7 +165,7 @@ class AndroidDeviceTools(
         val timeout = arguments.timeoutMsOrDefault(READ_UI_DEFAULT_TIMEOUT_MS)
         val raw = arguments["raw"]?.jsonPrimitive?.booleanOrNull ?: false
         val force = arguments["force"]?.jsonPrimitive?.booleanOrNull ?: false
-        val revision = observationRevision.incrementAndGet()
+        val revision = observations.nextRevision()
         val observationId = "ui-$revision"
         val startedAt = System.nanoTime()
 
@@ -168,11 +175,11 @@ class AndroidDeviceTools(
             }
             // A failed observation means the screen is unknown, so the next
             // successful one must carry a full payload rather than a diff.
-            if (!result.success) lastObservation = null
+            if (!result.success) observations.reset()
             result
         } catch (error: TimeoutCancellationException) {
             currentCoroutineContext().ensureActive()
-            lastObservation = null
+            observations.reset()
             uiFailure(
                 observationId = observationId,
                 revision = revision,
@@ -183,7 +190,7 @@ class AndroidDeviceTools(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            lastObservation = null
+            observations.reset()
             uiFailure(
                 observationId = observationId,
                 revision = revision,
@@ -271,40 +278,20 @@ class AndroidDeviceTools(
         if (raw) return ToolResult(bound(xml))
         return try {
             val parsed = parseUiHierarchy(xml)
-            val fingerprint = ObservationFingerprint(
-                digest = observationDigest(parsed.activePackage, parsed.nodes),
+            val rendered = UiObservationSerializer.render(
+                observation = parsed,
+                source = source,
+                backend = BACKEND,
+                observationId = observationId,
                 revision = revision,
+                elapsedMs = elapsedMs(startedAt),
+                previous = observations.last(),
+                force = force,
+                // uiautomator only answers once the window is already idle.
+                stable = true,
             )
-            val previous = lastObservation
-            if (!force && previous != null && previous.digest == fingerprint.digest) {
-                // The screen is byte-identical to what the model already holds.
-                // Acknowledge it instead of resending the whole node list.
-                return ToolResult(
-                    bound(
-                        unchangedObservationJson(
-                            parsed.activePackage, parsed.nodes.size, source,
-                            observationId, revision, elapsedMs(startedAt),
-                            previous.revision,
-                        ),
-                    ),
-                )
-            }
-            var nodes = parsed.nodes
-            var truncated = false
-            var text = semanticObservationJson(
-                parsed.activePackage, nodes, source, observationId, revision,
-                elapsedMs(startedAt), truncated,
-            )
-            while (text.length > MAX_OUTPUT_CHARS && nodes.size > 1) {
-                nodes = nodes.dropLast((nodes.size / 8).coerceAtLeast(1))
-                truncated = true
-                text = semanticObservationJson(
-                    parsed.activePackage, nodes, source, observationId, revision,
-                    elapsedMs(startedAt), truncated,
-                )
-            }
-            lastObservation = fingerprint
-            ToolResult(bound(text))
+            rendered.fingerprint?.let { observations.record(it) }
+            ToolResult(bound(rendered.text))
         } catch (error: Exception) {
             uiFailure(
                 observationId, revision, startedAt, "ui_parse_failure",
@@ -313,7 +300,7 @@ class AndroidDeviceTools(
         }
     }
 
-    private fun parseUiHierarchy(xml: String): ParsedUiHierarchy {
+    private fun parseUiHierarchy(xml: String): UiObservation {
         require(xml.length <= MAX_UI_XML_CHARS) { "hierarchy XML is too large" }
         require(!xml.contains("<!DOCTYPE", ignoreCase = true)) { "DOCTYPE is not allowed" }
         require(!xml.contains("<!ENTITY", ignoreCase = true)) { "ENTITY declarations are not allowed" }
@@ -323,8 +310,8 @@ class AndroidDeviceTools(
             runCatching { setFeature(XmlPullParser.FEATURE_PROCESS_DOCDECL, false) }
             setInput(StringReader(xml))
         }
-        val ancestors = ArrayDeque<ParsedUiNode>()
-        val meaningful = mutableListOf<ParsedUiNode>()
+        val ancestors = ArrayDeque<UiNode>()
+        val meaningful = mutableListOf<UiNode>()
         val packages = mutableMapOf<String, Int>()
         var nodeCount = 0
         var sawHierarchy = false
@@ -340,7 +327,7 @@ class AndroidDeviceTools(
                         require(sawHierarchy) { "node appears before hierarchy root" }
                         require(parser.depth <= MAX_UI_XML_DEPTH) { "hierarchy is too deep" }
                         require(nodeCount < MAX_UI_NODES) { "hierarchy has too many nodes" }
-                        val node = ParsedUiNode(
+                        val node = UiNode(
                             nodeId = "n${nodeCount++}",
                             text = parser.attribute("text").compactUiText(),
                             contentDescription = parser.attribute("content-desc").compactUiText(),
@@ -352,6 +339,7 @@ class AndroidDeviceTools(
                             scrollable = parser.attribute("scrollable")?.toBooleanStrictOrNull() ?: false,
                             focused = parser.attribute("focused")?.toBooleanStrictOrNull() ?: false,
                             packageName = parser.attribute("package").compactUiText(),
+                            password = parser.attribute("password")?.toBooleanStrictOrNull() ?: false,
                             clickableAncestor = ancestors.lastOrNull { it.clickable }?.asClickTarget(),
                         )
                         node.packageName?.let { packages[it] = (packages[it] ?: 0) + 1 }
@@ -367,73 +355,11 @@ class AndroidDeviceTools(
         }
         require(sawHierarchy) { "missing hierarchy root" }
         require(ancestors.isEmpty()) { "unclosed node elements" }
-        return ParsedUiHierarchy(
+        return UiObservation(
             activePackage = packages.maxByOrNull { it.value }?.key,
             nodes = meaningful,
         )
     }
-
-    private fun semanticObservationJson(
-        activePackage: String?,
-        nodes: List<ParsedUiNode>,
-        source: String,
-        observationId: String,
-        revision: Long,
-        elapsedMs: Long,
-        truncated: Boolean,
-    ): String = buildJsonObject {
-        put("ok", true)
-        put("observationId", observationId)
-        put("revision", revision)
-        put("elapsedMs", elapsedMs)
-        put("source", source)
-        put("stable", true)
-        activePackage?.let { put("activePackage", it) }
-        put("truncated", truncated)
-        put("nodes", buildJsonArray { nodes.forEach { add(it.toJson()) } })
-    }.toString()
-
-    /**
-     * Digest of exactly what the model would receive, so a screen that merely
-     * re-renders identically is recognised. Bounds are part of the node JSON,
-     * so any real movement changes the digest.
-     */
-    private fun observationDigest(activePackage: String?, nodes: List<ParsedUiNode>): String {
-        val payload = buildJsonObject {
-            activePackage?.let { put("activePackage", it) }
-            put("nodes", buildJsonArray { nodes.forEach { add(it.toJson()) } })
-        }.toString()
-        return MessageDigest.getInstance("SHA-256")
-            .digest(payload.toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it.toInt() and 0xFF) }
-    }
-
-    private fun unchangedObservationJson(
-        activePackage: String?,
-        nodeCount: Int,
-        source: String,
-        observationId: String,
-        revision: Long,
-        elapsedMs: Long,
-        unchangedSinceRevision: Long,
-    ): String = buildJsonObject {
-        put("ok", true)
-        put("observationId", observationId)
-        put("revision", revision)
-        put("elapsedMs", elapsedMs)
-        put("source", source)
-        put("stable", true)
-        activePackage?.let { put("activePackage", it) }
-        put("unchanged", true)
-        put("unchangedSinceRevision", unchangedSinceRevision)
-        put("nodeCount", nodeCount)
-        put(
-            "hint",
-            "Screen is identical to revision $unchangedSinceRevision. Reuse those nodes; " +
-                "if the previous action was meant to change the screen it did not take effect. " +
-                "Call read_ui with force=true to resend the full node list.",
-        )
-    }.toString()
 
     private fun uiFailure(
         observationId: String,
@@ -442,16 +368,13 @@ class AndroidDeviceTools(
         errorType: String,
         message: String,
     ): ToolResult = ToolResult(
-        buildJsonObject {
-            put("ok", false)
-            put("observationId", observationId)
-            put("revision", revision)
-            put("elapsedMs", elapsedMs(startedAt))
-            put("source", "none")
-            put("stable", false)
-            put("errorType", errorType)
-            put("message", message.take(MAX_UI_FIELD_CHARS))
-        }.toString(),
+        UiObservationSerializer.failureJson(
+            observationId = observationId,
+            revision = revision,
+            elapsedMs = elapsedMs(startedAt),
+            errorType = errorType,
+            message = message,
+        ),
         success = false,
     )
 
@@ -472,65 +395,6 @@ class AndroidDeviceTools(
     private fun elapsedMs(startedAt: Long): Long =
         ((System.nanoTime() - startedAt) / 1_000_000L).coerceAtLeast(0L)
 
-    private data class ParsedUiHierarchy(
-        val activePackage: String?,
-        val nodes: List<ParsedUiNode>,
-    )
-
-    private data class ParsedUiNode(
-        val nodeId: String,
-        val text: String?,
-        val contentDescription: String?,
-        val resourceId: String?,
-        val className: String?,
-        val bounds: IntArray?,
-        val enabled: Boolean,
-        val clickable: Boolean,
-        val scrollable: Boolean,
-        val focused: Boolean,
-        val packageName: String?,
-        val clickableAncestor: ParsedUiNode? = null,
-    ) {
-        fun isMeaningful(): Boolean =
-            text != null || contentDescription != null || resourceId != null ||
-                clickable || scrollable || focused || !enabled
-
-        fun toJson() = buildJsonObject {
-            put("nodeId", nodeId)
-            text?.let { put("text", it) }
-            contentDescription?.let { put("contentDescription", it) }
-            resourceId?.let { put("resourceId", it) }
-            className?.let { put("class", it) }
-            bounds?.let { values ->
-                put("bounds", buildJsonArray { values.forEach { add(JsonPrimitive(it)) } })
-            }
-            put("enabled", enabled)
-            put("clickable", clickable)
-            put("scrollable", scrollable)
-            put("focused", focused)
-            clickableAncestor?.let { ancestor ->
-                put("clickableAncestor", buildJsonObject {
-                    put("nodeId", ancestor.nodeId)
-                    ancestor.bounds?.let { values ->
-                        put("bounds", buildJsonArray { values.forEach { add(JsonPrimitive(it)) } })
-                    }
-                    ancestor.className?.let { put("class", it) }
-                })
-            }
-        }
-
-        fun asClickTarget(): ParsedUiNode = copy(
-            text = null,
-            contentDescription = null,
-            resourceId = null,
-            packageName = null,
-            clickableAncestor = null,
-        )
-    }
-
-    /** Identity of the last semantic observation handed to the model. */
-    private data class ObservationFingerprint(val digest: String, val revision: Long)
-
     private sealed interface UiDumpAttempt {
         data class Completed(val result: CommandResult, val elapsedMs: Long) : UiDumpAttempt
         data class TimedOut(val elapsedMs: Long) : UiDumpAttempt
@@ -538,12 +402,11 @@ class AndroidDeviceTools(
 
     private fun XmlPullParser.attribute(name: String): String? = getAttributeValue(null, name)
 
-    private fun String?.compactUiText(): String? =
-        this?.trim()?.takeIf { it.isNotEmpty() }?.take(MAX_UI_FIELD_CHARS)
+    private fun String?.compactUiText(): String? = UiObservationSerializer.compactField(this)
 
-    private fun parseBounds(value: String?): IntArray? {
+    private fun parseBounds(value: String?): List<Int>? {
         val match = BOUNDS_RE.matchEntire(value?.trim().orEmpty()) ?: return null
-        return intArrayOf(
+        return listOf(
             match.groupValues[1].toIntOrNull() ?: return null,
             match.groupValues[2].toIntOrNull() ?: return null,
             match.groupValues[3].toIntOrNull() ?: return null,
@@ -583,6 +446,8 @@ class AndroidDeviceTools(
     private suspend fun tap(arguments: JsonObject): ToolResult {
         val x = arguments.requireCoordinate("x")
         val y = arguments.requireCoordinate("y")
+        // A coordinate tap hits whatever is topmost, including our own card.
+        avoidTouch(x, y)
         val timeout = arguments.timeoutMsOrDefault()
         val out = userExecute("input tap $x $y", timeout)
         return ToolResult(
@@ -598,6 +463,7 @@ class AndroidDeviceTools(
         val y2 = arguments.requireCoordinate("y2")
         val duration = arguments.get("durationMs")?.jsonPrimitive?.intOrNull ?: 300
         require(duration in 0..5_000) { "durationMs must be between 0 and 5000" }
+        avoidTouch(x1, y1)
         val timeout = arguments.timeoutMsOrDefault()
         val out = userExecute("input swipe $x1 $y1 $x2 $y2 $duration", timeout)
         return ToolResult(
@@ -922,7 +788,7 @@ class AndroidDeviceTools(
     companion object {
         const val DEFAULT_TIMEOUT_MS = 30_000L
         const val MAX_TIMEOUT_MS = 120_000L
-        const val MAX_OUTPUT_CHARS = 20_000
+        const val MAX_OUTPUT_CHARS = UiObservationSerializer.MAX_OUTPUT_CHARS
         const val READ_UI_DEFAULT_TIMEOUT_MS = 6_000L
         const val MAX_SHELL_CHARS = 8_000
         const val MAX_COORDINATE = 10_000
@@ -931,11 +797,14 @@ class AndroidDeviceTools(
         const val MAX_PUSH_BYTES = 64 * 1024 * 1024
         const val MAX_APK_BYTES = 256 * 1024 * 1024
         const val UI_DUMP_PATH = "/sdcard/window_dump.xml"
-        private const val MAX_UI_FIELD_CHARS = 256
+        private const val MAX_UI_FIELD_CHARS = UiObservationSerializer.MAX_UI_FIELD_CHARS
         private const val MAX_UI_XML_CHARS = 512 * 1024
         private const val MAX_UI_XML_DEPTH = 128
-        private const val MAX_UI_NODES = 5_000
+        private const val MAX_UI_NODES = UiObservationSerializer.MAX_UI_NODES
         private val BOUNDS_RE = Regex("\\[(-?\\d+),(-?\\d+)]\\[(-?\\d+),(-?\\d+)]")
+
+        /** Scopes unchanged-suppression to this backend. */
+        private const val BACKEND = "adb"
 
         private const val IME_ACTION_SUFFIX = ".INPUT_TEXT"
         private const val IME_EXTRA_PAYLOAD = "payload_base64"

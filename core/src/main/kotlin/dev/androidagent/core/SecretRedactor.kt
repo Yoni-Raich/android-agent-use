@@ -49,6 +49,25 @@ object SecretRedactor {
         return out
     }
 
+    /**
+     * Removes credentials from text read off the user's screen.
+     *
+     * Deliberately narrower than [redact]: it applies the credential patterns
+     * but not the URL-query or request-body rules, which exist for diagnostics
+     * and would mangle ordinary UI content — [redact] rewrites everything after
+     * any "?" character, and screens are full of question marks.
+     */
+    fun redactUiText(raw: String): String {
+        var out = colorRemainderPattern.replace(ansiCsiPattern.replace(raw, ""), "")
+        out = cookieHeaderPattern.replace(out, "Cookie: [REDACTED]")
+        out = bearerPattern.replace(out, "Bearer [REDACTED]")
+        out = jwtPattern.replace(out, "[REDACTED_JWT]")
+        out = apiKeyPattern.replace(out, "[REDACTED_API_KEY]")
+        out = keyValuePattern.replace(out, "$1[REDACTED]")
+        out = deviceCodePattern.replace(out, "$1 [REDACTED]")
+        return out
+    }
+
     /** Classifies a (possibly unredacted) error message. */
     fun classify(raw: String): NetErrorCategory {
         val text = raw.lowercase()

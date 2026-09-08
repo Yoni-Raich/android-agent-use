@@ -525,3 +525,39 @@ Record actual commands and results. Mark untested features explicitly. Do not re
   observation, confirm `settings get system accelerometer_rotation` is still
   `0`; open an app with `open_app` and confirm the result text is "Opened";
   start voice with a Bluetooth headset connected and confirm audio routes to it.
+
+## Release Validation v0.5.0 - 2026-09-08
+
+- Bumped `versionCode=15`, `versionName=0.5.0` for the accessibility control path.
+  New `:a11y` module gives the agent a second device backend that needs no ADB,
+  behind a routing gateway.
+- PASS: `./gradlew.bat test assembleDevRelease assembleDevDebugAndroidTest :voice:lintDebug --no-daemon` (694 actionable tasks, 60 executed).
+- PASS: `python -m unittest tools.test_prepare_runtime` (2 tests); `git diff --check` clean.
+- PASS: 50 new unit tests - `UiObservationSerializerTest` 18, `CompositeDeviceToolGatewayTest` 13, `NodeTraversalTest` 19, plus one added to `AgentCoordinatorTest`.
+- APK: `artifacts/android-agent-0.5.0.apk`, metadata `dev.androidagent.app.dev`,
+  versionCode 15, versionName 0.5.0 (`aapt2 dump badging`).
+- SHA-256: `557AA4A6B02637984A79383FF5A12457971ECF4D8B2B8BAEABE002FE9820DA28`.
+- Zip alignment passed and APK Signature Scheme v3 verification passed with the
+  local Android debug key. Installable for private testing, not production signing.
+- Verified by inspection: `AgentAccessibilityService` merges into the app manifest
+  with `BIND_ACCESSIBILITY_SERVICE` and the `android.accessibilityservice` meta-data
+  (`provides-component: 'accessibility'`).
+
+### NOT TESTED ON HARDWARE
+
+`adb devices` was empty throughout. The accessibility service has never been
+enabled on a phone, so nothing below has device evidence:
+
+- The service has never connected. `A11yServiceHandle`, quiescence detection and every gesture path are unrun.
+- `ACTION_SET_TEXT` in real composers. This is the highest-risk unknown; the `verified` read-back is a mitigation, not a substitute for trying it.
+- The Android 13+ restricted-setting flow. The instrumented runner installs by a path that does not set the flag, so this cannot be reproduced in CI at all - it needs the release APK installed by hand.
+- Whether WhatsApp, Chrome and Maps expose usable nodes, and whether `flagReportViewIds` returns the `resourceId` values the app cards depend on.
+- That the overlay is never tapped. The tree filters are unit-tested; the coordinate guard is not.
+- `takeScreenshot` is declared in the service config but no screenshot tool is implemented on this backend yet - `screenshot` still routes to ADB.
+- Issue #12 is expected to be closed at the root by this work, since `uiautomator` leaves the observation path when accessibility is on. Unconfirmed: needs a run with orientation locked, checking `accelerometer_rotation` stays 0. The generic `shell` tool can still reach `uiautomator dump` directly.
+
+### Behaviour changes to watch
+
+- Emitted node `text` and `contentDescription` now pass through `SecretRedactor.redactUiText`, and `password` nodes never emit text. This changes the observation digest, so the first `read_ui` after upgrade re-sends a full node list instead of answering `unchanged`.
+- `tap`/`swipe` on the ADB backend now call `overlay.avoidTouch` first. That method existed with no callers, so this is a behaviour change to a path that has shipped for several releases.
+- New tools reach new chats only. `dynamicTools` is absent from `ThreadResumeParams`, so existing chats keep the old tool list by design.
