@@ -524,7 +524,7 @@ class AgentCoordinator(
                     toolLock.withLock {
                         if (!isCurrentTurn(token, event.threadId.orEmpty(), event.turnId.orEmpty())) return@withLock
                         val visible = tools.needsControl(event.name)
-                        val capture = event.name == "read_ui" || event.name == "screenshot"
+                        val capture = tools.hidesOverlayDuringCapture(event.name)
                         val status = event.name.replace('_', ' ')
                         val overlayState = if (visible) {
                             OverlayState(OverlayPhase.CONTROLLING, status)

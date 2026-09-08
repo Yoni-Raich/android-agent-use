@@ -4,6 +4,8 @@ import android.app.Application
 import android.content.Intent
 import dev.androidagent.adb.AndroidAdbTransport
 import dev.androidagent.core.AgentCoordinator
+import dev.androidagent.core.CompositeDeviceToolGateway
+import dev.androidagent.core.ObservationState
 import dev.androidagent.core.SessionRunQueue
 import dev.androidagent.devicetools.AndroidDeviceTools
 import dev.androidagent.enginecodex.CodexEngine
@@ -35,7 +37,15 @@ class AgentGraph(private val app: Application) {
         onSend = { text -> runCoordinator.steer(text) },
         onOpenApp = { app.startActivity(Intent(app, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)) },
     )
-    val tools = AndroidDeviceTools(adb, BuildConfig.APPLICATION_ID + "/dev.androidagent.app.ime.AgentInputMethodService") { hidden -> overlay.setCaptureHidden(hidden) }
+    // One counter for every backend, so an observation revision never moves
+    // backwards when a call falls through from one gateway to another.
+    private val observations = ObservationState()
+    val adbTools = AndroidDeviceTools(
+        adb,
+        BuildConfig.APPLICATION_ID + "/dev.androidagent.app.ime.AgentInputMethodService",
+        observations,
+    ) { hidden -> overlay.setCaptureHidden(hidden) }
+    val tools = CompositeDeviceToolGateway(listOf(adbTools))
     val voice = AndroidRealtimeVoiceController(app, engine, scope)
     val coordinator: AgentCoordinator
         get() = runCoordinator

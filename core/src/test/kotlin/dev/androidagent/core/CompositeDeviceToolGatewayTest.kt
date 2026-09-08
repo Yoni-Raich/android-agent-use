@@ -1,0 +1,208 @@
+package dev.androidagent.core
+
+import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import org.junit.Assert.*
+import org.junit.Test
+import java.io.File
+
+class CompositeDeviceToolGatewayTest {
+
+    @Test fun aToolRoutesToTheFirstBackendThatDeclaresIt() = runBlocking {
+        val first = FakeGateway("a11y", tools = listOf("read_ui", "tap"))
+        val second = FakeGateway("adb", tools = listOf("tap", "shell"))
+        val composite = CompositeDeviceToolGateway(listOf(first, second))
+
+        assertEquals("a11y:tap", composite.invoke("tap", empty()).text)
+        assertEquals(listOf("tap"), first.invoked)
+        assertTrue(second.invoked.isEmpty())
+
+        assertEquals("adb:shell", composite.invoke("shell", empty()).text)
+        assertEquals(listOf("shell"), second.invoked)
+    }
+
+    @Test fun aSharedToolNameIsAdvertisedOnceAndKeepsTheFirstBackendsDescription() {
+        val first = FakeGateway("a11y", tools = listOf("read_ui", "tap"))
+        val second = FakeGateway("adb", tools = listOf("tap", "shell"))
+        val composite = CompositeDeviceToolGateway(listOf(first, second))
+
+        assertEquals(listOf("read_ui", "tap", "shell"), composite.definitions.map { it.name })
+        assertEquals("a11y tap", composite.definitions.first { it.name == "tap" }.description)
+    }
+
+    @Test fun theAdvertisedSurfaceDoesNotShrinkWhenABackendStopsAnswering() = runBlocking {
+        // Codex binds the tool list at thread/start and never re-sends it on
+        // resume, so a surface that shrank would strand every open thread.
+        val a11y = FakeGateway("a11y", tools = listOf("read_ui"))
+        val adb = FakeGateway("adb", tools = listOf("shell"))
+        val composite = CompositeDeviceToolGateway(listOf(a11y, adb))
+        val before = composite.definitions.map { it.name }
+
+        a11y.absent += "read_ui"
+        assertFalse(composite.invoke("read_ui", empty()).success)
+        assertEquals(before, composite.definitions.map { it.name })
+    }
+
+    @Test fun anAbsentCapabilityFallsThroughToTheNextBackend() = runBlocking {
+        val a11y = FakeGateway("a11y", tools = listOf("key"), absent = mutableSetOf("key"))
+        val adb = FakeGateway("adb", tools = listOf("key"))
+        val composite = CompositeDeviceToolGateway(listOf(a11y, adb))
+
+        assertEquals("adb:key", composite.invoke("key", empty()).text)
+        assertEquals(listOf("key"), adb.invoked)
+    }
+
+    @Test fun aRealFailureNeverRetriesOnAnotherBackend() = runBlocking {
+        // The action may already have been dispatched, so repeating it
+        // elsewhere could commit the same side effect twice.
+        val a11y = FakeGateway("a11y", tools = listOf("tap"), broken = mutableSetOf("tap"))
+        val adb = FakeGateway("adb", tools = listOf("tap"))
+        val composite = CompositeDeviceToolGateway(listOf(a11y, adb))
+
+        val error = runCatching { composite.invoke("tap", empty()) }.exceptionOrNull()
+        assertTrue(error is IllegalStateException)
+        assertTrue("second backend must not be invoked", adb.invoked.isEmpty())
+    }
+
+    @Test fun anExhaustedChainExplainsEachBackendsReason() = runBlocking {
+        val a11y = FakeGateway("a11y", tools = listOf("read_ui"), absent = mutableSetOf("read_ui"))
+        val adb = FakeGateway("adb", tools = listOf("read_ui"), absent = mutableSetOf("read_ui"))
+        val composite = CompositeDeviceToolGateway(listOf(a11y, adb))
+
+        val result = composite.invoke("read_ui", empty())
+        assertFalse(result.success)
+        val json = Json.parseToJsonElement(result.text).jsonObject
+        assertEquals("backend_unavailable", json["errorType"]!!.jsonPrimitive.content)
+        assertTrue(json.containsKey("remedy"))
+        val reasons = json["reasons"]!!.jsonArray.map { it.jsonPrimitive.content }
+        assertEquals(2, reasons.size)
+        assertTrue(reasons.any { it.contains("a11y_absent") })
+        assertTrue(reasons.any { it.contains("adb_absent") })
+    }
+
+    @Test fun anUnknownToolIsReportedRatherThanRouted() = runBlocking {
+        val composite = CompositeDeviceToolGateway(listOf(FakeGateway("adb", tools = listOf("tap"))))
+        val result = composite.invoke("nope", empty())
+        assertFalse(result.success)
+        assertEquals("Unknown tool: nope", result.text)
+    }
+
+    @Test fun deviceStatusIsAnsweredByTheCompositeAndNamesEveryBackend() = runBlocking {
+        val a11y = FakeGateway("a11y", tools = listOf("device_status"))
+        val adb = FakeGateway("adb", tools = listOf("device_status"))
+        val composite = CompositeDeviceToolGateway(listOf(a11y, adb))
+
+        val result = composite.invoke("device_status", empty())
+        assertTrue(result.success)
+        assertTrue(result.text.contains("a11y status"))
+        assertTrue(result.text.contains("adb status"))
+        // Only the composite sees every backend, so it must not delegate.
+        assertTrue(a11y.invoked.isEmpty())
+        assertTrue(adb.invoked.isEmpty())
+    }
+
+    @Test fun aPartiallyArmedRunIsRevokedRatherThanLeftRunning() {
+        val ok = FakeGateway("a11y", tools = listOf("tap"))
+        val failing = FakeGateway("adb", tools = listOf("shell"), failBeginRun = true)
+        val composite = CompositeDeviceToolGateway(listOf(ok, failing))
+
+        val error = runCatching { composite.beginRun("run-1", File("workspace")) }.exceptionOrNull()
+        assertNotNull(error)
+        assertEquals(1, ok.revokes)
+        assertEquals(1, failing.revokes)
+    }
+
+    @Test fun revokeReachesEveryBackendEvenWhenOneThrows() {
+        val throwing = FakeGateway("a11y", tools = listOf("tap"), failRevoke = true)
+        val other = FakeGateway("adb", tools = listOf("shell"))
+        val composite = CompositeDeviceToolGateway(listOf(throwing, other))
+
+        val error = runCatching { composite.revoke() }.exceptionOrNull()
+        assertNotNull(error)
+        // Skipping the second revoke would leave a live backend after Stop.
+        assertEquals(1, other.revokes)
+    }
+
+    @Test fun cancelReachesEveryBackend() = runBlocking {
+        val a11y = FakeGateway("a11y", tools = listOf("tap"))
+        val adb = FakeGateway("adb", tools = listOf("shell"))
+        CompositeDeviceToolGateway(listOf(a11y, adb)).cancel()
+        assertEquals(1, a11y.cancels)
+        assertEquals(1, adb.cancels)
+    }
+
+    @Test fun controlAndCaptureQuestionsGoToTheBackendThatWouldAnswer() {
+        val a11y = FakeGateway("a11y", tools = listOf("read_ui"), control = setOf(), capture = setOf())
+        val adb = FakeGateway("adb", tools = listOf("shell"), control = setOf("shell"), capture = setOf("shell"))
+        val composite = CompositeDeviceToolGateway(listOf(a11y, adb))
+
+        assertFalse(composite.needsControl("read_ui"))
+        assertFalse(composite.hidesOverlayDuringCapture("read_ui"))
+        assertTrue(composite.needsControl("shell"))
+        assertTrue(composite.hidesOverlayDuringCapture("shell"))
+
+        // An unrouted name fails safe as visible control, and never hides the
+        // overlay for a capture that is not going to happen.
+        assertTrue(composite.needsControl("nope"))
+        assertFalse(composite.hidesOverlayDuringCapture("nope"))
+    }
+
+    @Test fun aCompositeWithNoBackendsIsRejected() {
+        assertThrows(IllegalArgumentException::class.java) {
+            CompositeDeviceToolGateway(emptyList())
+        }
+    }
+
+    private fun empty(): JsonObject = buildJsonObject { }
+
+    private class FakeGateway(
+        private val id: String,
+        tools: List<String>,
+        val absent: MutableSet<String> = mutableSetOf(),
+        private val broken: MutableSet<String> = mutableSetOf(),
+        private val control: Set<String> = emptySet(),
+        private val capture: Set<String> = emptySet(),
+        private val failBeginRun: Boolean = false,
+        private val failRevoke: Boolean = false,
+    ) : DeviceToolGateway {
+        val invoked = mutableListOf<String>()
+        var runs = 0
+        var revokes = 0
+        var cancels = 0
+
+        override val definitions: List<ToolDefinition> =
+            tools.map { ToolDefinition(it, "$id $it", buildJsonObject { }) }
+
+        override fun beginRun(runId: String, workspace: File) {
+            runs++
+            if (failBeginRun) error("$id cannot start")
+        }
+
+        override fun revoke() {
+            revokes++
+            if (failRevoke) error("$id cannot revoke")
+        }
+
+        override fun needsControl(name: String) = name in control
+
+        override fun hidesOverlayDuringCapture(name: String) = name in capture
+
+        override fun statusLine() = "$id status"
+
+        override suspend fun invoke(name: String, arguments: JsonObject): ToolResult {
+            if (name in absent) throw ToolNotServiceable("${id}_absent", "$id cannot serve $name")
+            if (name in broken) error("$id failed while running $name")
+            invoked += name
+            return ToolResult("$id:$name")
+        }
+
+        override suspend fun cancel() {
+            cancels++
+        }
+    }
+}
