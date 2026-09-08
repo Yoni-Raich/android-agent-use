@@ -561,3 +561,214 @@ enabled on a phone, so nothing below has device evidence:
 - Emitted node `text` and `contentDescription` now pass through `SecretRedactor.redactUiText`, and `password` nodes never emit text. This changes the observation digest, so the first `read_ui` after upgrade re-sends a full node list instead of answering `unchanged`.
 - `tap`/`swipe` on the ADB backend now call `overlay.avoidTouch` first. That method existed with no callers, so this is a behaviour change to a path that has shipped for several releases.
 - New tools reach new chats only. `dynamicTools` is absent from `ThreadResumeParams`, so existing chats keep the old tool list by design.
+
+## Intent layer, knowledge store, a11y capture and proxy diagnostics - 2026-09-08
+
+Closes #23, #24, #25 and #28. Verified commands, all on the dev machine with
+no phone attached:
+
+```
+./gradlew.bat :core:test --no-daemon                      -> BUILD SUCCESSFUL (91 tests)
+./gradlew.bat test assembleDevRelease assembleDevDebugAndroidTest     :voice:lintDebug --no-daemon                          -> BUILD SUCCESSFUL
+python -m unittest tools.test_prepare_runtime             -> OK (2 tests)
+git diff --check                                          -> clean
+```
+
+New JVM tests: `IntentPolicyTest` (16), `KnowledgeStoreTest` (16),
+`ProxyDiagnosticsTest` (7).
+
+One design decision worth recording because it deviates from the issue text.
+#24 asked for an allowlist of URI schemes. A positive allowlist does not
+survive contact with the feature: app deep links use private schemes and
+enumerating them blocks exactly the case the layer exists for. The rule is
+structural instead - anything that reads local data, injects a component, or
+executes is refused. `docs/ARCHITECTURE.md` carries the reasoning.
+
+### Hardware evidence - device 00152154B002517 (Nothing A059, Android 16)
+
+Installed `app-dev-debug.apk` and inspected the running system. Verified:
+
+```
+dumpsys accessibility
+  Bound services:{Service[label=Android Agent Dev, capabilities=161,
+    eventTypes=[TYPE_WINDOW_STATE_CHANGED, TYPE_WINDOW_CONTENT_CHANGED,
+                TYPE_WINDOWS_CHANGED]]}
+```
+
+- The service is **bound**, not merely enabled. `capabilities=161` decodes to
+  128 CAN_TAKE_SCREENSHOT + 32 CAN_PERFORM_GESTURES + 1
+  CAN_RETRIEVE_WINDOW_CONTENT, so the capture permission #23 depends on is
+  genuinely granted, and the event mask is the narrow one declared rather than
+  a wider default.
+- `QUERY_ALL_PACKAGES: granted=true`.
+- `cmd package resolve-activity` on the deep links #24 targets:
+  `waze://?ll=..&navigate=yes -> com.waze`, `tel: -> com.google.android.dialer`,
+  and `https://wa.me/..`, `geo:`, `mailto:` all resolve through the chooser.
+  The private-scheme case is the one that justified refusing a scheme
+  allowlist, and it does resolve on real hardware.
+- No crash-buffer entries for the app after install and launch.
+- `settings get system accelerometer_rotation` -> `0`. Issue #12's symptom is
+  not present, though nothing in this session drove a run that would provoke it.
+- Proxy is healthy right now: logcat shows repeated `CONNECT chatgpt.com:443`
+  and **zero** `proxy-error:` entries, so `ProxyDiagnostics.explain` correctly
+  reports nothing. The 502 the user hit is not reproducing at this moment,
+  which means the dns-versus-connection mapping is still unproven against a
+  real failure.
+
+**A note on SYSTEM_ALERT_WINDOW, because the obvious reading of it is wrong:**
+
+```
+dumpsys package  -> android.permission.SYSTEM_ALERT_WINDOW: granted=false
+appops get       -> SYSTEM_ALERT_WINDOW: allow; time=+1h51m ago; duration=+9ms
+```
+
+These do not contradict each other. `SYSTEM_ALERT_WINDOW` is an appop
+permission, so its runtime grant flag stays false by design and the appop is
+what governs - `Settings.canDrawOverlays()` reads the appop, not the flag. The
+appop is `allow`, and the recorded usage shows the overlay was actually
+displayed. So the background-activity-launch exemption `open_intent` relies on
+is present, and the floating card works.
+
+Recorded here because reading the `dumpsys package` line alone leads straight
+to the wrong conclusion, which is exactly what happened while writing this.
+
+### Instrumented suite added, and what running it proved
+
+`app/src/androidTest/.../A11yToolsHardwareTest.kt` drives the tools themselves
+on the device: a real `screenshot` decoded as a PNG, six captures in a row to
+exercise the `HardwareBuffer` path, `read_ui` asserting `source:"accessibility"`
+and that our own package is absent, `resolve_intent` from **our** process
+rather than from shell, the blocked-scheme and confirmation gates, and the
+knowledge store on real device storage.
+
+```
+ANDROID_SERIAL=00152154B002517 ./gradlew.bat :app:connectedDevDebugAndroidTest   -Pandroid.testInstrumentationRunnerArguments.class=dev.androidagent.app.A11yToolsHardwareTest
+-> Starting 8 tests on A059 - 16 ... 7 skipped, 0 failed
+```
+
+Only `theKnowledgeStoreRoundTripsOnDeviceStorage` actually ran, and passed. The
+other seven skipped, and the reason is the finding:
+
+**Installing the androidTest APK disabled the accessibility service.** Before
+the run, `dumpsys accessibility` showed the service bound with
+`capabilities=161`. After it:
+
+```
+settings get secure enabled_accessibility_services  -> null
+settings get secure accessibility_enabled           -> 0
+ps -A | grep androidagent                           -> (no process)
+```
+
+This is the self-update hazard the plan listed as a hand-test item, now
+observed: an app update drops the service and it does **not** come back on its
+own. Every self-update therefore costs the user a manual re-enable.
+
+**And it cannot be restored from adb.** Writing the setting is silently
+rejected - the value reads back `null` in the same shell invocation:
+
+```
+settings put secure enabled_accessibility_services dev.androidagent.app.dev/...
+settings get secure enabled_accessibility_services  -> null
+```
+
+That is Android 13+ restricted-settings enforcement for a sideloaded package,
+and it is direct confirmation of the constraint the `A11yStatus` design was
+built around: there is no programmatic route back in. The user has to re-enable
+it in Settings > Accessibility, and where the toggle is blocked, first use
+App info > ⋮ > Allow restricted settings.
+
+Consequence for CI: `connectedDevDebugAndroidTest` cannot self-provision this
+state. The suite is written to skip rather than fail when the service is
+absent, so it reports honestly instead of going red on a device where the user
+simply has not granted it.
+
+### Instrumentation cannot cover the accessibility backend at all
+
+Second device, `Q8G64TD6ZTB6H6ZL` (Xiaomi 2201116TG, Android 13, arm64), used
+because the first replacement (`cd4928027d76`, Redmi HyperOS) refuses adb
+installs without a SIM: `INSTALL_FAILED_USER_RESTRICTED`, from
+`com.miui.securitycenter/AdbInstallVerifyActivity`.
+
+Two things were learned there, and the second one is structural.
+
+**The app process must already be running before the service is enabled.**
+Enabling the accessibility service from a cold package leaves it in
+`Crashed services:{}` and it never binds:
+
+```
+settings put secure enabled_accessibility_services <svc>   (cold)
+dumpsys accessibility -> Bound services:{}
+                         Crashed services:{{...AgentAccessibilityService}}
+```
+
+Start `MainActivity` first, then enable it, and it binds every time with
+`capabilities=161`. Worth knowing for onboarding: a user who enables the
+service before ever opening the app may land in exactly this state.
+
+**`am instrument` and a live accessibility service are mutually exclusive.**
+Instrumentation force-stops the package to take over its process. That kills
+the bound service, the manager records it as crashed, and it is not rebound
+while instrumentation owns the package. Waiting does not help - the suite was
+re-run with a 45 second wait per test and every one still timed out:
+
+```
+am instrument -w -e class dev.androidagent.app.A11yToolsHardwareTest ...
+Time: 316.558      (7 x 45s of waiting, all AssumptionViolatedException)
+dumpsys accessibility (after) -> Bound services:{}
+                                 Crashed services:{{...AgentAccessibilityService}}
+```
+
+`A11yServiceHandle` is process-local by design, so there is no arrangement of
+processes that lets an instrumented test see a service the framework has just
+unbound. Only `theKnowledgeStoreRoundTripsOnDeviceStorage`, which needs no
+service, passes.
+
+This invalidates the plan's assumption that one narrow instrumented test could
+enable the service and assert on `read_ui`. The suite is kept because it is
+correct and it documents the intent, and because it does cover the store, but
+it cannot be the route to hardware confidence in the accessibility path.
+
+**What would actually work**, not built: a debug-flavour-only broadcast
+receiver inside the app that invokes the tools in the app's own live process
+and writes the result somewhere adb can read. The service stays bound because
+nothing force-stops the package. That is a real design change and should be
+its own issue rather than something smuggled into this branch.
+
+### STILL NOT TESTED ON HARDWARE
+
+The remaining items need an agent run driven from the app UI, which this
+session did not perform:
+
+- `AccessibilityService.takeScreenshot` end to end: whether the PNG is valid,
+  whether the overlay is genuinely absent from the frame, the real rate limit,
+  and what error code a `FLAG_SECURE` window actually returns. The mapping of
+  code 5 to a secure window is taken from the platform documentation, not
+  observed.
+- Whether the `HardwareBuffer` close ordering is correct on this device. A leak
+  here is a graphics-memory leak that no JVM test can catch.
+- `open_intent` end to end. Resolution is confirmed above with
+  `cmd package resolve-activity`, but that runs as shell; whether our own
+  process sees the same handlers through `queryIntentActivities` under
+  `QUERY_ALL_PACKAGES`, and whether the launch lands on the expected screen,
+  is not.
+- Whether the typed `launch_denied` failure actually fires when the overlay
+  appop is revoked. The exemption is present today, so the failure path has
+  never executed.
+- That the knowledge store directory survives an app update in practice.
+- The proxy diagnostic against a real failure. The mapping is unit-tested and
+  the healthy path is confirmed on device, but the failing path needs the 502
+  to reproduce.
+
+### Not implemented, and why
+
+- #26 (workflow engine) depends on #25 and is a larger piece of work than the
+  rest of this change combined. Not started.
+- #21 (quota indicator) is self-contained UI work with no dependency on any of
+  the above. Not started.
+- #27 (Connected Apps probe) cannot be answered without a phone: the shipped
+  app-server binary is `aarch64-unknown-linux-musl` and does not run on the dev
+  machine.
+- #12 (auto-rotate) needs hardware to confirm the accessibility backend removed
+  the cause.
+- Seeding the knowledge store from the five bundled app cards, proposed in #25,
+  is not done. The store starts empty.
