@@ -103,11 +103,8 @@ object IntentPolicy {
      *
      * @param action fully-qualified action, or null to default to VIEW.
      * @param uri the data URI, or null for an action that needs none.
-     * @param userConfirmed set only after the user has approved this exact
-     *   intent in the conversation. It downgrades [Decision.NeedsConfirmation]
-     *   to [Decision.Allow] and nothing else — it can never unblock a [Decision.Deny].
      */
-    fun evaluate(action: String?, uri: String?, userConfirmed: Boolean = false): Decision {
+    fun evaluate(action: String?, uri: String?): Decision {
         val resolvedAction = action?.trim().takeUnless { it.isNullOrEmpty() }
             ?: "android.intent.action.VIEW"
         if (resolvedAction !in allowedActions) {
@@ -165,10 +162,10 @@ object IntentPolicy {
                 "The uri has no scheme. A relative uri cannot be resolved to an app.",
             )
         val sideEffect = describeSideEffect(parsed, scheme, resolvedAction)
-        return when {
-            sideEffect == null -> Decision.Allow(trimmed, resolvedAction)
-            userConfirmed -> Decision.Allow(trimmed, resolvedAction)
-            else -> Decision.NeedsConfirmation(trimmed, resolvedAction, sideEffect)
+        return if (sideEffect == null) {
+            Decision.Allow(trimmed, resolvedAction)
+        } else {
+            Decision.NeedsConfirmation(trimmed, resolvedAction, sideEffect)
         }
     }
 
@@ -193,7 +190,11 @@ object IntentPolicy {
      */
     private fun describeSideEffect(uri: URI, scheme: String, action: String): String? {
         val query = queryOf(uri)
-        val payload = payloadKeys.firstOrNull { key -> query.containsKey(key) }
+        val payload = if (query.containsKey("amount")) {
+            "amount"
+        } else {
+            payloadKeys.firstOrNull { key -> query.containsKey(key) }
+        }
         if (scheme in messagingSchemes) {
             val target = (uri.schemeSpecificPart ?: "").substringBefore('?').ifBlank { "a recipient" }
             return "Open a prefilled $scheme message to $target" +
@@ -206,13 +207,19 @@ object IntentPolicy {
         if (host != null && host in messagingHosts && payload != null) {
             return "Open $host with a prefilled message ($payload)."
         }
+        if (payload == "amount") {
+            return "Start a payment."
+        }
         if (payload != null && (scheme == "http" || scheme == "https")) {
             // A search URL also carries ?text=, so this is not on its own a
             // side effect; only the messaging hosts above are treated as one.
             return null
         }
-        if (payload == "amount") {
-            return "Start a payment."
+        if (payload != null) {
+            // Private app schemes are intentionally supported, but a payload
+            // such as whatsapp://send?text=... is still an outbound action.
+            // Ask rather than treating every unknown scheme as navigation.
+            return "Open $scheme with a prefilled $payload."
         }
         return null
     }

@@ -9,6 +9,7 @@ import dev.androidagent.core.AdbStatus
 import dev.androidagent.core.AgentModel
 import dev.androidagent.core.ChatMessage
 import dev.androidagent.core.ConnectionPhase
+import dev.androidagent.core.EngineEvent
 import dev.androidagent.core.ReasoningEffortOption
 import dev.androidagent.core.RunPhase
 import dev.androidagent.core.RunState
@@ -18,8 +19,45 @@ import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import java.io.File
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 class ChatUiTest {
+    @Test fun localIntentApprovalShowsExactRequestAndForwardsItsId() {
+        var answer: Pair<String, Boolean>? = null
+        val approval = EngineEvent.Approval(
+            requestId = "local-intent-1",
+            method = "open_intent",
+            details = buildJsonObject {
+                put("reason", "Start a payment")
+                put("action", "android.intent.action.VIEW")
+                put("uri", "https://pay.example/checkout?amount=10")
+                put("package", "com.example.pay")
+            },
+            threadId = "thread",
+            turnId = "turn",
+        )
+        compose.setContent {
+            AndroidAgentScreen(
+                fixture.copy(
+                    runState = RunState(
+                        phase = RunPhase.CONTROLLING,
+                        sessionId = "ui-fixture",
+                        status = "Waiting for approval",
+                        approval = approval,
+                    ),
+                ),
+                AgentUiActions(onApproval = { requestId, allow -> answer = requestId to allow }),
+            )
+        }
+
+        compose.onNodeWithText("Approval needed").assertIsDisplayed()
+        compose.onNodeWithText("https://pay.example/checkout?amount=10", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("com.example.pay", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("Allow").performClick()
+        compose.runOnIdle { assertEquals("local-intent-1" to true, answer) }
+    }
+
     @Test fun newChatRequiresConfirmationWhileAnotherSessionRuns() {
         var created = 0
         compose.setContent { AndroidAgentScreen(fixture.copy(runState = RunState(RunPhase.THINKING, "ui-fixture")), AgentUiActions(onNewChat = { created++ })) }

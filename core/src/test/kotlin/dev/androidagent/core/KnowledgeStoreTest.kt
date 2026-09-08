@@ -9,6 +9,7 @@ import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.io.File
 
 class KnowledgeStoreTest {
 
@@ -205,5 +206,21 @@ class KnowledgeStoreTest {
         val back = store().read("com.whatsapp").single()
         assertEquals("https://wa.me/1", back.intent)
         assertEquals(listOf("Search", "magnifier icon"), back.fallbacks)
+    }
+
+    @Test fun aCorruptExistingFileIsNeverOverwrittenByTheNextUpsert() {
+        val file = File(temp.root, "com.whatsapp.json")
+        file.writeText("{broken")
+
+        assertThrows(Exception::class.java) {
+            store().upsert(record())
+        }
+        assertEquals("{broken", file.readText())
+    }
+
+    @Test fun anOversizedFallbackIsRefusedBeforeWriting() {
+        assertThrows(IllegalArgumentException::class.java) {
+            store().upsert(record().copy(fallbacks = listOf("x".repeat(401))))
+        }
     }
 }

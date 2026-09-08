@@ -163,7 +163,7 @@ class A11yToolsHardwareTest {
         )
         assertFalse(result.success)
         val json = Json.parseToJsonElement(result.text).jsonObject
-        assertEquals("confirmation_required", json["errorType"]!!.jsonPrimitive.content)
+        assertEquals("approval_unavailable", json["errorType"]!!.jsonPrimitive.content)
     }
 
     @Test fun theKnowledgeStoreRoundTripsOnDeviceStorage() {

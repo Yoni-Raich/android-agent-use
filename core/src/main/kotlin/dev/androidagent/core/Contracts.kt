@@ -53,6 +53,12 @@ interface RuntimeHost {
 
 data class ToolDefinition(val name: String, val description: String, val inputSchema: JsonObject)
 data class ToolResult(val text: String, val imageBase64: String? = null, val success: Boolean = true, val attachmentPaths: List<String> = emptyList())
+data class LocalIntentRequest(
+    val action: String,
+    val uri: String?,
+    val packageName: String?,
+    val reason: String,
+)
 data class AccountStatus(val signedIn: Boolean, val label: String, val loginUrl: String? = null, val userCode: String? = null)
 
 /** A reasoning effort advertised by the connected engine for one model. */
