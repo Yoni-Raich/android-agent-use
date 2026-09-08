@@ -65,15 +65,13 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                 mutable.update { it.copy(a11yStatus = dev.androidagent.a11y.A11yAvailability.status(application)) }
             }
         }
-        // The proxy buffer is not a flow, so it is sampled when the runtime
-        // phase moves — which is when a connection failure would have been
-        // recorded. Metadata only: the buffer never holds tunnel bytes or
-        // credentials, and only a one-line explanation reaches the UI.
+        // Update on either lifecycle changes or a new proxy event. Proxy
+        // failures do not always move the runtime phase, so sampling only the
+        // status flow can leave a fresh 502 explanation invisible.
         viewModelScope.launch {
-            graph.runtime.status.collect { state ->
-                val diagnostic = dev.androidagent.core.ProxyDiagnostics.explain(
-                    graph.runtime.recentProxyEvents(),
-                )
+            combine(graph.runtime.status, graph.runtime.proxyEventState) { state, events ->
+                state to dev.androidagent.core.ProxyDiagnostics.explain(events)
+            }.collect { (state, diagnostic) ->
                 mutable.update { it.copy(runtimeStatus = state, networkDiagnostic = diagnostic) }
             }
         }

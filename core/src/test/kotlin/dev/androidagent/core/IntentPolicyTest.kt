@@ -117,24 +117,41 @@ class IntentPolicyTest {
         )
     }
 
-    @Test fun confirmationDowngradesToAllow() {
-        val decision = IntentPolicy.evaluate(view, "mailto:a@b.com?subject=hi", userConfirmed = true)
-        assertTrue(decision is IntentPolicy.Decision.Allow)
+    @Test fun aPaymentAmountAsksFirstEvenOnHttps() {
+        assertTrue(
+            IntentPolicy.evaluate(view, "https://pay.example/checkout?amount=10")
+                is IntentPolicy.Decision.NeedsConfirmation,
+        )
     }
 
-    @Test fun confirmationCanNeverUnblockADenial() {
-        // The whole point of the split: a user saying yes to a message is not
-        // a user granting access to content:// or to an arbitrary action.
+    @Test fun aPrivateSchemeWithAPrefilledPayloadAsksFirst() {
         assertTrue(
-            IntentPolicy.evaluate(view, "content://media/external/images/1", userConfirmed = true)
+            IntentPolicy.evaluate(view, "whatsapp://send?text=hello")
+                is IntentPolicy.Decision.NeedsConfirmation,
+        )
+        assertTrue(
+            IntentPolicy.evaluate(view, "myapp://search?text=hello")
+                is IntentPolicy.Decision.NeedsConfirmation,
+        )
+        assertTrue(IntentPolicy.evaluate(view, "myapp://screen/42") is IntentPolicy.Decision.Allow)
+    }
+
+    @Test fun sensitiveIntentAlwaysNeedsAppOwnedConfirmation() {
+        val decision = IntentPolicy.evaluate(view, "mailto:a@b.com?subject=hi")
+        assertTrue(decision is IntentPolicy.Decision.NeedsConfirmation)
+    }
+
+    @Test fun forbiddenInputsRemainDenied() {
+        assertTrue(
+            IntentPolicy.evaluate(view, "content://media/external/images/1")
                 is IntentPolicy.Decision.Deny,
         )
         assertTrue(
-            IntentPolicy.evaluate("android.intent.action.CALL", "tel:+1", userConfirmed = true)
+            IntentPolicy.evaluate("android.intent.action.CALL", "tel:+1")
                 is IntentPolicy.Decision.Deny,
         )
         assertTrue(
-            IntentPolicy.evaluate(view, "intent://scan/#Intent;scheme=zxing;end", userConfirmed = true)
+            IntentPolicy.evaluate(view, "intent://scan/#Intent;scheme=zxing;end")
                 is IntentPolicy.Decision.Deny,
         )
     }

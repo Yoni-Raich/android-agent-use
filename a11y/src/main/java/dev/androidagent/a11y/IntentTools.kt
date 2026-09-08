@@ -1,16 +1,17 @@
 package dev.androidagent.a11y
 
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
 import android.net.Uri
 import dev.androidagent.core.IntentPolicy
+import dev.androidagent.core.LocalIntentRequest
 import dev.androidagent.core.ToolNotServiceable
 import dev.androidagent.core.ToolResult
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
@@ -32,6 +33,7 @@ internal class IntentTools(
     private val context: Context,
     /** Max apps reported by a resolve, so a broad action cannot flood the reply. */
     private val maxMatches: Int = 20,
+    private val authorizeIntent: suspend (LocalIntentRequest, () -> ToolResult) -> ToolResult,
 ) {
 
     /**
@@ -41,76 +43,55 @@ internal class IntentTools(
     fun resolve(arguments: JsonObject): ToolResult {
         val action = arguments.string("action")
         val uri = arguments.string("uri")
-        return when (val decision = IntentPolicy.evaluate(action, uri, userConfirmed = true)) {
-            // Confirmation is irrelevant here: resolving launches nothing.
-            // A Deny still stands, because it means the intent is malformed
-            // or forbidden and reporting its handlers would be misleading.
+        return when (val decision = IntentPolicy.evaluate(action, uri)) {
             is IntentPolicy.Decision.Deny -> denied(decision)
-            is IntentPolicy.Decision.NeedsConfirmation -> ToolResult(
-                "unreachable: userConfirmed was set",
-                success = false,
-            )
-            is IntentPolicy.Decision.Allow -> {
-                val intent = build(decision.action, decision.uri)
-                val matches = query(intent)
-                ToolResult(
-                    buildJsonObject {
-                        put("ok", true)
-                        put("action", decision.action)
-                        decision.uri?.let { put("uri", it) }
-                        put("resolves", matches.isNotEmpty())
-                        put("handlers", JsonArray(matches.map { it.toJson() }))
-                        if (matches.isEmpty()) {
-                            put(
-                                "hint",
-                                "Nothing on this device handles that intent. Either the app is " +
-                                    "not installed, or it is not visible to this app. Fall back " +
-                                    "to open_app and UI navigation.",
-                            )
-                        }
-                    }.toString(),
-                )
-            }
+            is IntentPolicy.Decision.NeedsConfirmation -> resolveAllowed(decision.action, decision.uri)
+            is IntentPolicy.Decision.Allow -> resolveAllowed(decision.action, decision.uri)
         }
     }
 
     /**
-     * Launches. The confirmation gate here is prompt-level, not enforced:
-     * `userConfirmed` is set by the model, and the model is instructed to set
-     * it only after the user agreed in the conversation. It is a speed bump
-     * against a deep link scraped off a page being fired without anyone
-     * noticing, not a guarantee — a real guarantee needs an approval round
-     * trip through the engine, which this tool has no channel for.
+     * Launches. A sensitive intent is suspended on an app-owned approval gate;
+     * model arguments can neither grant nor reuse that approval.
      */
-    fun open(arguments: JsonObject): ToolResult {
+    suspend fun open(arguments: JsonObject): ToolResult {
         val action = arguments.string("action")
         val uri = arguments.string("uri")
-        val confirmed = arguments["userConfirmed"]?.jsonPrimitive?.booleanOrNull == true
         val pkg = arguments.string("package")
-        return when (val decision = IntentPolicy.evaluate(action, uri, confirmed)) {
+        if (pkg != null) require(PACKAGE_RE.matches(pkg)) { "package is not a valid Android package name" }
+        return when (val decision = IntentPolicy.evaluate(action, uri)) {
             is IntentPolicy.Decision.Deny -> denied(decision)
-            is IntentPolicy.Decision.NeedsConfirmation -> ToolResult(
-                buildJsonObject {
-                    put("ok", false)
-                    put("errorType", "confirmation_required")
-                    put("message", decision.what)
-                    put(
-                        "remedy",
-                        "Ask the user, in the conversation, whether to do this. If they agree, " +
-                            "call open_intent again with userConfirmed=true. Do not set it on " +
-                            "your own judgement.",
-                    )
-                }.toString(),
-                success = false,
-            )
+            is IntentPolicy.Decision.NeedsConfirmation -> authorizeIntent(
+                LocalIntentRequest(decision.action, decision.uri, pkg, decision.what),
+            ) { launch(IntentPolicy.Decision.Allow(decision.uri, decision.action), pkg) }
             is IntentPolicy.Decision.Allow -> launch(decision, pkg)
         }
+    }
+
+    private fun resolveAllowed(action: String, uri: String?): ToolResult {
+        val intent = build(action, uri)
+        val matches = query(intent)
+        return ToolResult(
+            buildJsonObject {
+                put("ok", true)
+                put("action", action)
+                uri?.let { put("uri", it) }
+                put("resolves", matches.isNotEmpty())
+                put("handlers", JsonArray(matches.map { it.toJson() }))
+                if (matches.isEmpty()) {
+                    put(
+                        "hint",
+                        "Nothing on this device handles that intent. Either the app is not installed, " +
+                            "or it is not visible to this app. Fall back to open_app and UI navigation.",
+                    )
+                }
+            }.toString(),
+        )
     }
 
     private fun launch(decision: IntentPolicy.Decision.Allow, pkg: String?): ToolResult {
         val intent = build(decision.action, decision.uri)
         if (pkg != null) {
-            require(PACKAGE_RE.matches(pkg)) { "package is not a valid Android package name" }
             // A package hint narrows an ambiguous link to one app. It is not a
             // component: the app still picks its own entry point.
             intent.setPackage(pkg)
@@ -153,6 +134,12 @@ internal class IntentTools(
                     )
                 }.toString(),
                 success = false,
+            )
+        } catch (_: ActivityNotFoundException) {
+            throw ToolNotServiceable(
+                "no_handler",
+                "The app that handled this intent is no longer available. Resolve it again or " +
+                    "fall back to open_app and UI navigation.",
             )
         }
     }
@@ -209,14 +196,13 @@ internal class IntentTools(
                 name = "open_intent",
                 description = "Open a destination directly by intent or deep link instead of navigating " +
                     "there through the UI — a maps route, a specific chat, a settings screen. Prefer this " +
-                    "over open_app plus taps when a link reaches the target. If the reply is " +
-                    "confirmation_required, ask the user first, then retry with userConfirmed=true. " +
-                    "Always verify with read_ui that the expected screen opened.",
+                    "over open_app plus taps when a link reaches the target. Sensitive destinations pause " +
+                    "for an app-owned user approval before launch. Always verify with read_ui that the " +
+                    "expected screen opened.",
                 properties = mapOf(
                     "action" to "string",
                     "uri" to "string",
                     "package" to "string",
-                    "userConfirmed" to "boolean",
                 ),
                 required = emptyList(),
             ),

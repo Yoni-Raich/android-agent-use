@@ -11,6 +11,7 @@ import dev.androidagent.core.ObservationState
 import dev.androidagent.core.ToolDefinition
 import dev.androidagent.core.ToolNotServiceable
 import dev.androidagent.core.ToolResult
+import dev.androidagent.core.LocalIntentRequest
 import dev.androidagent.core.UiObservationSerializer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
@@ -46,12 +47,18 @@ class A11yDeviceTools(
     private val observations: ObservationState,
     /** Moves the floating card away from a coordinate before a gesture lands on it. */
     private val avoidTouch: (Int, Int) -> Unit = { _, _ -> },
+    private val authorizeIntent: suspend (LocalIntentRequest, () -> ToolResult) -> ToolResult = { _, _ ->
+        ToolResult(
+            "{\"ok\":false,\"errorType\":\"approval_unavailable\",\"message\":\"This intent needs approval in the app.\"}",
+            success = false,
+        )
+    },
 ) : DeviceToolGateway {
 
     private val lock = Any()
 
     /** Direct navigation, tried before walking the UI. */
-    private val intents = IntentTools(context)
+    private val intents = IntentTools(context, authorizeIntent = authorizeIntent)
 
     @Volatile private var revoked = true
     @Volatile private var workspace: File? = null
