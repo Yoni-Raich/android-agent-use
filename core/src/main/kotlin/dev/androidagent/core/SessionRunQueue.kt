@@ -1,0 +1,81 @@
+package dev.androidagent.core
+
+import java.io.File
+import java.util.UUID
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.Serializable
+
+@Serializable
+data class QueuedTurn(
+    val id: String = UUID.randomUUID().toString(),
+    val sessionId: String,
+    val prompt: String,
+    val imagePaths: List<String> = emptyList(),
+    val model: String? = null,
+    val effort: String? = null,
+    val skill: AgentSkill? = null,
+)
+
+/** FIFO sessions share one device owner. Restored work requires explicit Resume. */
+class SessionRunQueue(
+    private val scope: CoroutineScope,
+    private val coordinator: AgentCoordinator,
+    private val store: SessionStore,
+) {
+    private val lock = Mutex()
+    private val pending = MutableStateFlow<List<QueuedTurn>>(emptyList())
+    val turns = pending.asStateFlow()
+    private val pausedState = MutableStateFlow(false)
+    val paused = pausedState.asStateFlow()
+    private val loaded = scope.launch {
+        lock.withLock {
+            pending.value = store.loadQueuedTurns()
+            if (pending.value.isNotEmpty()) pausedState.value = true
+        }
+    }
+
+    init {
+        scope.launch {
+            loaded.join()
+            coordinator.available.collect { if (it) dispatch() }
+        }
+    }
+
+    suspend fun submit(request: QueuedTurn) {
+        loaded.join()
+        lock.withLock {
+            check(store.getSession(request.sessionId) != null) { "Chat no longer exists." }
+            val active = coordinator.state.value
+            if (active.active && active.sessionId == request.sessionId) {
+                check(active.phase != RunPhase.STARTING && active.phase != RunPhase.STOPPING) { "Wait for the current turn to start or stop." }
+                check(request.imagePaths.isEmpty()) { "Send attachments after this run finishes." }
+                coordinator.steer(request.prompt)
+                return
+            }
+            check(pending.value.size < 32) { "The queue is full. Cancel a queued task first." }
+            save(pending.value + request)
+        }
+        dispatch()
+    }
+
+    fun pause() { pausedState.value = true }
+    suspend fun resume() { loaded.join(); pausedState.value = false; dispatch() }
+    suspend fun cancel(id: String) { loaded.join(); lock.withLock { save(pending.value.filterNot { it.id == id }) } }
+    suspend fun cancelSession(id: String) { loaded.join(); lock.withLock { save(pending.value.filterNot { it.sessionId == id }) } }
+
+    private suspend fun save(value: List<QueuedTurn>) { store.saveQueuedTurns(value); pending.value = value }
+
+    private suspend fun dispatch() = lock.withLock {
+        if (pausedState.value || !coordinator.available.value || coordinator.state.value.active) return@withLock
+        val next = pending.value.firstOrNull() ?: return@withLock
+        // Dequeue durably before starting, so a process crash cannot replay side effects.
+        save(pending.value.drop(1))
+        coordinator.send(next.sessionId, next.prompt, next.imagePaths.map(::File), next.model, next.effort, next.skill)
+    }
+}

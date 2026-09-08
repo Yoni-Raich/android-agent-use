@@ -1,5 +1,8 @@
 package dev.androidagent.app.ui
 
+import androidx.compose.material.icons.filled.EditNote
+import androidx.compose.material.icons.filled.DataUsage
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -246,6 +249,7 @@ fun AndroidAgentScreen(
                         onOpenSettings = actions.onOpenSettings,
                         onOpenWirelessSettings = actions.onOpenWirelessSettings,
                         onOpenFiles = actions.onOpenWorkspaceFiles,
+                        onNewChat = actions.onNewChat,
                     )
                 },
                 bottomBar = {
@@ -279,7 +283,14 @@ private fun AgentTopBar(
     onOpenSettings: () -> Unit,
     onOpenWirelessSettings: () -> Unit,
     onOpenFiles: () -> Unit,
+    onNewChat: () -> Unit,
 ) {
+    var confirmNew by remember { mutableStateOf(false) }
+    if (confirmNew) AlertDialog(onDismissRequest = { confirmNew = false },
+        title = { Text("Start a new chat?") },
+        text = { Text("The current task will keep running. New tasks will wait in the queue.") },
+        confirmButton = { TextButton(onClick = { confirmNew = false; onNewChat() }) { Text("New chat") } },
+        dismissButton = { TextButton(onClick = { confirmNew = false }) { Text("Cancel") } })
     TopAppBar(
         title = {
             Column {
@@ -310,6 +321,9 @@ private fun AgentTopBar(
             }
         },
         actions = {
+            IconButton(onClick = { if (state.runState.active) confirmNew = true else onNewChat() }) {
+                Icon(Icons.Default.EditNote, contentDescription = "New chat")
+            }
             IconButton(
                 onClick = onOpenFiles,
                 modifier = Modifier.semantics { contentDescription = "Open workspace files" },
@@ -703,9 +717,6 @@ private fun AgentChatContent(
         if (state.toolCards.isNotEmpty()) {
             items(state.toolCards, key = { "tool-${it.id}" }) { card -> ToolCard(card) }
         }
-        if (state.runState.active) {
-            item(key = "run-status") { RunCard(state.runState) }
-        }
         state.runState.approval?.let { approval ->
             item(key = "approval-${approval.requestId}") {
                 ApprovalCard(approval = approval, onApproval = actions.onApproval)
@@ -775,7 +786,10 @@ private fun MessageBubble(message: ChatMessage) {
     val user = role == "user"
     val system = role == "system" || role == "tool"
     if (system) {
-        ActivityDetail("Agent update", dev.androidagent.core.SecretRedactor.redact(message.text))
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            ActivityDetail(if (role == "tool") "Device activity" else "Run details", dev.androidagent.core.SecretRedactor.redact(message.text))
+            InlineImages(message.attachmentPaths)
+        }
         return
     }
     val bubbleColor = when {
@@ -841,14 +855,15 @@ private fun MessageBubble(message: ChatMessage) {
                 } else if (message.state.equals("streaming", ignoreCase = true)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         CircularProgressIndicator(modifier = Modifier.size(15.dp), strokeWidth = 2.dp)
-                        Text("Thinking…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Working…", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 } else {
                     Text("No text returned.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                if (message.attachmentPaths.isNotEmpty()) {
+                InlineImages(message.attachmentPaths)
+                if (message.attachmentPaths.any { !isImagePath(it) }) {
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        items(message.attachmentPaths, key = { it }) { path ->
+                        items(message.attachmentPaths.filterNot(::isImagePath), key = { it }) { path ->
                             AssistChip(
                                 onClick = {},
                                 label = { Text(path.substringAfterLast('/').substringAfterLast('\\'), maxLines = 1) },
@@ -860,81 +875,6 @@ private fun MessageBubble(message: ChatMessage) {
             }
         }
     }
-}
-
-private sealed interface MarkdownBlock {
-    data class Text(val value: String, val level: Int = 0, val bullet: Boolean = false) : MarkdownBlock
-    data class Code(val value: String) : MarkdownBlock
-}
-
-private fun parseMarkdown(value: String): List<MarkdownBlock> {
-    val blocks = mutableListOf<MarkdownBlock>()
-    val code = StringBuilder()
-    var inCode = false
-    value.lineSequence().forEach { raw ->
-        val line = raw.trimEnd()
-        if (line.trimStart().startsWith("```")) {
-            if (inCode) { blocks += MarkdownBlock.Code(code.toString().trimEnd()); code.clear() }
-            inCode = !inCode
-        } else if (inCode) {
-            code.appendLine(line)
-        } else if (line.isBlank()) {
-            blocks += MarkdownBlock.Text("")
-        } else {
-            val heading = Regex("^(#{1,6})\\s+(.+)$").find(line)
-            val bullet = Regex("^\\s*(?:[-*+]\\s+|\\d+[.)]\\s+)(.+)$").find(line)
-            blocks += when {
-                heading != null -> MarkdownBlock.Text(heading.groupValues[2], heading.groupValues[1].length)
-                bullet != null -> MarkdownBlock.Text("• ${bullet.groupValues[1]}", bullet = true)
-                else -> MarkdownBlock.Text(line)
-            }
-        }
-    }
-    if (inCode) blocks += MarkdownBlock.Code(code.toString().trimEnd())
-    return blocks
-}
-
-@Composable
-private fun MarkdownMessage(value: String, textColor: Color) {
-    Column(verticalArrangement = Arrangement.spacedBy(5.dp), modifier = Modifier.fillMaxWidth()) {
-        parseMarkdown(value).forEach { block ->
-            when (block) {
-                is MarkdownBlock.Code -> Surface(
-                    color = Color(0xFF171717), shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    SelectionContainer {
-                        Text(block.value, modifier = Modifier.padding(12.dp), fontFamily = FontFamily.Monospace,
-                            style = MaterialTheme.typography.bodyMedium.copy(textDirection = TextDirection.Content), color = Color(0xFFE5E5E5))
-                    }
-                }
-                is MarkdownBlock.Text -> if (block.value.isNotEmpty()) {
-                    Text(
-                        text = markdownAnnotated(block.value, textColor, block.level),
-                        modifier = Modifier.fillMaxWidth(),
-                        style = (when (block.level) { 1 -> MaterialTheme.typography.headlineSmall; 2 -> MaterialTheme.typography.titleLarge; else -> MaterialTheme.typography.bodyLarge }).copy(textDirection = TextDirection.Content),
-                        fontWeight = if (block.level > 0) FontWeight.SemiBold else null,
-                    )
-                } else Spacer(Modifier.height(5.dp))
-            }
-        }
-    }
-}
-
-private fun markdownAnnotated(value: String, color: Color, heading: Int): AnnotatedString = buildAnnotatedString {
-    var index = 0
-    val token = Regex("(\\*\\*|__|`)(.+?)(\\1)")
-    token.findAll(value).forEach { match ->
-        append(value.substring(index, match.range.first))
-        val content = match.groupValues[2]
-        if (match.groupValues[1] == "`") {
-            withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = Color(0xFF252525))) { append(" $content ") }
-        } else {
-            withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(content) }
-        }
-        index = match.range.last + 1
-    }
-    append(value.substring(index))
 }
 
 @Composable
@@ -1189,7 +1129,7 @@ private fun AgentComposer(state: AgentUiState, actions: AgentUiActions) {
     var modelMenu by remember { mutableStateOf(false) }
     var reasoningMenu by remember { mutableStateOf(false) }
     val voiceActive = state.voiceState.active
-    val active = state.runState.active && !voiceActive
+    val active = state.runState.active && state.runState.sessionId == state.activeSessionId && !voiceActive
     val stopping = state.runState.phase == RunPhase.STOPPING && !voiceActive
     val voiceStopping = state.voiceState.phase == dev.androidagent.core.VoicePhase.STOPPING
     val voiceBusy = state.voiceState.phase in setOf(
@@ -1215,6 +1155,32 @@ private fun AgentComposer(state: AgentUiState, actions: AgentUiActions) {
     }
     Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background)
         .navigationBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp)) {
+        if (state.runState.active) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f)) { RunCard(state.runState) }
+                if (!active && !voiceActive) TextButton(onClick = actions.onStop) { Text("Stop active task") }
+            }
+        }
+        if (state.queuedTurns.isNotEmpty()) {
+            Column(Modifier.fillMaxWidth().heightIn(max = 144.dp).verticalScroll(rememberScrollState())) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("${state.queuedTurns.size} queued${if (state.queuePaused) " · paused" else ""}", Modifier.weight(1f))
+                    if (state.queuePaused) TextButton(onClick = actions.onResumeQueue) { Text("Resume queue") }
+                }
+                state.queuedTurns.forEach { queued ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(queued.prompt, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        TextButton(onClick = { actions.onCancelQueued(queued.id) }) { Text("Cancel task") }
+                    }
+                }
+            }
+        }
+        if (voiceActive) {
+            Button(onClick = actions.onStop, enabled = !voiceStopping, modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.errorContainer, contentColor = MaterialTheme.colorScheme.onErrorContainer)) {
+                Icon(Icons.Default.Stop, null); Spacer(Modifier.width(8.dp)); Text("Stop voice")
+            }
+        }
         if (matchingSkills.isNotEmpty()) {
             Surface(
                 modifier = Modifier
@@ -1403,7 +1369,7 @@ private fun AgentComposer(state: AgentUiState, actions: AgentUiActions) {
                         Icon(Icons.Default.ArrowUpward, if (active) "Steer agent" else "Send message",
                             tint = if (canSend) Color.Black else Color(0xFF999999))
                     }
-                    if (!active) IconButton(
+                    if (!state.runState.active || voiceActive) IconButton(
                         onClick = actions.onVoiceToggle,
                         enabled = state.activeSessionId != null && !state.isLoadingMessages && !voiceStopping,
                         modifier = Modifier.size(48.dp).padding(3.dp)
@@ -1486,6 +1452,18 @@ private fun AgentSettingsSheet(state: AgentUiState, actions: AgentUiActions) {
                 Text("Settings", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             }
 
+            SettingsSection(title = "Usage", icon = Icons.Default.DataUsage) {
+                val usage = state.tokenUsage
+                Text(if (usage == null) "Token usage is not available yet." else
+                    "${usage.total} tokens · ${usage.input} input · ${usage.output} output · ${usage.cachedInput} cached")
+                if (state.usageLimits.isEmpty()) Text("Account quota is not available for this account yet.")
+                state.usageLimits.forEach { limit ->
+                    val remaining = limit.usedPercent?.let { "${(100 - it).toInt()}% remaining" } ?: "Unavailable"
+                    val reset = limit.resetsAt?.let { java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT).format(java.util.Date(it * 1000)) }
+                    Text("${limit.name}: $remaining${if (reset != null) " · resets $reset" else ""}")
+                }
+                TextButton(onClick = actions.onRefreshAccount) { Text("Refresh usage") }
+            }
             SettingsSection(title = "Runtime", icon = Icons.Default.Memory) {
                 StatusLine(
                     title = readableRuntimePhase(state.runtimeStatus.phase),
@@ -1893,7 +1871,7 @@ private fun StatusLine(title: String, detail: String, color: Color) {
 private fun readableRunPhase(phase: RunPhase): String = when (phase) {
     RunPhase.IDLE -> "Ready"
     RunPhase.STARTING -> "Starting"
-    RunPhase.THINKING -> "Thinking"
+    RunPhase.THINKING -> "Working"
     RunPhase.TOOL -> "Running a tool"
     RunPhase.CONTROLLING -> "Controlling device"
     RunPhase.STOPPING -> "Stopping"

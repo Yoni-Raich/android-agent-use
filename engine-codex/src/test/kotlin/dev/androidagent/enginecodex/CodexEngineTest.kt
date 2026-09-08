@@ -16,10 +16,24 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNull
 import org.junit.Test
 import java.io.File
 
 class CodexEngineTest {
+    @Test fun tokenUsageAndMultipleLimitWindowsAreParsedWithoutInventingMissingQuota() {
+        val usage = CodexEngine.parseTokenUsage(Json.parseToJsonElement("""{"total":{"totalTokens":180,"inputTokens":120,"outputTokens":60,"cachedInputTokens":40},"modelContextWindow":200000}""").jsonObject)!!
+        assertEquals(180L, usage.total)
+        assertEquals(40L, usage.cachedInput)
+        assertEquals(200000L, usage.contextWindow)
+        assertNull(CodexEngine.parseTokenUsage(null))
+        val limits = CodexEngine.parseRateLimits(Json.parseToJsonElement("""{"rateLimitsByLimitId":{"codex":{"primary":{"usedPercent":25,"resetsAt":12345,"windowDurationMins":300},"secondary":{"usedPercent":null}}}}""").jsonObject)
+        assertEquals(2, limits.size)
+        assertEquals(25.0, limits[0].usedPercent!!, 0.0)
+        assertNull(limits[1].usedPercent)
+        assertTrue(CodexEngine.parseRateLimits(Json.parseToJsonElement("{}").jsonObject).isEmpty())
+    }
+
     @Test fun skillCatalogParsesTheRequestedCwdAndEnabledSkills() {
         val workspace = File("workspace").absoluteFile
         val response = Json.parseToJsonElement(

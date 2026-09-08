@@ -47,6 +47,7 @@ class AgentService : Service() {
         super.onDestroy()
     }
     private fun stopAll() {
+        graph.queue.pause()
         graph.coordinator.endVoice()
         graph.coordinator.stop()
         scope.launch { runCatching { graph.voice.stop() } }
