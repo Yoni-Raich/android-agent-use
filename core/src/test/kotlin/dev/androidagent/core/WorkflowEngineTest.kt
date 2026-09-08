@@ -157,6 +157,24 @@ class WorkflowEngineTest {
         assertEquals(listOf("shot.png"), result.attachmentPaths)
     }
 
+    @Test fun completedScreenshotMediaSurvivesALaterFailure() {
+        val engine = WorkflowEngine(
+            invokeTool = { name, _ ->
+                if (name == "screenshot") {
+                    ToolResult("captured", imageBase64 = "image-data", attachmentPaths = listOf("shot.png"))
+                } else {
+                    ToolResult("failed", success = false)
+                }
+            },
+            store = WorkflowStore(temp.root),
+            isRevoked = { false },
+        )
+        val result = runBlocking { engine.run(steps("screenshot", "tap")) }
+        assertFalse(result.success)
+        assertEquals("image-data", result.imageBase64)
+        assertEquals(listOf("shot.png"), result.attachmentPaths)
+    }
+
     @Test fun savingAForbiddenWorkflowIsRejected() {
         val save = buildJsonObject {
             put("name", "unsafe")
