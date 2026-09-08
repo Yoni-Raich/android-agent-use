@@ -58,6 +58,13 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { graph.queue.turns.collect { turns -> mutable.update { it.copy(queuedTurns = turns) } } }
         viewModelScope.launch { graph.queue.paused.collect { paused -> mutable.update { it.copy(queuePaused = paused) } } }
         viewModelScope.launch { graph.adb.status.collect { state -> mutable.update { it.copy(adbStatus = state) } } }
+        // Connection is a flow; whether the user switched it on is a settings
+        // read, so re-check it whenever the service attaches or drops.
+        viewModelScope.launch {
+            dev.androidagent.a11y.A11yServiceHandle.service.collect {
+                mutable.update { it.copy(a11yStatus = dev.androidagent.a11y.A11yAvailability.status(application)) }
+            }
+        }
         viewModelScope.launch { graph.runtime.status.collect { state -> mutable.update { it.copy(runtimeStatus = state) } } }
         viewModelScope.launch { graph.voice.state.collect { state -> mutable.update { it.copy(voiceState = state) } } }
         viewModelScope.launch { graph.engine.voiceEvents.collect(::handleVoiceEvent) }

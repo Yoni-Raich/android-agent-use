@@ -6,6 +6,7 @@ import dev.androidagent.core.AccountStatus
 import dev.androidagent.core.AgentModel
 import dev.androidagent.core.AgentSkill
 import dev.androidagent.core.AdbEndpoint
+import dev.androidagent.a11y.A11yStatus
 import dev.androidagent.core.AdbStatus
 import dev.androidagent.core.ChatMessage
 import dev.androidagent.core.ChatSession
@@ -69,6 +70,7 @@ data class AgentUiState(
     val tokenUsage: dev.androidagent.core.TokenUsage? = null,
     val usageLimits: List<dev.androidagent.core.UsageLimit> = emptyList(),
     val adbStatus: AdbStatus = AdbStatus(),
+    val a11yStatus: A11yStatus = A11yStatus(declaredEnabled = false, connected = false),
     val runtimeStatus: RuntimeStatus = RuntimeStatus(),
     val accountStatus: AccountStatus? = null,
     val availableModels: List<String> = emptyList(),
@@ -125,6 +127,8 @@ data class AgentUiActions(
     val onConnect: (port: String) -> Unit = {},
     val onDiscover: () -> Unit = {},
     val onOpenWirelessSettings: () -> Unit = {},
+    val onOpenAccessibilitySettings: () -> Unit = {},
+    val onOpenAppInfo: () -> Unit = {},
     val onOpenOverlayPermission: () -> Unit = {},
     val onDisconnect: () -> Unit = {},
     val onForgetPairing: () -> Unit = {},

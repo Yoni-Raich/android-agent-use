@@ -1575,6 +1575,43 @@ private fun AgentSettingsSheet(state: AgentUiState, actions: AgentUiActions) {
                 }
             }
 
+            SettingsSection(title = "Accessibility control", icon = Icons.Default.Settings) {
+                StatusLine(
+                    title = if (state.a11yStatus.connected) "On" else "Off",
+                    detail = state.a11yStatus.message,
+                    color = if (state.a11yStatus.connected) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "Lets the agent read the screen and tap without Wireless Debugging. " +
+                        "While a task runs it reads on-screen text and sends it to the model.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (state.a11yStatus.blockedByRestrictedSetting) {
+                    // Switched on but never connected. On Android 13+ that is
+                    // what a sideloaded build looks like before the user allows
+                    // restricted settings, and no API reports it directly.
+                    Text(
+                        "Android is blocking this because the app was installed outside the Play Store. " +
+                            "Open App info, tap the three-dot menu, choose \"Allow restricted settings\", " +
+                            "then turn it on again in Accessibility.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    TextButton(onClick = actions.onOpenAppInfo, modifier = Modifier.fillMaxWidth()) {
+                        Icon(Icons.Default.Settings, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Open App info")
+                    }
+                }
+                TextButton(onClick = actions.onOpenAccessibilitySettings, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.Settings, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Open accessibility settings")
+                }
+            }
+
             SettingsSection(title = "Wireless ADB", icon = Icons.Default.Wifi) {
                 StatusLine(
                     title = readableConnectionPhase(state.adbStatus.phase),
