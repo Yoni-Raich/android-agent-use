@@ -51,7 +51,12 @@ class AgentGraph(private val app: Application) {
         observations,
         { x, y -> overlay.avoidTouch(x, y) },
     ) { hidden -> overlay.setCaptureHidden(hidden) }
-    val a11yTools = A11yDeviceTools(app, observations) { x, y -> overlay.avoidTouch(x, y) }
+    val a11yTools = A11yDeviceTools(
+        app,
+        observations,
+        avoidTouch = { x, y -> overlay.avoidTouch(x, y) },
+        authorizeIntent = { request, dispatch -> runCoordinator.authorizeLocalIntent(request, dispatch) },
+    )
     // Under homeDirectory, which is global across chats and is the one place
     // WorkspaceSeeder does not rewrite on every access.
     val knowledge = KnowledgeStore(KnowledgeStore.directoryIn(runtime.homeDirectory))
