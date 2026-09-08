@@ -87,7 +87,7 @@ class MainActivity : ComponentActivity() {
         onDismissError = { model.editUi { it.copy(errorMessage = null) } },
         onOpenWorkspaceFiles = { model.listFiles() },
         onOpenWorkspaceFile = { item -> openFile(item) },
-        onApproval = { _, allow -> model.graph.coordinator.approve(allow) },
+        onApproval = { requestId, allow -> model.graph.coordinator.approve(requestId, allow) },
         onCheckForUpdates = { model.checkForUpdates(manual = true) },
         onDownloadUpdate = { model.downloadUpdate() },
         onInstallUpdate = { model.installUpdate() },

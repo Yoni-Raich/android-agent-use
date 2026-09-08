@@ -4,6 +4,8 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.io.File
 import java.util.ArrayDeque
 import java.util.UUID
@@ -48,6 +50,7 @@ class AgentCoordinator(
     private val startupEvents = ArrayDeque<EngineEvent>()
     private var textRevision = 0L
     private var textFlushJob: Job? = null
+    private var pendingLocalApproval: PendingLocalApproval? = null
 
     init { scope.launch { engine.events.collect { event ->
         try { handleEvent(event) } catch (cancelled: CancellationException) {
@@ -128,6 +131,7 @@ class AgentCoordinator(
         val context = synchronized(lifecycleLock) {
             if (!voiceMode) return
             val stoppingEpoch = epoch.incrementAndGet()
+            cancelLocalApprovalLocked()
             voiceMode = false
             val controls = controlJobs.toList().also { jobs ->
                 jobs.forEach { it.cancel() }
@@ -280,6 +284,7 @@ class AgentCoordinator(
             val snapshot = state.value
             if (!snapshot.active || snapshot.phase == RunPhase.STOPPING || completion?.isCompleted == true) return
             val stoppingEpoch = epoch.incrementAndGet()
+            cancelLocalApprovalLocked()
             val controls = controlJobs.toList().also { jobs ->
                 jobs.forEach { it.cancel() }
                 controlJobs.clear()
@@ -353,10 +358,27 @@ class AgentCoordinator(
         }
     }
 
-    fun approve(allow: Boolean) {
+    fun approve(requestId: String, allow: Boolean) {
+        val handledLocally = synchronized(lifecycleLock) {
+            val pending = pendingLocalApproval
+            if (
+                pending != null && pending.id == requestId &&
+                state.value.approval?.requestId == requestId &&
+                isCurrentTurnLocked(pending.token, pending.threadId, pending.turnId)
+            ) {
+                pending.decision.complete(allow)
+                true
+            } else {
+                false
+            }
+        }
+        if (handledLocally) return
         val request = synchronized(lifecycleLock) {
             val approval = state.value.approval
-            if (approval == null || state.value.phase == RunPhase.STOPPING || !approvalMatchesLocked(approval)) {
+            if (
+                approval == null || approval.requestId != requestId || pendingLocalApproval != null ||
+                state.value.phase == RunPhase.STOPPING || !approvalMatchesLocked(approval)
+            ) {
                 null
             } else {
                 ApprovalRequest(epoch.get(), approval)
@@ -373,6 +395,72 @@ class AgentCoordinator(
                 if (error !is CancellationException && isCurrent(request.token)) {
                     state.value.sessionId?.let { sessions.append(message(it, "system", error.message ?: "Approval failed")) }
                 }
+            }
+        }
+    }
+
+    /**
+     * Wait for one app-owned approval and dispatch exactly the request that was
+     * shown. The model cannot mint, persist, or replay this permission.
+     */
+    suspend fun authorizeLocalIntent(
+        request: LocalIntentRequest,
+        dispatch: () -> ToolResult,
+    ): ToolResult {
+        val pending = synchronized(lifecycleLock) {
+            val token = epoch.get()
+            val currentThread = thread ?: throw CancellationException("Run stopped")
+            val currentTurn = turn ?: throw CancellationException("Run stopped")
+            if (!isCurrentTurnLocked(token, currentThread, currentTurn)) {
+                throw CancellationException("Run stopped")
+            }
+            check(state.value.approval == null && pendingLocalApproval == null) {
+                "Another approval is already waiting for the user."
+            }
+            val id = "local-intent-${UUID.randomUUID()}"
+            val approval = EngineEvent.Approval(
+                requestId = id,
+                method = "open_intent",
+                details = buildJsonObject {
+                    put("reason", request.reason)
+                    put("action", request.action)
+                    request.uri?.let { put("uri", it) }
+                    request.packageName?.let { put("package", it) }
+                },
+                threadId = currentThread,
+                turnId = currentTurn,
+            )
+            PendingLocalApproval(
+                id = id,
+                token = token,
+                threadId = currentThread,
+                turnId = currentTurn,
+                decision = CompletableDeferred(),
+            ).also {
+                pendingLocalApproval = it
+                mutableState.value = state.value.copy(
+                    approval = approval,
+                    status = "Waiting for your approval",
+                )
+                overlay.updateState(OverlayState(OverlayPhase.RUNNING, "Waiting for approval"))
+            }
+        }
+
+        val allowed = try {
+            withTimeoutOrNull(LOCAL_APPROVAL_TIMEOUT_MS) { pending.decision.await() } == true
+        } catch (cancelled: CancellationException) {
+            clearLocalApproval(pending)
+            throw cancelled
+        }
+
+        return synchronized(lifecycleLock) {
+            val stillCurrent = pendingLocalApproval === pending &&
+                isCurrentTurnLocked(pending.token, pending.threadId, pending.turnId)
+            clearLocalApprovalLocked(pending)
+            when {
+                !stillCurrent -> localIntentRejected("Run stopped before the intent was approved.")
+                !allowed -> localIntentRejected("The intent was denied or the approval expired.")
+                else -> dispatch()
             }
         }
     }
@@ -423,8 +511,6 @@ class AgentCoordinator(
             threadId == thread && turnId == turn
     }
 
-    private fun approvalMatches(approval: EngineEvent.Approval): Boolean = synchronized(lifecycleLock) { approvalMatchesLocked(approval) }
-
     private fun approvalMatchesLocked(approval: EngineEvent.Approval): Boolean =
         state.value.active && state.value.phase != RunPhase.STOPPING &&
             !approval.threadId.isNullOrBlank() && !approval.turnId.isNullOrBlank() &&
@@ -460,6 +546,32 @@ class AgentCoordinator(
     private fun ensureCurrentLocked(token: Long) {
         if (!isCurrentLocked(token)) throw CancellationException("Run stopped")
     }
+
+    private fun clearLocalApproval(pending: PendingLocalApproval) {
+        synchronized(lifecycleLock) { clearLocalApprovalLocked(pending) }
+    }
+
+    private fun clearLocalApprovalLocked(pending: PendingLocalApproval) {
+        if (pendingLocalApproval !== pending) return
+        pendingLocalApproval = null
+        if (state.value.approval?.requestId == pending.id) {
+            mutableState.value = state.value.copy(approval = null, status = "Working")
+        }
+    }
+
+    private fun cancelLocalApprovalLocked() {
+        pendingLocalApproval?.decision?.complete(false)
+        pendingLocalApproval = null
+    }
+
+    private fun localIntentRejected(message: String): ToolResult = ToolResult(
+        buildJsonObject {
+            put("ok", false)
+            put("errorType", "intent_not_approved")
+            put("message", message)
+        }.toString(),
+        success = false,
+    )
 
     private suspend fun handleEvent(event: EngineEvent) {
         if (bufferStartupEvent(event)) return
@@ -586,12 +698,16 @@ class AgentCoordinator(
                 }
             }
             is EngineEvent.Approval -> {
-                if (approvalMatches(event)) {
-                    synchronized(lifecycleLock) {
+                val accepted = synchronized(lifecycleLock) {
+                    if (approvalMatchesLocked(event) && state.value.approval == null && pendingLocalApproval == null) {
                         mutableState.value = state.value.copy(approval = event, status = "Waiting for your approval")
                         overlay.updateState(OverlayState(OverlayPhase.RUNNING, "Waiting for approval"))
+                        true
+                    } else {
+                        false
                     }
-                } else {
+                }
+                if (!accepted) {
                     runCatching { engine.answerApproval(event.requestId, false) }
                 }
             }
@@ -724,6 +840,7 @@ class AgentCoordinator(
         val final = synchronized(lifecycleLock) {
             if (epoch.get() != token) null
             else {
+                cancelLocalApprovalLocked()
                 val flush = textFlushJob.also { it?.cancel() }
                 textFlushJob = null
                 awaitingTurn = false
@@ -826,6 +943,13 @@ class AgentCoordinator(
 
     private data class SteerRequest(val token: Long, val sessionId: String?, val threadId: String, val turnId: String, val prompt: String)
     private data class ApprovalRequest(val token: Long, val approval: EngineEvent.Approval)
+    private data class PendingLocalApproval(
+        val id: String,
+        val token: Long,
+        val threadId: String,
+        val turnId: String,
+        val decision: CompletableDeferred<Boolean>,
+    )
     private data class AssistantTextSnapshot(val revision: Long, val text: String)
     private data class AssistantFinal(val id: String?, val text: String, val outcome: String, val flush: Job?)
     private data class StopContext(
@@ -849,4 +973,8 @@ class AgentCoordinator(
         val controls: List<Job>,
         val toolsInFlight: List<Job>,
     )
+
+    private companion object {
+        const val LOCAL_APPROVAL_TIMEOUT_MS = 120_000L
+    }
 }

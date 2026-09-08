@@ -11,6 +11,7 @@ import dev.androidagent.core.ObservationState
 import dev.androidagent.core.ToolDefinition
 import dev.androidagent.core.ToolNotServiceable
 import dev.androidagent.core.ToolResult
+import dev.androidagent.core.LocalIntentRequest
 import dev.androidagent.core.UiObservationSerializer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
@@ -46,9 +47,18 @@ class A11yDeviceTools(
     private val observations: ObservationState,
     /** Moves the floating card away from a coordinate before a gesture lands on it. */
     private val avoidTouch: (Int, Int) -> Unit = { _, _ -> },
+    private val authorizeIntent: suspend (LocalIntentRequest, () -> ToolResult) -> ToolResult = { _, _ ->
+        ToolResult(
+            "{\"ok\":false,\"errorType\":\"approval_unavailable\",\"message\":\"This intent needs approval in the app.\"}",
+            success = false,
+        )
+    },
 ) : DeviceToolGateway {
 
     private val lock = Any()
+
+    /** Direct navigation, tried before walking the UI. */
+    private val intents = IntentTools(context, authorizeIntent = authorizeIntent)
 
     @Volatile private var revoked = true
     @Volatile private var workspace: File? = null
@@ -94,7 +104,7 @@ class A11yDeviceTools(
 
     override fun needsControl(name: String): Boolean =
         when (name) {
-            "read_ui", "screenshot" -> false
+            "read_ui", "screenshot", "resolve_intent" -> false
             else -> true
         }
 
@@ -125,6 +135,7 @@ class A11yDeviceTools(
         checkActive()
         val result = when (name) {
             "read_ui" -> readUi(arguments)
+            "screenshot" -> screenshot()
             "tap" -> tap(arguments)
             "swipe" -> swipe(arguments)
             "type_text" -> typeText(arguments)
@@ -134,6 +145,8 @@ class A11yDeviceTools(
             "set_text" -> setText(arguments)
             "scroll_node" -> scrollNode(arguments)
             "wait_for_change" -> waitForChange(arguments)
+            "resolve_intent" -> intents.resolve(arguments)
+            "open_intent" -> intents.open(arguments)
             else -> throw ToolNotServiceable(
                 "a11y_unsupported",
                 "The accessibility backend does not implement \"$name\".",
@@ -198,6 +211,36 @@ class A11yDeviceTools(
         } ?: false
 
     // ---- actions ----
+
+    /**
+     * Capture the display without ADB.
+     *
+     * The overlay is already invisible by the time this runs: the coordinator
+     * consults [hidesOverlayDuringCapture] first, and this composites the real
+     * display, so window filtering — which is what keeps our card out of
+     * `read_ui` — does nothing here.
+     */
+    private suspend fun screenshot(): ToolResult {
+        val service = requireService()
+        val png = Screenshotter.capturePng(service)
+        if (png.size > MAX_SCREENSHOT_BYTES) {
+            // Bigger than the model will accept. Say so rather than truncating
+            // into a file that decodes to a corrupt image.
+            return ToolResult(
+                "Screenshot is ${png.size} bytes, above the ${MAX_SCREENSHOT_BYTES} byte limit.",
+                success = false,
+            )
+        }
+        checkActive()
+        val image = File(checkNotNull(workspace), "screenshots/${java.util.UUID.randomUUID()}.png")
+        image.parentFile!!.mkdirs()
+        image.writeBytes(png)
+        return ToolResult(
+            text = "Screenshot captured (${png.size} bytes, PNG, accessibility)",
+            imageBase64 = android.util.Base64.encodeToString(png, android.util.Base64.NO_WRAP),
+            attachmentPaths = listOf(image.absolutePath),
+        )
+    }
 
     private suspend fun tap(arguments: JsonObject): ToolResult {
         val x = arguments.requireCoordinate("x")
@@ -488,6 +531,10 @@ class A11yDeviceTools(
         private const val QUIESCENCE_POLL_MS = 50L
         private const val MAX_COORDINATE = 20_000
         private const val MAX_TEXT_CHARS = 4_000
+
+        /** Same ceiling the ADB backend enforces, so the two agree. */
+        private const val MAX_SCREENSHOT_BYTES = 16 * 1024 * 1024
+
         private const val MAX_WAIT_MS = 30_000L
 
         private val SCROLL_ACTIONS = mapOf(
@@ -524,6 +571,7 @@ class A11yDeviceTools(
                 mapOf("timeoutMs" to "integer", "raw" to "boolean", "force" to "boolean"),
                 emptyList(),
             ),
+            tool("screenshot", "Capture a PNG screenshot. Returns imageBase64. Read-only.", emptyMap(), emptyList()),
             tool("tap", "Tap the screen at pixel coordinates.", mapOf("x" to "integer", "y" to "integer"), listOf("x", "y")),
             tool(
                 "swipe",
@@ -567,7 +615,9 @@ class A11yDeviceTools(
                 mapOf("timeoutMs" to "integer"),
                 emptyList(),
             ),
-        )
+        ) + IntentTools.DEFINITIONS_SPEC.map { spec ->
+            tool(spec.name, spec.description, spec.properties, spec.required)
+        }
 
         private fun tool(
             name: String,

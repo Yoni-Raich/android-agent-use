@@ -65,7 +65,16 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                 mutable.update { it.copy(a11yStatus = dev.androidagent.a11y.A11yAvailability.status(application)) }
             }
         }
-        viewModelScope.launch { graph.runtime.status.collect { state -> mutable.update { it.copy(runtimeStatus = state) } } }
+        // Update on either lifecycle changes or a new proxy event. Proxy
+        // failures do not always move the runtime phase, so sampling only the
+        // status flow can leave a fresh 502 explanation invisible.
+        viewModelScope.launch {
+            combine(graph.runtime.status, graph.runtime.proxyEventState) { state, events ->
+                state to dev.androidagent.core.ProxyDiagnostics.explain(events)
+            }.collect { (state, diagnostic) ->
+                mutable.update { it.copy(runtimeStatus = state, networkDiagnostic = diagnostic) }
+            }
+        }
         viewModelScope.launch { graph.voice.state.collect { state -> mutable.update { it.copy(voiceState = state) } } }
         viewModelScope.launch { graph.engine.voiceEvents.collect(::handleVoiceEvent) }
         viewModelScope.launch { graph.engine.events.collect { event ->
