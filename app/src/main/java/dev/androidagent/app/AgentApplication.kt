@@ -37,7 +37,7 @@ class AgentGraph(private val app: Application) {
     val coordinator: AgentCoordinator
         get() = runCoordinator
     init {
-        runCoordinator = AgentCoordinator(scope, engine, sessions, tools, overlay)
+        runCoordinator = AgentCoordinator(scope, engine, sessions, tools, overlay) { adb.status.value }
         runCatching {
             WorkspaceSeeder.installDefaultSkills(runtime.homeDirectory, app)
         }

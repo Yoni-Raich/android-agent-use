@@ -244,6 +244,7 @@ fun AndroidAgentScreen(
                         state = state,
                         onOpenDrawer = { scope.launch { drawerState.open() } },
                         onOpenSettings = actions.onOpenSettings,
+                        onOpenWirelessSettings = actions.onOpenWirelessSettings,
                         onOpenFiles = actions.onOpenWorkspaceFiles,
                     )
                 },
@@ -276,6 +277,7 @@ private fun AgentTopBar(
     state: AgentUiState,
     onOpenDrawer: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenWirelessSettings: () -> Unit,
     onOpenFiles: () -> Unit,
 ) {
     TopAppBar(
@@ -287,7 +289,16 @@ private fun AgentTopBar(
                     overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.titleMedium,
                 )
-                if (state.runState.active) RunStatusPill(runState = state.runState)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    AdbStatusPill(
+                        status = state.adbStatus,
+                        onClick = onOpenWirelessSettings,
+                    )
+                    if (state.runState.active) RunStatusPill(runState = state.runState)
+                }
             }
         },
         navigationIcon = {
@@ -316,6 +327,53 @@ private fun AgentTopBar(
             containerColor = MaterialTheme.colorScheme.background,
         ),
     )
+}
+
+@Composable
+private fun AdbStatusPill(
+    status: dev.androidagent.core.AdbStatus,
+    onClick: () -> Unit,
+) {
+    val color = when (status.phase) {
+        ConnectionPhase.CONNECTED -> Color(0xFF4ADE80)
+        ConnectionPhase.DISCOVERING,
+        ConnectionPhase.PAIRING,
+        ConnectionPhase.CONNECTING -> Color(0xFFFBBF24)
+        ConnectionPhase.ERROR -> MaterialTheme.colorScheme.error
+        ConnectionPhase.DISCONNECTED -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val label = when (status.phase) {
+        ConnectionPhase.CONNECTED -> status.port?.let { "ADB · $it" } ?: "ADB · connected"
+        ConnectionPhase.DISCOVERING -> "ADB · searching"
+        ConnectionPhase.PAIRING -> "ADB · pairing"
+        ConnectionPhase.CONNECTING -> "ADB · reconnecting"
+        ConnectionPhase.ERROR -> "ADB · error"
+        ConnectionPhase.DISCONNECTED -> "ADB · disconnected"
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .clickable(onClick = onClick)
+            .semantics {
+                contentDescription = "$label. ${status.message}. Open Wireless Debugging settings"
+            }
+            .padding(horizontal = 6.dp, vertical = 3.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(7.dp)
+                .clip(CircleShape)
+                .background(color),
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = color,
+            maxLines = 1,
+        )
+    }
 }
 
 @Composable

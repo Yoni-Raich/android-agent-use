@@ -110,6 +110,15 @@ interface AgentEngine {
         reasoningEffort: String?,
         skill: AgentSkill?,
     ): String = startTurn(threadId, prompt, images, reasoningEffort)
+    /** Start a turn with a point-in-time snapshot of the app-owned ADB connection. */
+    suspend fun startTurn(
+        threadId: String,
+        prompt: String,
+        images: List<File> = emptyList(),
+        reasoningEffort: String?,
+        skill: AgentSkill?,
+        adbStatus: AdbStatus,
+    ): String = startTurn(threadId, prompt, images, reasoningEffort, skill)
     suspend fun steer(threadId: String, turnId: String, prompt: String)
     suspend fun interrupt(threadId: String, turnId: String)
     suspend fun answerTool(requestId: String, result: ToolResult)
