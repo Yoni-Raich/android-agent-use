@@ -682,6 +682,58 @@ state. The suite is written to skip rather than fail when the service is
 absent, so it reports honestly instead of going red on a device where the user
 simply has not granted it.
 
+### Instrumentation cannot cover the accessibility backend at all
+
+Second device, `Q8G64TD6ZTB6H6ZL` (Xiaomi 2201116TG, Android 13, arm64), used
+because the first replacement (`cd4928027d76`, Redmi HyperOS) refuses adb
+installs without a SIM: `INSTALL_FAILED_USER_RESTRICTED`, from
+`com.miui.securitycenter/AdbInstallVerifyActivity`.
+
+Two things were learned there, and the second one is structural.
+
+**The app process must already be running before the service is enabled.**
+Enabling the accessibility service from a cold package leaves it in
+`Crashed services:{}` and it never binds:
+
+```
+settings put secure enabled_accessibility_services <svc>   (cold)
+dumpsys accessibility -> Bound services:{}
+                         Crashed services:{{...AgentAccessibilityService}}
+```
+
+Start `MainActivity` first, then enable it, and it binds every time with
+`capabilities=161`. Worth knowing for onboarding: a user who enables the
+service before ever opening the app may land in exactly this state.
+
+**`am instrument` and a live accessibility service are mutually exclusive.**
+Instrumentation force-stops the package to take over its process. That kills
+the bound service, the manager records it as crashed, and it is not rebound
+while instrumentation owns the package. Waiting does not help - the suite was
+re-run with a 45 second wait per test and every one still timed out:
+
+```
+am instrument -w -e class dev.androidagent.app.A11yToolsHardwareTest ...
+Time: 316.558      (7 x 45s of waiting, all AssumptionViolatedException)
+dumpsys accessibility (after) -> Bound services:{}
+                                 Crashed services:{{...AgentAccessibilityService}}
+```
+
+`A11yServiceHandle` is process-local by design, so there is no arrangement of
+processes that lets an instrumented test see a service the framework has just
+unbound. Only `theKnowledgeStoreRoundTripsOnDeviceStorage`, which needs no
+service, passes.
+
+This invalidates the plan's assumption that one narrow instrumented test could
+enable the service and assert on `read_ui`. The suite is kept because it is
+correct and it documents the intent, and because it does cover the store, but
+it cannot be the route to hardware confidence in the accessibility path.
+
+**What would actually work**, not built: a debug-flavour-only broadcast
+receiver inside the app that invokes the tools in the app's own live process
+and writes the result somewhere adb can read. The service stays bound because
+nothing force-stops the package. That is a real design change and should be
+its own issue rather than something smuggled into this branch.
+
 ### STILL NOT TESTED ON HARDWARE
 
 The remaining items need an agent run driven from the app UI, which this
