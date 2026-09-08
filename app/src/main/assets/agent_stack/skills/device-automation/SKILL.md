@@ -56,6 +56,32 @@ earlier node list is no longer available to you.
 
 ---
 
+## 1b. Node Addressing (only when these tools appear in your tool list)
+
+`tap_node`, `set_text`, `scroll_node` and `wait_for_change` are served by the
+accessibility backend. **They exist only in chats started after they shipped.**
+If they are not in your tool list, this whole section does not apply — use the
+bounds-centre maths in section 1 instead. Never call a tool you were not given.
+
+When they are available, prefer them over coordinates: they act on the node
+itself, so they cannot miss because the screen scrolled a few pixels.
+
+- `tap_node(nodeId, observationId)` — both ids are required. `observationId`
+  comes from the `read_ui` reply the node was listed in. A node from a stale
+  observation is refused with an explanation rather than tapped blindly.
+  After an `"unchanged":true` reply, the `observationId` you already hold is
+  still accepted.
+- `set_text(nodeId, observationId, text, submit?)` — replaces the field's whole
+  contents. Check `verified` in the reply: some chat and Compose inputs accept
+  the action and keep their old value. If `verified` is false, fall back to
+  tapping the field and using `type_text`.
+- `scroll_node(nodeId, observationId, direction)` — `forward`, `backward`, `up`,
+  `down`, `left`, `right`. More reliable inside a list than a swipe gesture.
+  `success:false` usually means the list is already at that end.
+- `wait_for_change(timeoutMs?)` — blocks until the screen changes and settles.
+  Use it after an action that starts a transition instead of polling `read_ui`.
+  `changed:false` means nothing moved, so the previous action did not land.
+
 ## 2. Text Input & IME (`type_text`)
 
 The app provides a dedicated Unicode Input Method Service (`AgentInputMethodService`).

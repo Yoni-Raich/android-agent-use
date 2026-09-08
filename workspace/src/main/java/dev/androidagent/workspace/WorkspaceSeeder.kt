@@ -193,7 +193,16 @@ object WorkspaceSeeder {
         - **Clickable Containers**: If a target text label has `clickable="false"`, locate its nearest clickable ancestor container and tap the center of that container.
         - Dispatch `tap(x=x, y=y)`. Semantic center taps are deterministic and cannot miss.
 
-        ### Tier 2: Visual Fallback
+        ### Tier 1b: Node Addressing (only if these tools are in your tool list)
+- `tap_node`, `set_text`, `scroll_node` and `wait_for_change` act on a node
+  directly instead of on a coordinate, so they cannot miss. They require both
+  `nodeId` and the `observationId` of the `read_ui` reply that listed the node.
+- They exist only in chats started after they shipped. If they are not in your
+  tool list, use the bounds-centre maths above and do not call them.
+- `set_text` returns `verified`. When it is false the field kept its old value,
+  so tap the field and use `type_text` instead of assuming success.
+
+### Tier 2: Visual Fallback
         - Use `screenshot` when:
           - The UI hierarchy is empty, collapsed, or drawn inside an unexposed WebView/Canvas/game.
           - Targeting pure icons lacking `content-desc` or resource identifiers.
