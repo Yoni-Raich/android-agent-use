@@ -72,6 +72,11 @@ data class AgentUiState(
     val adbStatus: AdbStatus = AdbStatus(),
     val a11yStatus: A11yStatus = A11yStatus(declaredEnabled = false, connected = false),
     val runtimeStatus: RuntimeStatus = RuntimeStatus(),
+    /**
+     * Why the tunnel to OpenAI last failed, in one sentence, or null when it
+     * has not. Without this the user sees only a retry counter and a 502.
+     */
+    val networkDiagnostic: String? = null,
     val accountStatus: AccountStatus? = null,
     val availableModels: List<String> = emptyList(),
     val modelCatalog: List<AgentModel> = emptyList(),

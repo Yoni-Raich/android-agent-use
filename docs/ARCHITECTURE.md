@@ -401,3 +401,108 @@ is not left idle-gated.
 `declaredEnabled && !connected` is the Android 13+ restricted-setting signature
 for a sideloaded build. No API reports it, so that divergence is the detector,
 and it gets its own message and a route to App info.
+
+## Capture without ADB
+
+`screenshot` is served by the accessibility backend through
+`AccessibilityService.takeScreenshot`, so the Vision fallback survives with
+Wireless Debugging off. It matters because screenshot is the tier below the
+node tree: games, canvas surfaces and unexposed WebViews expose nothing to
+`read_ui`, and before this the agent could not see them at all without ADB.
+
+The framework hands back a `HardwareBuffer` the caller owns. It is closed in a
+`finally` on every path, including the one where the run was stopped while the
+capture was in flight — that callback still fires, and nothing downstream would
+ever release it.
+
+Rate limiting, an unavailable display and a missing capture permission all
+raise `ToolNotServiceable`, so the composite falls through to ADB. A
+`FLAG_SECURE` window is typed too, but says plainly that no backend will
+succeed: `screencap` returns a black frame there, and a black frame presented
+as the screen is worse than an honest refusal.
+
+`hidesOverlayDuringCapture` stays true for this tool. Window filtering is what
+keeps our card out of `read_ui`, and it does nothing for a composited display.
+
+## Reaching a destination directly
+
+`resolve_intent` and `open_intent` try an intent or deep link before the agent
+walks there through the UI. Both run in-process, so they need no ADB.
+
+Every intent passes `IntentPolicy` in `:core` first, which is pure JVM so the
+security boundary is covered by unit tests rather than only by running the app.
+Three rules carry most of the weight:
+
+- **Schemes are blocked structurally, not allowlisted.** A positive allowlist
+  was the first design and it does not survive contact with the feature: app
+  deep links use private schemes (`waze:`, `spotify:`, `tg:`) and enumerating
+  them would block exactly the case the layer exists for. What is refused is
+  anything that reads local data (`file`, `content`, `android_resource`),
+  injects a component (`intent`, `android-app`), or executes (`javascript`,
+  `data`, `jar`). The scheme is read off the raw text before parsing, because
+  `android_resource` is not a valid URI and would otherwise be reported as
+  merely malformed.
+- **`ACTION_CALL` is not an available action.** It places a call with no
+  confirmation. `ACTION_DIAL` reaches the same screen and leaves the
+  irreversible press to the user, so the capability is kept and the
+  irreversible half is not.
+- **Sending asks first.** A messaging scheme, `SENDTO`, or a prefilled payload
+  on a known messaging host returns `confirmation_required` naming what would
+  happen. `userConfirmed` downgrades that to allowed and can never unblock a
+  denial. This gate is prompt-level, not enforced: the model sets the flag, and
+  a real guarantee needs an approval round trip through the engine, which a
+  device tool has no channel for. It is a speed bump against a link scraped off
+  a page being fired unnoticed.
+
+`QUERY_ALL_PACKAGES` is required: on API 30+ `queryIntentActivities` returns
+nothing for undeclared packages, so both tools would report "nothing handles
+this" for apps that are installed. The build is sideloaded, so there is no Play
+policy concern, but it widens what the app can see.
+
+## What the agent remembers between chats
+
+`KnowledgeStore` keeps what the agent worked out about an app under
+`<homeDirectory>/knowledge/<package>.json`. That directory is global across
+chats and is the one place `WorkspaceSeeder` does not rewrite — the session
+workspace is reseeded on every access and the bundled skills are force-replaced
+on every app start, so anything written there is erased.
+
+The stable key is `(package, resourceId | contentDescription)` and never a
+coordinate; a bounds centre is invalidated by any re-render. A coordinate-shaped
+selector is refused on write rather than accepted and later mistrusted, because
+storing one would quietly undo the reason the store exists.
+
+Every record carries `lastVerified`. After two months it is reported as
+`stale:true` — a hint to check, not an expiry, since a stale selector is still
+the best guess available, it just is not evidence any more.
+
+Recall is a tool (`recall_capability`) rather than a block injected into every
+prompt: the store grows without limit and the prompt does not, so the model
+asks about the package it is driving and pays for nothing else. Writes go
+through `remember_capability`, which validates the record instead of trusting a
+free-form file write.
+
+`KnowledgeToolGateway` rides in the composite because that is the one place a
+tool name reaches the model without new plumbing, not because remembering is a
+device action — it touches no device, and `needsControl` is false for both
+tools.
+
+## Why a 502 from the tunnel is now explained
+
+The proxy the app-server talks through is ours, injected deliberately because
+the musl build cannot resolve DNS under the app UID. When it fails the
+app-server reports only `HTTP CONNECT failed with status 502`, which reads as
+if some external proxy were at fault.
+
+That 502 covers two faults with two different remedies: the name did not
+resolve (`dns`), or it resolved and the connection was refused (`connection`).
+`LocalhostConnectProxy` already recorded which, and `recentProxyEvents()` had
+no callers, so the distinction was collected and thrown away. `ProxyDiagnostics`
+turns the most recent entry into one sentence, and the Runtime settings section
+shows it.
+
+Last entry rather than first: the buffer spans the process lifetime, and an
+error from twenty minutes ago says nothing about the turn that just failed. A
+host rejected by the allowlist surfaces as **403**, not 502, so a 502 is never
+a sign of a misconfigured host list. Only the category reaches the UI — the
+buffer holds metadata, never tunnel bytes or credentials.
