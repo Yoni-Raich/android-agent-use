@@ -1,6 +1,7 @@
 import java.util.Properties
 plugins { id("com.android.application"); kotlin("android"); kotlin("plugin.compose") }
 val appVersion = Properties().apply { rootProject.file("version.properties").inputStream().use(::load) }
+configurations.configureEach { exclude(group = "org.jetbrains", module = "annotations-java5") }
 android {
     namespace = "dev.androidagent.app"
     compileSdk = 35
@@ -53,6 +54,12 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
+    implementation("io.coil-kt:coil-compose:2.7.0")
+    implementation("io.noties.markwon:core:4.6.2")
+    implementation("io.noties.markwon:ext-tables:4.6.2")
+    implementation("io.noties.markwon:ext-strikethrough:4.6.2")
+    implementation("io.noties.markwon:syntax-highlight:4.6.2")
+    annotationProcessor("io.noties:prism4j-bundler:2.0.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")

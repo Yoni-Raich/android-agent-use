@@ -23,6 +23,36 @@ import java.nio.charset.StandardCharsets
 import java.util.Base64
 
 class AndroidDeviceToolsTest {
+    @Test fun combinedActionReportsCompletedSideEffectWhenObservationFails() = runBlocking {
+        val adb = FakeAdb()
+        val visibility = mutableListOf<Boolean>()
+        val tools = AndroidDeviceTools(adb, observationVisibility = { visibility += it })
+        val workspace = Files.createTempDirectory("combined-action").toFile()
+        try {
+            tools.beginRun("test", workspace)
+            val result = tools.invoke("act_and_observe", buildJsonObject {
+                put("action", "tap"); put("arguments", buildJsonObject { put("x", 5); put("y", 6) })
+            })
+            assertFalse(result.success)
+            assertTrue(Json.parseToJsonElement(result.text).jsonObject["actionCompleted"]!!.jsonPrimitive.content == "true")
+            assertEquals(listOf(true, false), visibility)
+            assertEquals(2, adb.calls)
+        } finally { workspace.deleteRecursively() }
+    }
+
+    @Test fun screenshotIsStoredInTheSessionForInlinePreview() = runBlocking {
+        val workspace = Files.createTempDirectory("screenshot-preview").toFile()
+        try {
+            val tools = AndroidDeviceTools(FakeAdb())
+            tools.beginRun("test", workspace)
+            val result = tools.invoke("screenshot", buildJsonObject {})
+            assertTrue(result.success)
+            val image = java.io.File(result.attachmentPaths.single())
+            assertTrue(image.canonicalPath.startsWith(workspace.canonicalPath))
+            assertArrayEquals(Base64.getDecoder().decode(result.imageBase64), image.readBytes())
+        } finally { workspace.deleteRecursively() }
+    }
+
 
     @Test fun quotingEscapesSingleQuotesAndSpaces() {
         assertEquals("'hello'", AndroidDeviceTools.shellQuote("hello"))
@@ -37,7 +67,7 @@ class AndroidDeviceToolsTest {
     @Test fun invokeBeforeBeginRunIsDenied() {
         val adb = FakeAdb()
         val tools = AndroidDeviceTools(adb)
-        assertEquals(12, tools.definitions.size)
+        assertTrue(tools.definitions.any { it.name == "act_and_observe" })
         try {
             runBlocking { tools.invoke("device_status", buildJsonObject {}) }
             fail("expected IllegalStateException")

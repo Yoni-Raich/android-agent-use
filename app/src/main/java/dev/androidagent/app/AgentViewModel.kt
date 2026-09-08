@@ -25,6 +25,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         )
     )
     val ui: StateFlow<AgentUiState> = mutable.asStateFlow()
+    private val usageByThread = mutableMapOf<String, TokenUsage>()
     private var setupJob: Job? = null
     private var voiceLocalSessionId: String? = null
     private val pendingVoiceTexts = java.util.ArrayDeque<String>()
@@ -54,6 +55,8 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
             graph.sessions.messages(id).collect { items -> mutable.update { it.copy(messages = items) } }
         } }
         viewModelScope.launch { graph.coordinator.state.collect { state -> mutable.update { it.copy(runState = state) } } }
+        viewModelScope.launch { graph.queue.turns.collect { turns -> mutable.update { it.copy(queuedTurns = turns) } } }
+        viewModelScope.launch { graph.queue.paused.collect { paused -> mutable.update { it.copy(queuePaused = paused) } } }
         viewModelScope.launch { graph.adb.status.collect { state -> mutable.update { it.copy(adbStatus = state) } } }
         viewModelScope.launch { graph.runtime.status.collect { state -> mutable.update { it.copy(runtimeStatus = state) } } }
         viewModelScope.launch { graph.voice.state.collect { state -> mutable.update { it.copy(voiceState = state) } } }
@@ -61,13 +64,20 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { graph.engine.events.collect { event ->
             when (event) {
                 is EngineEvent.AccountChanged -> { mutable.update { it.copy(accountStatus = event.status, infoMessage = if (event.status.signedIn) "Signed in. You can start chatting." else null) }; if (event.status.signedIn) loadModels() }
+                is EngineEvent.UsageChanged -> {
+                    val eventThread = event.threadId
+                    val eventUsage = event.usage
+                    if (eventThread != null && eventUsage != null) usageByThread[eventThread] = eventUsage
+                    val threadId = mutable.value.sessions.firstOrNull { it.id == current.value }?.engineThreadId
+                    mutable.update { it.copy(tokenUsage = usageByThread[threadId], usageLimits = event.limits ?: it.usageLimits) }
+                }
                 EngineEvent.SkillsChanged -> runCatching { loadSkills(forceReload = false) }
                 is EngineEvent.Failure -> if (!graph.coordinator.state.value.active) error(event.message)
                 else -> Unit
             }
         } }
     }
-    private fun updateTitle() { mutable.update { state -> state.copy(activeSessionTitle = state.sessions.firstOrNull { it.id == current.value }?.title) } }
+    private fun updateTitle() { mutable.update { state -> state.copy(activeSessionTitle = state.sessions.firstOrNull { it.id == current.value }?.title, tokenUsage = usageByThread[state.sessions.firstOrNull { it.id == current.value }?.engineThreadId]) } }
     fun editUi(change: (AgentUiState) -> AgentUiState) = mutable.update(change)
     fun newChat() = task { current.value = graph.sessions.createSession().id }
     fun select(id: String) { current.value = id }
@@ -75,11 +85,12 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     fun delete(id: String) {
         if (graph.coordinator.state.value.sessionId == id && graph.coordinator.state.value.active) { error("Stop this chat before deleting it."); return }
         if (voiceLocalSessionId == id && graph.voice.state.value.active) { error("End the voice conversation before deleting it."); return }
-        task { graph.sessions.deleteSession(id) }
+        task { graph.queue.cancelSession(id); graph.sessions.deleteSession(id) }
     }
     fun send(text: String, attachments: List<PendingAttachment>) {
         val id = current.value ?: return
         if (graph.voice.state.value.active) {
+            if (id != voiceLocalSessionId) { error("End voice before sending in another chat."); return }
             if (attachments.isNotEmpty()) { error("End voice before sending attachments."); return }
             task {
                 synchronized(pendingVoiceTexts) { pendingVoiceTexts.addLast(text) }
@@ -94,7 +105,6 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         val active = graph.coordinator.state.value
-        if (active.active && active.sessionId != id) { error("Another chat is working. Stop it before starting this one."); return }
         val paths = attachments.mapNotNull { it.path?.let(::File) }
         val images = attachments.filter { it.mimeType?.startsWith("image/") == true }.mapNotNull { it.path?.let(::File) }
         val otherFiles = paths.filter { it !in images }
@@ -109,23 +119,24 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         val invokedSkill = invokedSkillName?.let { name ->
             snapshot.availableSkills.firstOrNull { it.enabled && it.name.equals(name, ignoreCase = true) }
         }
-        graph.coordinator.send(
-            id,
-            prompt,
-            images,
-            snapshot.selectedModel,
-            selectedReasoningEffort(snapshot),
-            invokedSkill,
-        )
-        mutable.update { it.copy(attachments = emptyList(), errorMessage = null) }
+        task {
+            graph.queue.submit(QueuedTurn(sessionId = id, prompt = prompt, imagePaths = images.map { it.absolutePath },
+                model = snapshot.selectedModel, effort = selectedReasoningEffort(snapshot), skill = invokedSkill))
+            mutable.update { if (it.activeSessionId == id) it.copy(attachments = emptyList(), errorMessage = null) else it }
+        }
     }
+    fun cancelQueued(id: String) = task { graph.queue.cancel(id) }
+    fun resumeQueue() = task { graph.queue.resume() }
+
     fun stop() {
+        graph.queue.pause()
         if (graph.voice.state.value.active) stopVoice() else graph.coordinator.stop()
     }
     fun toggleVoice() {
         if (graph.voice.state.value.active) stopVoice() else startVoice()
     }
     private fun startVoice() = task {
+        graph.queue.pause()
         check(!graph.coordinator.state.value.active) { "Stop the current agent run before starting voice." }
         val sessionId = current.value ?: kotlin.error("Choose a chat first.")
         val session = graph.sessions.getSession(sessionId) ?: kotlin.error("Chat no longer exists.")
@@ -172,6 +183,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                 mutable.update { it.copy(accountStatus = account) }
                 loadModels()
                 loadSkills()
+                runCatching { graph.engine.refreshUsage() }
             } finally { mutable.update { it.copy(isPreparingRuntime = false) } }
         }
     }
@@ -180,7 +192,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         mutable.update { it.copy(accountStatus = status, isSettingsOpen = true, errorMessage = null) }
     }
     fun logout() = task { check(!graph.coordinator.state.value.active && !graph.voice.state.value.active) { "Stop the current run or voice conversation before signing out." }; graph.engine.logout(); mutable.update { it.copy(accountStatus = AccountStatus(false, "Sign in to Codex")) } }
-    fun refreshAccount() = task { if (graph.runtime.status.value.phase in setOf(RuntimePhase.READY, RuntimePhase.RUNNING)) { val account = graph.engine.account(); mutable.update { it.copy(accountStatus = account) } } }
+    fun refreshAccount() = task { if (graph.runtime.status.value.phase in setOf(RuntimePhase.READY, RuntimePhase.RUNNING)) { val account = graph.engine.account(); mutable.update { it.copy(accountStatus = account) }; runCatching { graph.engine.refreshUsage() } } }
     private suspend fun loadModels() {
         mutable.update { it.copy(isLoadingModels = true) }
         try {
@@ -386,7 +398,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     private fun parsePort(value: String): Int = value.trim().toIntOrNull()?.takeIf { it in 1..65535 } ?: kotlin.error("Enter a port from 1 to 65535.")
     private suspend fun handleVoiceEvent(event: VoiceEvent) {
         when (event) {
-            is VoiceEvent.TranscriptDelta -> if (event.threadId == graph.voice.state.value.threadId) {
+            is VoiceEvent.TranscriptDelta -> if (event.threadId == graph.voice.state.value.threadId && voiceLocalSessionId != null) {
                 mutable.update { state ->
                     val text = if (state.voiceTranscriptRole == event.role) state.voiceTranscript + event.delta else event.delta
                     state.copy(voiceTranscript = text, voiceTranscriptRole = event.role)
@@ -394,6 +406,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
             }
             is VoiceEvent.TranscriptDone -> {
                 val localSessionId = voiceLocalSessionId ?: return
+                if (event.threadId != graph.voice.state.value.threadId) return
                 val text = event.text.trim()
                 val skipTypedUserEcho = if (event.role.equals("user", ignoreCase = true)) {
                     synchronized(pendingVoiceTexts) {
