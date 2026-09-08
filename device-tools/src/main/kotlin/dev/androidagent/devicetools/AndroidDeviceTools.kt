@@ -56,6 +56,8 @@ class AndroidDeviceTools(
     private val inputMethodComponent: String? = null,
     /** Shared with every other gateway so revisions never move backwards. */
     private val observations: ObservationState = ObservationState(),
+    /** Moves the floating card out of the way before a gesture lands on it. */
+    private val avoidTouch: (Int, Int) -> Unit = { _, _ -> },
     private val observationVisibility: suspend (Boolean) -> Unit = {},
 ) : DeviceToolGateway {
 
@@ -444,6 +446,8 @@ class AndroidDeviceTools(
     private suspend fun tap(arguments: JsonObject): ToolResult {
         val x = arguments.requireCoordinate("x")
         val y = arguments.requireCoordinate("y")
+        // A coordinate tap hits whatever is topmost, including our own card.
+        avoidTouch(x, y)
         val timeout = arguments.timeoutMsOrDefault()
         val out = userExecute("input tap $x $y", timeout)
         return ToolResult(
@@ -459,6 +463,7 @@ class AndroidDeviceTools(
         val y2 = arguments.requireCoordinate("y2")
         val duration = arguments.get("durationMs")?.jsonPrimitive?.intOrNull ?: 300
         require(duration in 0..5_000) { "durationMs must be between 0 and 5000" }
+        avoidTouch(x1, y1)
         val timeout = arguments.timeoutMsOrDefault()
         val out = userExecute("input swipe $x1 $y1 $x2 $y2 $duration", timeout)
         return ToolResult(

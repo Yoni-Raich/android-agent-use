@@ -2,6 +2,7 @@ package dev.androidagent.app
 
 import android.app.Application
 import android.content.Intent
+import dev.androidagent.a11y.A11yDeviceTools
 import dev.androidagent.adb.AndroidAdbTransport
 import dev.androidagent.core.AgentCoordinator
 import dev.androidagent.core.CompositeDeviceToolGateway
@@ -44,8 +45,12 @@ class AgentGraph(private val app: Application) {
         adb,
         BuildConfig.APPLICATION_ID + "/dev.androidagent.app.ime.AgentInputMethodService",
         observations,
+        { x, y -> overlay.avoidTouch(x, y) },
     ) { hidden -> overlay.setCaptureHidden(hidden) }
-    val tools = CompositeDeviceToolGateway(listOf(adbTools))
+    val a11yTools = A11yDeviceTools(app, observations) { x, y -> overlay.avoidTouch(x, y) }
+    // Accessibility first: it needs no ADB, keeps the phone's own settings
+    // untouched, and falls through to ADB for anything it cannot do.
+    val tools = CompositeDeviceToolGateway(listOf(a11yTools, adbTools))
     val voice = AndroidRealtimeVoiceController(app, engine, scope)
     val coordinator: AgentCoordinator
         get() = runCoordinator

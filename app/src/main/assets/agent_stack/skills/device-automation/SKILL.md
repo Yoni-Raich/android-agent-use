@@ -5,7 +5,11 @@ description: Master skill for precise Android device control via ADB. Covers sem
 
 # Android Device Automation Skill
 
-This skill defines the exact mechanisms for interacting with the Android OS and apps through the `AndroidDeviceTools` gateway.
+This skill defines the exact mechanisms for interacting with the Android OS and apps through the device tool gateway.
+
+Two backends serve the same tool names. An on-device accessibility service handles observation and touch without any ADB connection; wireless ADB handles shell, file transfer, installs and anything the accessibility API cannot reach, and covers for the accessibility service when it is switched off. The application routes each call — you never pick. The `source` field in an observation says which backend answered (`accessibility` or `uiautomator`), and `stable:false` means the screen had not settled when it was read.
+
+A failure with `errorType` `backend_unavailable`, `a11y_unavailable`, `key_unsupported` or `no_text_focus` means **nothing happened on the device**. Read the `remedy` field and act on it instead of repeating the call.
 
 ---
 
