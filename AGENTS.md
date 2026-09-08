@@ -20,6 +20,12 @@ Read `PROGRESS.md` and `docs/ARCHITECTURE.md` before work. Write short, clear En
 ## Device
 
 - Only `adb -s 00152154B002517` (Nothing A059, ARM64, Android 16). Never touch any other LAN/emulator device. The device also has a Work profile (user 11) and a Private space (user 10); `pm list packages` without `--user 0` raises a harmless SecurityException for user 11.
+- **Never run `./gradlew connectedDevDebugAndroidTest` against a device you care about.** AGP installs the app and the test APK, runs, and then **uninstalls both**. That deletes the app's private data with it: the Codex sign-in under `CODEX_HOME`, every session, and the staged runtime binaries, which then have to be downloaded and prepared again. Installing the test APK also **disables the accessibility service**, and Android 13+ restricted settings mean it cannot be re-enabled from adb - `settings put secure enabled_accessibility_services` is silently rejected and reads back `null`. This was learned by doing it: 2026-09-08.
+- To run instrumented tests without losing that state: `adb install -r` the app APK, `adb install -r` the androidTest APK, enable accessibility by hand, then invoke the runner directly with `adb shell am instrument -w -e class <fqcn> <pkg>.test/androidx.test.runner.AndroidJUnitRunner`. Nothing is uninstalled and the permissions survive.
+- Instrumented tests that need the accessibility service must `assumeTrue` on it rather than fail. There is no programmatic way to grant it, so a hard failure would only report that a human has not touched the phone.
+- **Instrumented tests can never see a live accessibility service.** `am instrument` force-stops the package to take its process, which unbinds the service; the manager marks it crashed and does not rebind while instrumentation owns the package. Verified with a 45s per-test wait: every test still skipped. `A11yServiceHandle` is process-local, so no process arrangement fixes this. Cover the a11y path some other way.
+- Enable the accessibility service only **after** the app process is running. Enabling it against a cold package leaves it in `Crashed services` and it never binds. Start `MainActivity`, wait, then flip the setting.
+- Xiaomi/HyperOS devices refuse `adb install` without a SIM card (`INSTALL_FAILED_USER_RESTRICTED`, raised by `com.miui.securitycenter`). Not something to work around - it is a device security control.
 - x86_64 emulator app-server exits `SIGSYS` (159) — not a valid runtime target; Q8 is. Emulator Compose fixture tests do not prove real chat, ADB, or voice.
 
 ## Workflow

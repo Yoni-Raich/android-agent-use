@@ -53,7 +53,13 @@ class A11yToolsHardwareTest {
     }
 
     private fun requireService() {
-        val connected = runBlocking { A11yServiceHandle.await(3_000) } != null
+        // Generous on purpose. `am instrument` force-stops the package to make
+        // its own process, which tears down an already-bound accessibility
+        // service; the system then rebinds it into the new process. On a device
+        // with aggressive power management that round trip takes tens of
+        // seconds, and a short wait reports "not enabled" for what is really
+        // "not rebound yet".
+        val connected = runBlocking { A11yServiceHandle.await(45_000) } != null
         assumeTrue(
             "Accessibility service is not connected. Enable Android Agent in " +
                 "Settings > Accessibility and re-run.",
