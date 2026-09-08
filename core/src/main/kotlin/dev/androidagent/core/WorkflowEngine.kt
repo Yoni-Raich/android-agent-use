@@ -88,6 +88,8 @@ class WorkflowEngine(
                     failedAt = index,
                     error = "stopped",
                     message = "Run stopped. The steps already completed are listed; nothing after them ran.",
+                    imageBase64 = imageBase64,
+                    attachments = attachments,
                 )
             }
             val step = element.jsonObject
@@ -99,6 +101,8 @@ class WorkflowEngine(
                     false, completed, index, "budget_exhausted",
                     "The workflow used its ${totalBudget}ms budget before step $index. " +
                         "Nothing at or after that step ran.",
+                    imageBase64 = imageBase64,
+                    attachments = attachments,
                 )
             }
             val remaining = totalBudget - elapsed
@@ -125,11 +129,15 @@ class WorkflowEngine(
                     false, completed, index, "step_failed",
                     "Step $index (\"$tool\") failed: ${failure.message}",
                     committed = tool in committing,
+                    imageBase64 = imageBase64,
+                    attachments = attachments,
                 )
             } ?: return outcome(
                 false, completed, index, "step_timeout",
                 "Step $index (\"$tool\") did not finish within ${stepBudget}ms.",
                 committed = tool in committing,
+                imageBase64 = imageBase64,
+                attachments = attachments,
             )
 
             if (!result.success) {
@@ -137,6 +145,8 @@ class WorkflowEngine(
                     false, completed, index, "step_failed",
                     "Step $index (\"$tool\") reported failure: ${result.text.take(MAX_STEP_TEXT)}",
                     committed = tool in committing,
+                    imageBase64 = result.imageBase64 ?: imageBase64,
+                    attachments = attachments + result.attachmentPaths,
                 )
             }
             completed += buildJsonObject {
