@@ -225,7 +225,28 @@ interface DeviceToolGateway {
     fun needsControl(name: String): Boolean
     suspend fun invoke(name: String, arguments: JsonObject): ToolResult
     suspend fun cancel()
+
+    /**
+     * True when the overlay must be taken off the captured surface for this
+     * tool. Only backends that capture the composited screen need it; a
+     * gateway that filters its own package out of the tree does not.
+     */
+    fun hidesOverlayDuringCapture(name: String): Boolean = false
+
+    /** One human line for `device_status`. Null when the gateway has nothing to report. */
+    fun statusLine(): String? = null
 }
+
+/**
+ * A backend cannot serve this call at all — the capability is absent, not
+ * broken.
+ *
+ * Throwing this is a promise that **no device side effect has happened yet**,
+ * which is what lets [CompositeDeviceToolGateway] retry the call on another
+ * backend. A failure after any action has been dispatched must be a failed
+ * [ToolResult] or a different exception, never this one.
+ */
+class ToolNotServiceable(val errorType: String, override val message: String) : Exception(message)
 interface ControlOverlay {
     suspend fun show(status: String)
     fun update(status: String)

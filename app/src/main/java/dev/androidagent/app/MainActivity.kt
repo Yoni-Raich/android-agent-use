@@ -71,6 +71,8 @@ class MainActivity : ComponentActivity() {
         onLogout = { model.logout() },
         onRefreshAccount = { model.refreshAccount() },
         onOpenWirelessSettings = { startActivity(Intent("android.settings.WIRELESS_DEBUGGING_SETTINGS")) },
+        onOpenAccessibilitySettings = { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
+        onOpenAppInfo = { startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) },
         onOpenOverlayPermission = { startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))) },
         onDisconnect = { model.disconnect() },
         onForgetPairing = { model.forgetPairing() },
