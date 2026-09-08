@@ -615,17 +615,22 @@ dumpsys accessibility
   which means the dns-versus-connection mapping is still unproven against a
   real failure.
 
-**Found on hardware, not previously known:**
+**A note on SYSTEM_ALERT_WINDOW, because the obvious reading of it is wrong:**
 
 ```
-android.permission.SYSTEM_ALERT_WINDOW: granted=false, flags=[ USER_SET]
+dumpsys package  -> android.permission.SYSTEM_ALERT_WINDOW: granted=false
+appops get       -> SYSTEM_ALERT_WINDOW: allow; time=+1h51m ago; duration=+9ms
 ```
 
-The dev build does **not** hold Display over other apps. That is the documented
-exemption `open_intent` relies on for a background activity launch, so the
-`launch_denied` path is currently the live one on this device rather than a
-theoretical fallback. The floating overlay will not display either. Granting
-it for `dev.androidagent.app.dev` is a prerequisite for testing #24 end to end.
+These do not contradict each other. `SYSTEM_ALERT_WINDOW` is an appop
+permission, so its runtime grant flag stays false by design and the appop is
+what governs - `Settings.canDrawOverlays()` reads the appop, not the flag. The
+appop is `allow`, and the recorded usage shows the overlay was actually
+displayed. So the background-activity-launch exemption `open_intent` relies on
+is present, and the floating card works.
+
+Recorded here because reading the `dumpsys package` line alone leads straight
+to the wrong conclusion, which is exactly what happened while writing this.
 
 ### STILL NOT TESTED ON HARDWARE
 
@@ -639,12 +644,14 @@ session did not perform:
   observed.
 - Whether the `HardwareBuffer` close ordering is correct on this device. A leak
   here is a graphics-memory leak that no JVM test can catch.
-- `resolve_intent` and `open_intent` against real apps. Whether Waze, WhatsApp
-  and Maps deep links resolve, and whether `QUERY_ALL_PACKAGES` behaves as
-  expected on Android 16.
-- Whether a background activity launch is actually permitted under the
-  `SYSTEM_ALERT_WINDOW` exemption, and whether the typed `launch_denied`
-  failure fires when that permission is revoked.
+- `open_intent` end to end. Resolution is confirmed above with
+  `cmd package resolve-activity`, but that runs as shell; whether our own
+  process sees the same handlers through `queryIntentActivities` under
+  `QUERY_ALL_PACKAGES`, and whether the launch lands on the expected screen,
+  is not.
+- Whether the typed `launch_denied` failure actually fires when the overlay
+  appop is revoked. The exemption is present today, so the failure path has
+  never executed.
 - That the knowledge store directory survives an app update in practice.
 - The proxy diagnostic against a real failure. The mapping is unit-tested and
   the healthy path is confirmed on device, but the failing path needs the 502
