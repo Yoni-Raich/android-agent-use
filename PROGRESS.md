@@ -584,10 +584,53 @@ enumerating them blocks exactly the case the layer exists for. The rule is
 structural instead - anything that reads local data, injects a component, or
 executes is refused. `docs/ARCHITECTURE.md` carries the reasoning.
 
-### NOT TESTED ON HARDWARE
+### Hardware evidence - device 00152154B002517 (Nothing A059, Android 16)
 
-Nothing in this change has run on a phone. `adb devices` was empty throughout.
-Specifically unverified:
+Installed `app-dev-debug.apk` and inspected the running system. Verified:
+
+```
+dumpsys accessibility
+  Bound services:{Service[label=Android Agent Dev, capabilities=161,
+    eventTypes=[TYPE_WINDOW_STATE_CHANGED, TYPE_WINDOW_CONTENT_CHANGED,
+                TYPE_WINDOWS_CHANGED]]}
+```
+
+- The service is **bound**, not merely enabled. `capabilities=161` decodes to
+  128 CAN_TAKE_SCREENSHOT + 32 CAN_PERFORM_GESTURES + 1
+  CAN_RETRIEVE_WINDOW_CONTENT, so the capture permission #23 depends on is
+  genuinely granted, and the event mask is the narrow one declared rather than
+  a wider default.
+- `QUERY_ALL_PACKAGES: granted=true`.
+- `cmd package resolve-activity` on the deep links #24 targets:
+  `waze://?ll=..&navigate=yes -> com.waze`, `tel: -> com.google.android.dialer`,
+  and `https://wa.me/..`, `geo:`, `mailto:` all resolve through the chooser.
+  The private-scheme case is the one that justified refusing a scheme
+  allowlist, and it does resolve on real hardware.
+- No crash-buffer entries for the app after install and launch.
+- `settings get system accelerometer_rotation` -> `0`. Issue #12's symptom is
+  not present, though nothing in this session drove a run that would provoke it.
+- Proxy is healthy right now: logcat shows repeated `CONNECT chatgpt.com:443`
+  and **zero** `proxy-error:` entries, so `ProxyDiagnostics.explain` correctly
+  reports nothing. The 502 the user hit is not reproducing at this moment,
+  which means the dns-versus-connection mapping is still unproven against a
+  real failure.
+
+**Found on hardware, not previously known:**
+
+```
+android.permission.SYSTEM_ALERT_WINDOW: granted=false, flags=[ USER_SET]
+```
+
+The dev build does **not** hold Display over other apps. That is the documented
+exemption `open_intent` relies on for a background activity launch, so the
+`launch_denied` path is currently the live one on this device rather than a
+theoretical fallback. The floating overlay will not display either. Granting
+it for `dev.androidagent.app.dev` is a prerequisite for testing #24 end to end.
+
+### STILL NOT TESTED ON HARDWARE
+
+The remaining items need an agent run driven from the app UI, which this
+session did not perform:
 
 - `AccessibilityService.takeScreenshot` end to end: whether the PNG is valid,
   whether the overlay is genuinely absent from the frame, the real rate limit,
@@ -603,9 +646,9 @@ Specifically unverified:
   `SYSTEM_ALERT_WINDOW` exemption, and whether the typed `launch_denied`
   failure fires when that permission is revoked.
 - That the knowledge store directory survives an app update in practice.
-- The proxy diagnostic against a real failure. The mapping is unit-tested; that
-  the runtime records `dns` versus `connection` in the situation the user hit
-  is not, because it needs a phone reproducing the 502.
+- The proxy diagnostic against a real failure. The mapping is unit-tested and
+  the healthy path is confirmed on device, but the failing path needs the 502
+  to reproduce.
 
 ### Not implemented, and why
 
