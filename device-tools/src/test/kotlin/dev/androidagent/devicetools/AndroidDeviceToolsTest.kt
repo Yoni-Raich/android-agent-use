@@ -251,6 +251,39 @@ class AndroidDeviceToolsTest {
         assertTrue(adb.timeouts.single() in 1..AndroidDeviceTools.READ_UI_DEFAULT_TIMEOUT_MS)
     }
 
+    @Test fun uiDumpCommandRestoresRotationLockThawedByUiautomator() {
+        val command = AndroidDeviceTools.uiDumpCommand("/sdcard/window_dump.xml")
+
+        // The dump itself is unchanged and still the source of the exit code.
+        assertTrue(command.contains("uiautomator dump --compressed '/sdcard/window_dump.xml'"))
+        assertTrue(command.contains("cat '/sdcard/window_dump.xml'"))
+        assertTrue(command.contains("__rc=\$?"))
+        assertTrue(command.endsWith("exit \$__rc"))
+        // Both rotation settings are snapshotted before uiautomator can thaw them.
+        val dumpAt = command.indexOf("uiautomator dump")
+        assertTrue(command.indexOf("__ar=\$(settings get system accelerometer_rotation)") in 0 until dumpAt)
+        assertTrue(command.indexOf("__ur=\$(settings get system user_rotation)") in 0 until dumpAt)
+        // The lock is only put back when it was actually held and then lost.
+        assertTrue(command.contains("if [ \"\$__ar\" = 0 ] && "))
+        assertTrue(command.contains("[ \"\$(settings get system accelerometer_rotation)\" != 0 ]"))
+        assertTrue(command.contains("settings put system accelerometer_rotation 0"))
+        // A missing or invalid user_rotation is never written back verbatim.
+        assertTrue(command.contains("case \"\$__ur\" in 0|1|2|3) settings put system user_rotation \"\$__ur\";; esac"))
+    }
+
+    @Test fun readUiStillParsesHierarchyThroughRotationGuard() = runBlocking {
+        val adb = ScriptedUiAdb(mutableListOf(CommandResult(SAMPLE_UI_XML, 0)))
+        val tools = AndroidDeviceTools(adb)
+        tools.beginRun("ui", Files.createTempDirectory("ws").toFile())
+
+        val result = tools.invoke("read_ui", buildJsonObject {})
+
+        assertTrue(result.success)
+        // Still a single round trip: the guard rides along in the same shell command.
+        assertEquals(1, adb.commands.size)
+        assertEquals(AndroidDeviceTools.uiDumpCommand(AndroidDeviceTools.UI_DUMP_PATH), adb.commands.single())
+    }
+
     @Test fun readUiIdleFailureIsTypedAndNeverFallsBack() = runBlocking {
         val adb = ScriptedUiAdb(mutableListOf(CommandResult("ERROR: could not get idle state.", 1)))
         val tools = AndroidDeviceTools(adb)

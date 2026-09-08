@@ -183,7 +183,7 @@ class AndroidDeviceTools(
         // forward raw stdout, so that shortcut is never attempted: on the
         // supported device it cost ~2.2s per call and always returned nothing.
         val attempt = runUiDumpCommand(
-            "uiautomator dump --compressed ${quotedRemote(UI_DUMP_PATH)} && cat ${quotedRemote(UI_DUMP_PATH)}",
+            uiDumpCommand(UI_DUMP_PATH),
             remainingBudget(startedAt, totalBudgetMs),
         )
         val completed = when (attempt) {
@@ -917,6 +917,35 @@ class AndroidDeviceTools(
         fun shellQuote(arg: String): String = "'" + arg.replace("'", "'\\''") + "'"
 
         fun quotedRemote(path: String): String = shellQuote(path)
+
+        /**
+         * Dump the hierarchy without leaking `uiautomator`'s rotation side effect.
+         *
+         * `uiautomator dump` runs inside a UiAutomation session, and AOSP's
+         * `UiAutomationConnection.shutdown()` restores rotation state on teardown:
+         * when the session never froze a rotation itself it calls
+         * `WindowManagerService.thawRotation()`, which writes
+         * `Settings.System.accelerometer_rotation = 1`. So every plain dump turns
+         * system Auto-Rotate on and discards the user's manual orientation lock,
+         * which is why it appears to flip on by itself during agent runs (#12).
+         *
+         * The guard snapshots the user's rotation settings, runs the dump, and puts
+         * them back in the same shell round trip, so the dump's own exit code still
+         * reaches the caller and the fix costs no extra transport latency. The
+         * post-dump read is short-circuited away when Auto-Rotate was already on,
+         * which is the common case. Public for unit tests.
+         */
+        fun uiDumpCommand(path: String): String {
+            val quoted = quotedRemote(path)
+            return "__ar=\$(settings get system accelerometer_rotation); " +
+                "__ur=\$(settings get system user_rotation); " +
+                "uiautomator dump --compressed $quoted && cat $quoted; __rc=\$?; " +
+                "if [ \"\$__ar\" = 0 ] && " +
+                "[ \"\$(settings get system accelerometer_rotation)\" != 0 ]; then " +
+                "case \"\$__ur\" in 0|1|2|3) settings put system user_rotation \"\$__ur\";; esac; " +
+                "settings put system accelerometer_rotation 0; " +
+                "fi; exit \$__rc"
+        }
 
         private val PACKAGE_RE = Regex("^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+$")
         private val COMPONENT_RE = Regex("^[A-Za-z][A-Za-z0-9_.]*(/[A-Za-z0-9_.\$]+)+$")
