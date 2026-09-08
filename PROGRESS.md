@@ -526,15 +526,22 @@ Record actual commands and results. Mark untested features explicitly. Do not re
   `0`; open an app with `open_app` and confirm the result text is "Opened";
   start voice with a Bluetooth headset connected and confirm audio routes to it.
 
-## Accessibility control path - 2026-09-08
+## Release Validation v0.5.0 - 2026-09-08
 
-Branch `feat/a11y-control-path`, four commits. New `:a11y` module gives the
-agent a second device backend that needs no ADB, behind a routing gateway.
-
-- PASS: `./gradlew.bat test assembleDevRelease assembleDevDebugAndroidTest :voice:lintDebug --no-daemon` (694 actionable tasks).
+- Bumped `versionCode=15`, `versionName=0.5.0` for the accessibility control path.
+  New `:a11y` module gives the agent a second device backend that needs no ADB,
+  behind a routing gateway.
+- PASS: `./gradlew.bat test assembleDevRelease assembleDevDebugAndroidTest :voice:lintDebug --no-daemon` (694 actionable tasks, 60 executed).
 - PASS: `python -m unittest tools.test_prepare_runtime` (2 tests); `git diff --check` clean.
 - PASS: 50 new unit tests - `UiObservationSerializerTest` 18, `CompositeDeviceToolGatewayTest` 13, `NodeTraversalTest` 19, plus one added to `AgentCoordinatorTest`.
-- Verified by inspection: `AgentAccessibilityService` merges into the app manifest with `BIND_ACCESSIBILITY_SERVICE` and the `android.accessibilityservice` meta-data.
+- APK: `artifacts/android-agent-0.5.0.apk`, metadata `dev.androidagent.app.dev`,
+  versionCode 15, versionName 0.5.0 (`aapt2 dump badging`).
+- SHA-256: `557AA4A6B02637984A79383FF5A12457971ECF4D8B2B8BAEABE002FE9820DA28`.
+- Zip alignment passed and APK Signature Scheme v3 verification passed with the
+  local Android debug key. Installable for private testing, not production signing.
+- Verified by inspection: `AgentAccessibilityService` merges into the app manifest
+  with `BIND_ACCESSIBILITY_SERVICE` and the `android.accessibilityservice` meta-data
+  (`provides-component: 'accessibility'`).
 
 ### NOT TESTED ON HARDWARE
 
