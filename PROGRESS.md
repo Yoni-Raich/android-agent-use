@@ -775,7 +775,8 @@ session did not perform:
 
 ## Workflow engine, probe, and the rotation guard checked - 2026-09-08
 
-Closes #26 and #27. Records a hardware check for #12. #21 is not started.
+Closes #26. Records a hardware check for #12. #21 and the authenticated part
+of #27 remain open.
 
 ```
 ./gradlew.bat test assembleDevRelease assembleDevDebugAndroidTest     :voice:lintDebug --no-daemon                          -> BUILD SUCCESSFUL
