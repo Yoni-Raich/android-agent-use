@@ -772,3 +772,73 @@ session did not perform:
   the cause.
 - Seeding the knowledge store from the five bundled app cards, proposed in #25,
   is not done. The store starts empty.
+
+## Workflow engine, probe, and the rotation guard checked - 2026-09-08
+
+Closes #26 and #27. Records a hardware check for #12. #21 is not started.
+
+```
+./gradlew.bat test assembleDevRelease assembleDevDebugAndroidTest     :voice:lintDebug --no-daemon                          -> BUILD SUCCESSFUL
+python -m unittest tools.test_prepare_runtime             -> OK (2 tests)
+git diff --check                                          -> clean
+```
+
+New JVM tests: `WorkflowEngineTest` (16).
+
+### #12, checked on hardware and NOT reproduced
+
+On `Q8G64TD6ZTB6H6ZL` (Xiaomi 2201116TG, Android 13):
+
+```
+settings put system accelerometer_rotation 0; settings put system user_rotation 0
+uiautomator dump --compressed /sdcard/rot.xml          (plain, unguarded)
+settings get system accelerometer_rotation             -> 0     (unchanged)
+```
+
+The plain dump did **not** turn Auto-Rotate on here, so the fault does not
+reproduce on this device or this Android version. The original report was on
+the Nothing A059 running Android 16, which is where `UiAutomationConnection`
+behaves as the guard's comment describes. Confirming or retiring #12 needs
+that device.
+
+The guard itself was exercised and is harmless: the full `uiDumpCommand` shell
+string returned exit 0, produced the hierarchy, and left both settings at 0.
+
+### #27, answered as far as it can be answered without an account
+
+`.codex-work/runtime/probe_apps.py` was written and run against the on-phone
+app-server. All six methods answer rather than erroring, so the surface exists
+on rust-v0.153.4:
+
+```
+authenticated: False
+app/list: OK             plugin/list: OK
+app/installed: OK        plugin/installed: OK
+mcpServerStatus/list: OK experimentalFeature/list: OK  (135 flags)
+```
+
+**The connector question is still open, and the empty results are not the
+answer.** The probe runs against a scratch `CODEX_HOME` under
+`/data/local/tmp` with no `auth.json`, so it is anonymous, and an anonymous
+server returns zero connectors whatever the account has. The probe now calls
+`account/read` first and prints a warning, because reading those zeroes as a
+finding is the obvious mistake.
+
+Copying the app's `auth.json` there would authenticate it and is the wrong
+trade - `/data/local/tmp/android-agent-runtime-spike` is `drwxrwxrwx`. The
+calls belong inside the app, where `CodexEngine` already holds a signed-in
+session.
+
+### NOT TESTED ON HARDWARE
+
+- The workflow engine has never run on a device. Every test is a fake tool
+  invoker; nothing has driven a real sequence end to end, so the step budget,
+  the total budget and the interaction with `toolLock` under a real Stop are
+  all unmeasured.
+- Whether a saved workflow survives an app update in practice.
+- #12 on Android 16, which is the only place it was ever observed.
+
+### Not implemented
+
+- #21 (circular quota indicator) is untouched. It is self-contained UI work
+  with no dependency on anything here.
