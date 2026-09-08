@@ -78,6 +78,17 @@ class AgentCoordinatorTest {
         rig.close()
     }
 
+    @Test fun currentAdbStatusIsSnapshottedForEachNewTurn() = runTest {
+        val rig = Rig(this)
+        rig.adbStatus.value = AdbStatus(ConnectionPhase.CONNECTED, "Connected", 37123)
+        rig.coordinator.send("one", "Read the screen")
+        runCurrent()
+
+        assertEquals(ConnectionPhase.CONNECTED, rig.engine.adbStatus?.phase)
+        assertEquals(37123, rig.engine.adbStatus?.port)
+        rig.close()
+    }
+
     @Test fun uiControlWaitsForOverlayAndBackendReadsDoNotShowIt() = runTest {
         val rig = Rig(this)
         rig.coordinator.send("one", "Read and tap")
@@ -153,7 +164,8 @@ class AgentCoordinatorTest {
         val store = FakeStore()
         val overlay = FakeOverlay()
         val tools = FakeTools(overlay)
-        val coordinator = AgentCoordinator(scope, engine, store, tools, overlay)
+        val adbStatus = MutableStateFlow(AdbStatus())
+        val coordinator = AgentCoordinator(scope, engine, store, tools, overlay) { adbStatus.value }
         fun close() { scope.cancel() }
     }
 
@@ -163,6 +175,7 @@ class AgentCoordinatorTest {
         var turns = 0
         var reasoningEffort: String? = null
         var skill: AgentSkill? = null
+        var adbStatus: AdbStatus? = null
         var closed = false
         var waitForInterrupt: CompletableDeferred<Unit>? = null
         val answers = mutableListOf<ToolResult>()
@@ -187,6 +200,17 @@ class AgentCoordinatorTest {
         ): String {
             this.skill = skill
             return startTurn(threadId, prompt, images, reasoningEffort)
+        }
+        override suspend fun startTurn(
+            threadId: String,
+            prompt: String,
+            images: List<File>,
+            reasoningEffort: String?,
+            skill: AgentSkill?,
+            adbStatus: AdbStatus,
+        ): String {
+            this.adbStatus = adbStatus
+            return startTurn(threadId, prompt, images, reasoningEffort, skill)
         }
         override suspend fun steer(threadId: String, turnId: String, prompt: String) = Unit
         override suspend fun interrupt(threadId: String, turnId: String) { waitForInterrupt?.await() }

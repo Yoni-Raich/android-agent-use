@@ -15,6 +15,7 @@ class AgentCoordinator(
     private val sessions: SessionStore,
     private val tools: DeviceToolGateway,
     private val overlay: ControlOverlay,
+    private val adbStatus: () -> AdbStatus = { AdbStatus() },
 ) {
     private val mutableState = MutableStateFlow(RunState())
     val state: StateFlow<RunState> = mutableState.asStateFlow()
@@ -205,7 +206,7 @@ class AgentCoordinator(
             }
             overlay.updateState(OverlayState(OverlayPhase.THINKING))
             beginTurn(token)
-            val startedTurn = engine.startTurn(openedThread, prompt, images, reasoningEffort, skill)
+            val startedTurn = engine.startTurn(openedThread, prompt, images, reasoningEffort, skill, adbStatus())
             if (!activateTurn(token, startedTurn)) return
             ensureCurrent(token)
             runCompletion.await()

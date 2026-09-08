@@ -5,8 +5,10 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.test.platform.app.InstrumentationRegistry
+import dev.androidagent.core.AdbStatus
 import dev.androidagent.core.AgentModel
 import dev.androidagent.core.ChatMessage
+import dev.androidagent.core.ConnectionPhase
 import dev.androidagent.core.ReasoningEffortOption
 import dev.androidagent.core.RunPhase
 import dev.androidagent.core.RunState
@@ -126,5 +128,37 @@ class ChatUiTest {
         }
         compose.onNodeWithContentDescription("End voice conversation").assertIsDisplayed()
         compose.onNodeWithText("Voice · Listening").assertIsDisplayed()
+    }
+
+    @Test fun adbStatusIsVisibleAndOpensWirelessSettings() {
+        var opened = 0
+        compose.setContent {
+            AndroidAgentScreen(
+                fixture.copy(
+                    adbStatus = AdbStatus(
+                        phase = ConnectionPhase.CONNECTED,
+                        message = "Connected to 127.0.0.1:37123",
+                        port = 37123,
+                    ),
+                ),
+                AgentUiActions(onOpenWirelessSettings = { opened++ }),
+            )
+        }
+
+        compose.onNodeWithText("ADB · 37123").assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals(1, opened) }
+
+        compose.setContent {
+            AndroidAgentScreen(
+                fixture.copy(
+                    adbStatus = AdbStatus(
+                        phase = ConnectionPhase.CONNECTING,
+                        message = "Connecting",
+                    ),
+                ),
+                AgentUiActions(),
+            )
+        }
+        compose.onNodeWithText("ADB · reconnecting").assertIsDisplayed()
     }
 }

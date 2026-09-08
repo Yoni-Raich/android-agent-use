@@ -2,6 +2,8 @@ package dev.androidagent.enginecodex
 
 import dev.androidagent.core.AgentModel
 import dev.androidagent.core.AgentSkill
+import dev.androidagent.core.AdbStatus
+import dev.androidagent.core.ConnectionPhase
 import dev.androidagent.core.RealtimeAudioChunk
 import dev.androidagent.core.ReasoningEffortOption
 import kotlinx.coroutines.*
@@ -156,6 +158,32 @@ class CodexEngineTest {
         assertEquals("skill", input[1].jsonObject["type"]?.jsonPrimitive?.content)
         assertEquals("device-automation", input[1].jsonObject["name"]?.jsonPrimitive?.content)
         assertEquals(skill.path, input[1].jsonObject["path"]?.jsonPrimitive?.content)
+    }
+
+    @Test fun turnParamsPutTrustedConnectedAdbContextBeforeUserText() {
+        val params = CodexEngine.turnStartParams(
+            "thread",
+            "Open Settings",
+            emptyList(),
+            null,
+            adbStatus = AdbStatus(ConnectionPhase.CONNECTED, "Connected", 37123),
+        )
+
+        val input = params["input"]!!.jsonArray
+        val context = input[0].jsonObject["text"]!!.jsonPrimitive.content
+        assertTrue(context.contains("Wireless ADB phase: connected"))
+        assertTrue(context.contains("Device tools available: yes"))
+        assertTrue(context.contains("Local ADB port: 37123"))
+        assertEquals("Open Settings", input[1].jsonObject["text"]?.jsonPrimitive?.content)
+    }
+
+    @Test fun disconnectedAdbContextStopsBlindDeviceToolCalls() {
+        val context = CodexEngine.adbRuntimeContext(AdbStatus(ConnectionPhase.DISCONNECTED, "Not connected"))
+
+        assertTrue(context.contains("Device tools available: no"))
+        assertTrue(context.contains("Do not call device tools"))
+        assertTrue(context.contains("enable Wireless Debugging"))
+        assertFalse(context.contains("Local ADB port"))
     }
 
     @Test fun realtimeStartUsesWebSocketV2ByDefault() {
