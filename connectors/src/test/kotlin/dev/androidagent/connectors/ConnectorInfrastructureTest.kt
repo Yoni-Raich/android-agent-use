@@ -83,7 +83,7 @@ class ConnectorInfrastructureTest {
             ToolSchemaFingerprint.forTools("github", "v1", listOf(first, second)),
             ToolSchemaFingerprint.forTools("github", "v1", listOf(second, first)),
         )
-        assertEquals(
+        assertNotEquals(
             ToolSchemaFingerprint.forTools("github", "v1", listOf(first)),
             ToolSchemaFingerprint.forTools("github", "v1", listOf(first.copy(description = "wording changed"))),
         )
@@ -91,13 +91,14 @@ class ConnectorInfrastructureTest {
 
     @Test
     fun `redactor removes github tokens bearer values and form secrets`() {
-        val text = "Authorization: Bearer gho_abc123456789; refresh_token=ghr_refresh123456; extra=private-value"
+        val text = "Authorization: Bearer gho_abc123456789; refresh_token=ghr_refresh123456; user_code=ABCD-EFGH; extra=private-value"
 
         val redacted = TokenRedactor.redact(text, listOf("private-value"))
 
         assertNotNull(redacted)
         assertFalse(redacted!!.contains("gho_abc123456789"))
         assertFalse(redacted.contains("ghr_refresh123456"))
+        assertFalse(redacted.contains("ABCD-EFGH"))
         assertFalse(redacted.contains("private-value"))
         assertTrue(redacted.contains("[REDACTED]"))
         assertEquals("[REDACTED]", TokenRedactor.redactToken("gho_abc123456789"))

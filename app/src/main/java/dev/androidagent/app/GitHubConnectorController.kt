@@ -12,6 +12,7 @@ import dev.androidagent.connectors.CredentialStoreCorruptException
 import dev.androidagent.connectors.GitHubConnectorCatalog
 import dev.androidagent.connectors.GitHubEndpoints
 import dev.androidagent.connectors.GitHubOAuthDeviceFlowClient
+import dev.androidagent.connectors.GitHubOAuthException
 import dev.androidagent.connectors.PermissionMode
 import dev.androidagent.connectors.SharedPreferencesConnectorStateStore
 import dev.androidagent.connectors.ToolSchemaFingerprint
@@ -79,18 +80,42 @@ class GitHubConnectorController(
         this.control = control
     }
 
-    suspend fun synchronize() = lifecycleLock.withLock {
+    suspend fun synchronize(forceConfiguration: Boolean = true) = lifecycleLock.withLock {
         loadPermissionMode()
         val saved = try {
             withContext(Dispatchers.IO) { stateStore.get(GitHubConnectorCatalog.ID) }
         } catch (_: ConnectorStateCorruptException) {
+            // A damaged non-secret snapshot must not destroy a still-readable
+            // credential. Keep it sealed, but force a fresh connector state so
+            // the token is never used without an explicit re-authentication.
+            val preservedCredentials = try {
+                withContext(Dispatchers.IO) { vault.read(CREDENTIAL_KEY) }
+            } catch (_: CredentialStoreCorruptException) {
+                withContext(Dispatchers.IO) { vault.clear(CREDENTIAL_KEY) }
+                null
+            }
+            val reset = preservedCredentials?.let {
+                ConnectorSnapshot(
+                    connectorId = GitHubConnectorCatalog.ID,
+                    state = ConnectorState.REAUTH_REQUIRED,
+                    grantedScopes = it.grantedScopes,
+                    accessTokenExpiresAtEpochSeconds = it.accessTokenExpiresAtEpochSeconds,
+                    refreshTokenExpiresAtEpochSeconds = it.refreshTokenExpiresAtEpochSeconds,
+                    lastErrorCode = "state_corrupt",
+                    lastUpdatedAtEpochSeconds = nowSeconds(),
+                )
+            }
+            withContext(Dispatchers.IO) { reset?.let { stateStore.put(it) } }
             cachedCredentials = null
-            cachedSnapshot = null
-            withContext(Dispatchers.IO) { vault.clear(CREDENTIAL_KEY) }
+            cachedSnapshot = reset
             mutable.value = mutable.value.copy(
                 connected = false,
                 accountLogin = null,
-                status = "GitHub connector state was reset. Connect again.",
+                status = if (reset == null) {
+                    "GitHub connector state was reset. Connect again."
+                } else {
+                    "GitHub connector state was reset. Connect again; stored credentials were kept safe."
+                },
             )
             return@withLock
         }
@@ -135,10 +160,24 @@ class GitHubConnectorController(
         }
         if (saved != null && saved.state != ConnectorState.CONNECTED) {
             cachedCredentials = null
-            cachedSnapshot = saved
+            val attention = if (saved.state == ConnectorState.AUTHORIZING) {
+                val interrupted = saved.copy(
+                    state = ConnectorState.REAUTH_REQUIRED,
+                    lastErrorCode = "authorization_interrupted",
+                    lastUpdatedAtEpochSeconds = nowSeconds(),
+                )
+                withContext(Dispatchers.IO) {
+                    vault.clear(CREDENTIAL_KEY)
+                    stateStore.put(interrupted)
+                }
+                interrupted
+            } else {
+                saved
+            }
+            cachedSnapshot = attention
             mutable.value = mutable.value.copy(
                 connected = false,
-                accountLogin = saved.accountLogin,
+                accountLogin = attention.accountLogin,
                 status = "GitHub sign-in needs attention. Connect again.",
             )
             return@withLock
@@ -155,42 +194,78 @@ class GitHubConnectorController(
         if (saved == null) {
             withContext(Dispatchers.IO) { stateStore.put(snapshot) }
         }
-        val refreshed = withContext(Dispatchers.IO) { refreshIfNeeded(stored) }
-        if (refreshed == null) {
-            cachedCredentials = null
-            val expired = snapshot.copy(
-                state = ConnectorState.REAUTH_REQUIRED,
-                lastErrorCode = "token_expired",
-                lastUpdatedAtEpochSeconds = nowSeconds(),
-            )
-            withContext(Dispatchers.IO) {
-                vault.clear(CREDENTIAL_KEY)
-                stateStore.put(expired)
+        var refreshWarning: String? = null
+        val refreshed = when (val outcome = withContext(Dispatchers.IO) { refreshIfNeeded(stored) }) {
+            is RefreshOutcome.Ready -> outcome.credentials
+            is RefreshOutcome.Reauthenticate -> {
+                cachedCredentials = null
+                val expired = snapshot.copy(
+                    state = ConnectorState.REAUTH_REQUIRED,
+                    lastErrorCode = outcome.errorCode,
+                    lastUpdatedAtEpochSeconds = nowSeconds(),
+                )
+                withContext(Dispatchers.IO) {
+                    vault.clear(CREDENTIAL_KEY)
+                    stateStore.put(expired)
+                }
+                cachedSnapshot = expired
+                mutable.value = mutable.value.copy(
+                    connected = false,
+                    accountLogin = snapshot.accountLogin,
+                    status = "GitHub sign-in expired. Connect again.",
+                )
+                return@withLock
             }
-            cachedSnapshot = expired
-            mutable.value = mutable.value.copy(
-                connected = false,
-                accountLogin = snapshot.accountLogin,
-                status = "GitHub sign-in expired. Connect again.",
-            )
-            return@withLock
+            is RefreshOutcome.Retryable -> {
+                // Keep the still-valid access/refresh pair. A network error
+                // must not turn a temporary outage into forced re-auth.
+                refreshWarning = "GitHub token refresh is temporarily unavailable. Retry shortly."
+                if (!tokenIsUsable(stored)) {
+                    cachedCredentials = stored
+                    val blocked = snapshot.copy(
+                        state = ConnectorState.CONNECTED,
+                        lastErrorCode = "token_refresh_retry",
+                        lastUpdatedAtEpochSeconds = nowSeconds(),
+                    )
+                    withContext(Dispatchers.IO) { stateStore.put(blocked) }
+                    cachedSnapshot = blocked
+                    mutable.value = mutable.value.copy(
+                        connected = false,
+                        accountLogin = snapshot.accountLogin,
+                        status = "GitHub token refresh is required before use. Retry shortly.",
+                    )
+                    return@withLock
+                }
+                stored
+            }
         }
 
+        val hadConnectedRuntime = cachedSnapshot?.state == ConnectorState.CONNECTED
+        val tokenChanged = refreshed.accessToken != stored.accessToken
         cachedCredentials = refreshed
         snapshot = snapshot.copy(
             state = ConnectorState.CONNECTED,
             grantedScopes = refreshed.grantedScopes,
             accessTokenExpiresAtEpochSeconds = refreshed.accessTokenExpiresAtEpochSeconds,
             refreshTokenExpiresAtEpochSeconds = refreshed.refreshTokenExpiresAtEpochSeconds,
+            lastErrorCode = if (refreshWarning == null) null else "token_refresh_retry",
             lastUpdatedAtEpochSeconds = nowSeconds(),
         )
         withContext(Dispatchers.IO) { stateStore.put(snapshot) }
         cachedSnapshot = snapshot
-        try {
-            configureAndInspect(restart = refreshed.accessToken != stored.accessToken)
-        } catch (failure: Throwable) {
-            if (failure is CancellationException) throw failure
-            markConfigurationFailure(failure, snapshot)
+        if (forceConfiguration || tokenChanged || !hadConnectedRuntime) {
+            try {
+                configureAndInspect(restart = tokenChanged)
+            } catch (failure: Throwable) {
+                if (failure is CancellationException) throw failure
+                markConfigurationFailure(failure, snapshot)
+            }
+        } else if (refreshWarning != null) {
+            mutable.value = mutable.value.copy(
+                connected = true,
+                accountLogin = snapshot.accountLogin,
+                status = refreshWarning,
+            )
         }
     }
 
@@ -364,6 +439,9 @@ class GitHubConnectorController(
                     url = GitHubEndpoints.REMOTE_MCP,
                     bearerTokenEnvironmentVariable = GitHubEndpoints.REMOTE_MCP_TOKEN_ENVIRONMENT,
                     approvalMode = approvalModeFor(mode),
+                    // The header is a provider hint, not a local security
+                    // boundary. PROMPT is the local guarantee: no tool can
+                    // run in this mode without the user's approval.
                     httpHeaders = if (mode == PermissionMode.READ_ONLY) {
                         mapOf("X-MCP-Readonly" to "true")
                     } else emptyMap(),
@@ -450,18 +528,32 @@ class GitHubConnectorController(
         )
     }
 
-    private suspend fun refreshIfNeeded(credentials: CredentialBundle): CredentialBundle? {
-        val expiresAt = credentials.accessTokenExpiresAtEpochSeconds ?: return credentials
-        if (expiresAt > nowSeconds() + TOKEN_REFRESH_LEEWAY_SECONDS) return credentials
-        val refreshToken = credentials.refreshToken ?: return null
-        if (clientId.isBlank()) return null
-        return runCatching {
-            GitHubOAuthDeviceFlowClient(clientId, http).refresh(refreshToken, credentials.grantedScopes).also {
-                vault.write(CREDENTIAL_KEY, it)
+    private suspend fun refreshIfNeeded(credentials: CredentialBundle): RefreshOutcome {
+        val expiresAt = credentials.accessTokenExpiresAtEpochSeconds
+            ?: return RefreshOutcome.Reauthenticate("access_token_expiry_missing")
+        if (expiresAt > nowSeconds() + TOKEN_REFRESH_LEEWAY_SECONDS) {
+            return RefreshOutcome.Ready(credentials)
+        }
+        val refreshToken = credentials.refreshToken
+            ?: return RefreshOutcome.Reauthenticate("refresh_token_missing")
+        if (clientId.isBlank()) return RefreshOutcome.Reauthenticate("oauth_client_missing")
+        return try {
+            val refreshed = GitHubOAuthDeviceFlowClient(clientId, http)
+                .refresh(refreshToken, credentials.grantedScopes)
+            vault.write(CREDENTIAL_KEY, refreshed)
+            RefreshOutcome.Ready(refreshed)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: GitHubOAuthException) {
+            if (failure.errorCode in REAUTH_ERROR_CODES) {
+                RefreshOutcome.Reauthenticate(failure.errorCode)
+            } else {
+                RefreshOutcome.Retryable(failure)
             }
-        }.getOrElse { failure ->
-            if (failure is CancellationException) throw failure
-            null
+        } catch (failure: Exception) {
+            // Network failures, malformed responses, and rate limits are
+            // retryable. Never delete a refresh token for those cases.
+            RefreshOutcome.Retryable(failure)
         }
     }
 
@@ -526,13 +618,26 @@ class GitHubConnectorController(
     private fun nowSeconds(): Long = System.currentTimeMillis() / 1_000L
 
     private fun tokenIsUsable(credentials: CredentialBundle): Boolean =
-        credentials.accessTokenExpiresAtEpochSeconds?.let { it > nowSeconds() } ?: true
+        credentials.accessTokenExpiresAtEpochSeconds?.let { it > nowSeconds() } == true
+
+    private sealed interface RefreshOutcome {
+        data class Ready(val credentials: CredentialBundle) : RefreshOutcome
+        data class Reauthenticate(val errorCode: String) : RefreshOutcome
+        data class Retryable(val failure: Throwable) : RefreshOutcome
+    }
 
     internal companion object {
         const val SERVER_NAME = "github"
         const val CREDENTIAL_KEY = "github.oauth"
         const val PERMISSION_KEY = "github.permission"
         const val TOKEN_REFRESH_LEEWAY_SECONDS = 60L
+        val REAUTH_ERROR_CODES = setOf(
+            "access_denied",
+            "expired_token",
+            "invalid_client",
+            "invalid_grant",
+            "unauthorized_client",
+        )
 
         internal fun approvalModeFor(mode: PermissionMode): McpToolApprovalMode = when (mode) {
             PermissionMode.READ_ONLY -> McpToolApprovalMode.PROMPT

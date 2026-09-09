@@ -7,7 +7,7 @@ object TokenRedactor {
     )
     private val bearerPattern = Regex("(?i)(Bearer\\s+)[^\\s,;]+")
     private val formSecretPattern = Regex(
-        "(?i)((?:access_token|refresh_token|device_code|client_secret)=)[^&\\s]+",
+        "(?i)((?:access_token|refresh_token|device_code|client_secret|user_code|verification_uri_complete)=)[^&\\s]+",
     )
 
     fun redact(value: String?, extraSecrets: Collection<String> = emptyList()): String? {

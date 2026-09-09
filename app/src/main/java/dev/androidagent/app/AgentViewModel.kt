@@ -28,6 +28,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     private val usageByThread = mutableMapOf<String, TokenUsage>()
     private var setupJob: Job? = null
     private var githubConnectJob: Job? = null
+    private var githubMonitorJob: Job? = null
     private var voiceLocalSessionId: String? = null
     private val pendingVoiceTexts = java.util.ArrayDeque<String>()
 
@@ -208,12 +209,29 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                     // GitHub is an optional connector; Codex startup continues.
                 }
                 graph.engine.connect()
+                startGitHubMonitor()
                 val account = graph.engine.account()
                 mutable.update { it.copy(accountStatus = account) }
                 loadModels()
                 loadSkills()
                 runCatching { graph.engine.refreshUsage() }
             } finally { mutable.update { it.copy(isPreparingRuntime = false) } }
+        }
+    }
+
+    private fun startGitHubMonitor() {
+        if (githubMonitorJob?.isActive == true) return
+        githubMonitorJob = viewModelScope.launch {
+            while (isActive) {
+                delay(GITHUB_REFRESH_CHECK_INTERVAL_MS)
+                if (graph.runtime.status.value.phase in setOf(RuntimePhase.READY, RuntimePhase.RUNNING)) {
+                    runCatching {
+                        // The connector skips MCP reconfiguration while the
+                        // token is healthy and restarts only after a refresh.
+                        graph.githubConnector.synchronize(forceConfiguration = false)
+                    }
+                }
+            }
         }
     }
     fun login() = task {
@@ -578,5 +596,9 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     private fun task(block: suspend () -> Unit): Job = viewModelScope.launch {
         try { block() } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { error(failure.message ?: "Something went wrong.") }
+    }
+
+    private companion object {
+        const val GITHUB_REFRESH_CHECK_INTERVAL_MS = 30_000L
     }
 }

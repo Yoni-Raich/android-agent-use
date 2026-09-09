@@ -44,6 +44,10 @@ not production-ready.
   validation, state/credential corruption handling, MCP event/status parsing,
   runtime connector composition, and redacted connector failures. Focused
   JVM tests cover the new policy, parser, registry, overlay, and OAuth paths.
+- The second review hardening keeps refresh tokens on transient refresh errors,
+  rejects immortal OAuth responses, adds near-expiry refresh monitoring, makes
+  the prompt-every-tool read-only boundary explicit, and includes descriptions
+  in the MCP tool fingerprint.
 
 ### Not proven yet
 

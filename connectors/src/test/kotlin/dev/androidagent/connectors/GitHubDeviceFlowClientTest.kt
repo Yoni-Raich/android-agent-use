@@ -86,7 +86,7 @@ class GitHubDeviceFlowClientTest {
     fun `missing token scope is not mistaken for the requested scope`() = runBlocking {
         val http = FakeHttp(
             response(200, deviceJson()),
-            response(200, """{"access_token":"gho_access","token_type":"bearer"}"""),
+            response(200, """{"access_token":"gho_access","token_type":"bearer","expires_in":60}"""),
         )
         val client = GitHubOAuthDeviceFlowClient(
             clientId = "public-client",
@@ -104,7 +104,7 @@ class GitHubDeviceFlowClientTest {
     fun `poll interval is capped before converting to milliseconds`() = runBlocking {
         val http = FakeHttp(
             response(200, deviceJson(interval = Long.MAX_VALUE)),
-            response(200, """{"access_token":"gho_access"}"""),
+            response(200, """{"access_token":"gho_access","expires_in":60}"""),
         )
         val waits = mutableListOf<Long>()
         val client = GitHubOAuthDeviceFlowClient(
@@ -186,6 +186,34 @@ class GitHubDeviceFlowClientTest {
             client.requestDeviceAuthorization(setOf("not-a-github-scope"))
         }
         assertTrue(http.requests.isEmpty())
+    }
+
+    @Test
+    fun `broad supported scopes are rejected without explicit consent`() {
+        val http = FakeHttp()
+        val client = client(http)
+
+        assertSuspendThrows(IllegalArgumentException::class.java) {
+            client.requestDeviceAuthorization(setOf("delete_repo"))
+        }
+        assertTrue(http.requests.isEmpty())
+    }
+
+    @Test
+    fun `missing access expiry is rejected instead of creating an immortal token`() = runBlocking {
+        val http = FakeHttp(
+            response(200, deviceJson()),
+            response(200, """{"access_token":"gho_access"}"""),
+        )
+
+        val failure = try {
+            client(http).authenticate()
+            throw AssertionError("expected missing expiry to be rejected")
+        } catch (expected: GitHubOAuthException) {
+            expected
+        }
+
+        assertEquals("invalid_response", failure.errorCode)
     }
 
     @Test
