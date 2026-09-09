@@ -55,7 +55,7 @@ The Android Gradle test flow installs the test APK and then uninstalls the app
 and test APK. That removes app-private sign-in, sessions, and staged runtime
 files, and installing the test APK can disable the Accessibility service.
 
-For a stateful phone, install both APKs with `adb install -r`, enable
+For a stateful phone, install both APKs with `adb -s <serial> install -r`, enable
 Accessibility by hand if needed, and run only a selected instrumentation class
 with `adb -s <serial> shell am instrument ...`. Even then, instrumentation
 force-stops the package, so it cannot observe a live Accessibility service in
