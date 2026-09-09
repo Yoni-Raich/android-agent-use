@@ -531,11 +531,18 @@ class GitHubConnectorController(
     private suspend fun refreshIfNeeded(credentials: CredentialBundle): RefreshOutcome {
         val expiresAt = credentials.accessTokenExpiresAtEpochSeconds
             ?: return RefreshOutcome.Reauthenticate("access_token_expiry_missing")
-        if (expiresAt > nowSeconds() + TOKEN_REFRESH_LEEWAY_SECONDS) {
+        val now = nowSeconds()
+        val refreshCutoff = runCatching {
+            Math.addExact(now, TOKEN_REFRESH_LEEWAY_SECONDS)
+        }.getOrDefault(Long.MAX_VALUE)
+        if (expiresAt > refreshCutoff) {
             return RefreshOutcome.Ready(credentials)
         }
         val refreshToken = credentials.refreshToken
             ?: return RefreshOutcome.Reauthenticate("refresh_token_missing")
+        if (credentials.refreshTokenExpiresAtEpochSeconds?.let { it <= now } == true) {
+            return RefreshOutcome.Reauthenticate("refresh_token_expired")
+        }
         if (clientId.isBlank()) return RefreshOutcome.Reauthenticate("oauth_client_missing")
         return try {
             val refreshed = GitHubOAuthDeviceFlowClient(clientId, http)
@@ -636,7 +643,12 @@ class GitHubConnectorController(
             "expired_token",
             "invalid_client",
             "invalid_grant",
+            "invalid_request",
+            "invalid_scope",
             "unauthorized_client",
+            "unsupported_grant_type",
+            "unsupported_token_type",
+            "token_expired",
         )
 
         internal fun approvalModeFor(mode: PermissionMode): McpToolApprovalMode = when (mode) {
