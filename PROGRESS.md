@@ -7,10 +7,10 @@ not production-ready.
 
 ### Verified
 
-- The v0.6.1 release candidate was built on 2026-09-09. The full Gradle gate,
-  runtime staging tests, APK metadata check, zip alignment check, and APK
-  Signature Scheme v3 verification passed. The artifact uses the local debug
-  key and was not installed on a physical phone.
+- The public v0.6.1 dev APK was built from merged `main` at tag `v0.6.1` on
+  2026-09-09. The full Gradle gate, runtime staging tests, APK metadata check,
+  zip alignment check, and APK Signature Scheme v3 verification passed. The
+  artifact uses the local debug key and was not installed on a physical phone.
 - The v0.6.0 dev APK builds with the Codex runtime staging step.
 - The recorded v0.6.0 full gate passed on 2026-09-08:
   `test`, `assembleDevRelease`, `assembleDevDebugAndroidTest`, and

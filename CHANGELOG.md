@@ -14,8 +14,7 @@
   worktree rules, evidence boundaries, and release checks.
 - Added the setup hub, quota meter, run indicator, pairing scan, and bounded
   ADB setup flow from the merged `main` changes.
-- Built a dev-flavor test APK with v3 debug signing for the release candidate;
-  it is not published yet.
+- Published a dev-flavor test APK with v3 debug signing for local testing.
 
 ## 0.6.0 — 2026-09-08
 
