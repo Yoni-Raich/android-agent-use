@@ -564,3 +564,26 @@ app's `auth.json` into `/data/local/tmp` would do it and is the wrong trade:
 that directory is world-readable on the device. The right route is to make the
 calls from inside the app, where `CodexEngine` already holds a signed-in
 session, behind a debug-only path.
+
+## Screen awake during active conversations
+
+`KeepAwakePolicy` treats a typed run or realtime voice session as active from
+its starting phase through `STOPPING`, and releases the requirement only at
+`IDLE` or `ERROR`. While `MainActivity` is visible, it applies
+`FLAG_KEEP_SCREEN_ON`, which is the platform-managed foreground path.
+
+Android allows an activity with that flag to turn its screen off when the app
+goes to the background, and the flag is not a service mechanism. The existing
+foreground `AgentService` therefore owns a separate screen wake lock for the
+same policy while the activity is hidden, including before the floating
+overlay is created. `ConversationKeepAwakeController` makes acquire/release
+transitions idempotent, and service destruction always releases the lock. The
+overlay does not own a screen-on flag. No display-timeout or other system
+setting is written; the manifest declares only the normal `WAKE_LOCK`
+permission required by the lock.
+
+The screen wake lock uses the deprecated `SCREEN_BRIGHT_WAKE_LOCK` level because
+the requested background screen guarantee has no equivalent activity flag.
+Physical verification on the approved Nothing A059 is still required to check
+screen behavior, rotation, power-button interaction, terminal release, and
+battery/OS policy behavior.
