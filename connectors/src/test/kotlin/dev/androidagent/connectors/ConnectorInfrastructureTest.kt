@@ -19,7 +19,9 @@ class ConnectorInfrastructureTest {
         assertEquals(AuthStrategy.GITHUB_OAUTH_APP_DEVICE_FLOW, definition.authStrategy)
         assertTrue(GitHubOAuthScopes.supported.size >= 30)
         assertTrue(definition.defaultScopes.all { it in definition.supportedScopes })
-        assertEquals(setOf(GitHubOAuthScopes.REPO, GitHubOAuthScopes.OFFLINE_ACCESS), definition.defaultScopes)
+        assertEquals(setOf(GitHubOAuthScopes.REPO), definition.defaultScopes)
+        // offline_access is not a GitHub OAuth App scope.
+        assertFalse(GitHubOAuthScopes.supported.any { it == "offline_access" })
         assertEquals("https://api.githubcopilot.com/mcp/x/all", GitHubEndpoints.REMOTE_MCP)
         assertEquals("GITHUB_PERSONAL_ACCESS_TOKEN", GitHubEndpoints.REMOTE_MCP_TOKEN_ENVIRONMENT)
     }

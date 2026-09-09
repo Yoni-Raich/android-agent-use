@@ -28,6 +28,7 @@ import dev.androidagent.core.RuntimeConnector
 import dev.androidagent.core.SecretRedactor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -158,7 +159,16 @@ class GitHubConnectorController(
             )
             return@withLock
         }
-        if (saved != null && saved.state != ConnectorState.CONNECTED) {
+        // ERROR is recoverable: the credential is still valid and only the MCP
+        // handshake failed, so fall through and let this pass retry it. A
+        // startup or user-driven pass retries immediately; the background
+        // monitor waits out a cooldown, so a server that is genuinely down
+        // cannot restart the app-server on every tick.
+        val retryableError = saved?.state == ConnectorState.ERROR && (
+            forceConfiguration ||
+                nowSeconds() - (saved.lastUpdatedAtEpochSeconds ?: 0L) >= ERROR_RETRY_COOLDOWN_SECONDS
+            )
+        if (saved != null && saved.state != ConnectorState.CONNECTED && !retryableError) {
             cachedCredentials = null
             val attention = if (saved.state == ConnectorState.AUTHORIZING) {
                 val interrupted = saved.copy(
@@ -178,7 +188,11 @@ class GitHubConnectorController(
             mutable.value = mutable.value.copy(
                 connected = false,
                 accountLogin = attention.accountLogin,
-                status = "GitHub sign-in needs attention. Connect again.",
+                status = if (attention.state == ConnectorState.ERROR) {
+                    "GitHub MCP is unavailable. Retrying shortly."
+                } else {
+                    "GitHub sign-in needs attention. Connect again."
+                },
             )
             return@withLock
         }
@@ -448,7 +462,7 @@ class GitHubConnectorController(
                 ),
             )
             connector.reloadMcpServers()
-            val listed = connector.listMcpServers().firstOrNull { it.name == SERVER_NAME }
+            val listed = awaitSettledMcpServer(connector)
             server = listed
             fingerprint = listed?.let {
                 ToolSchemaFingerprint.forTools(
@@ -484,6 +498,10 @@ class GitHubConnectorController(
         val needsAuth = current?.phase == McpRuntimePhase.AUTHENTICATION_REQUIRED ||
             current?.authStatus?.lowercase() in setOf("expired", "unauthenticated", "authentication_required")
         val connected = current?.phase == McpRuntimePhase.CONNECTED && !needsAuth && current.error == null
+        // The server may still be coming up, or report a status this build does
+        // not know. Neither is a reason to strand a valid credential.
+        val transient = !needsAuth && current?.error == null &&
+            (current == null || current.phase in TRANSIENT_MCP_PHASES)
         val nextState = when {
             connected -> saved?.copy(
                 state = ConnectorState.CONNECTED,
@@ -498,7 +516,10 @@ class GitHubConnectorController(
                 lastUpdatedAtEpochSeconds = nowSeconds(),
             )
             else -> saved?.copy(
-                state = ConnectorState.ERROR,
+                // A phase that never settled is not a terminal failure. Keeping
+                // the connector CONNECTED lets the next synchronize retry it
+                // instead of demanding a full re-authentication.
+                state = if (transient) ConnectorState.CONNECTED else ConnectorState.ERROR,
                 lastErrorCode = if (current == null) "mcp_status_missing" else "mcp_${current.phase.name.lowercase()}",
                 toolSchemaFingerprint = fingerprint ?: savedFingerprint,
                 lastUpdatedAtEpochSeconds = nowSeconds(),
@@ -528,9 +549,26 @@ class GitHubConnectorController(
         )
     }
 
+    /**
+     * Poll the MCP status until it leaves a transient phase. `reloadMcpServers`
+     * returns before the remote handshake finishes, so the first listing often
+     * reports STARTING for a server that is about to come up healthy.
+     */
+    private suspend fun awaitSettledMcpServer(connector: ConnectorEngineControl): McpServerSnapshot? {
+        var latest: McpServerSnapshot? = null
+        repeat(MCP_SETTLE_ATTEMPTS) { attempt ->
+            latest = connector.listMcpServers().firstOrNull { it.name == SERVER_NAME }
+            val settled = latest?.let { it.phase !in TRANSIENT_MCP_PHASES } == true
+            if (settled) return latest
+            if (attempt < MCP_SETTLE_ATTEMPTS - 1) delay(MCP_SETTLE_DELAY_MS)
+        }
+        return latest
+    }
+
     private suspend fun refreshIfNeeded(credentials: CredentialBundle): RefreshOutcome {
+        // No expiry means a non-expiring OAuth App token: nothing to refresh.
         val expiresAt = credentials.accessTokenExpiresAtEpochSeconds
-            ?: return RefreshOutcome.Reauthenticate("access_token_expiry_missing")
+            ?: return RefreshOutcome.Ready(credentials)
         val now = nowSeconds()
         val refreshCutoff = runCatching {
             Math.addExact(now, TOKEN_REFRESH_LEEWAY_SECONDS)
@@ -624,8 +662,13 @@ class GitHubConnectorController(
 
     private fun nowSeconds(): Long = System.currentTimeMillis() / 1_000L
 
+    /**
+     * A GitHub OAuth App issues non-expiring tokens, so a missing expiry means
+     * "does not expire" rather than "unknown". Only a present expiry that has
+     * already passed makes a token unusable.
+     */
     private fun tokenIsUsable(credentials: CredentialBundle): Boolean =
-        credentials.accessTokenExpiresAtEpochSeconds?.let { it > nowSeconds() } == true
+        credentials.accessTokenExpiresAtEpochSeconds?.let { it > nowSeconds() } ?: true
 
     private sealed interface RefreshOutcome {
         data class Ready(val credentials: CredentialBundle) : RefreshOutcome
@@ -638,6 +681,16 @@ class GitHubConnectorController(
         const val CREDENTIAL_KEY = "github.oauth"
         const val PERMISSION_KEY = "github.permission"
         const val TOKEN_REFRESH_LEEWAY_SECONDS = 60L
+        const val ERROR_RETRY_COOLDOWN_SECONDS = 300L
+        const val MCP_SETTLE_ATTEMPTS = 5
+        const val MCP_SETTLE_DELAY_MS = 700L
+
+        /** Phases that mean "not decided yet", never "failed". */
+        val TRANSIENT_MCP_PHASES = setOf(
+            McpRuntimePhase.STARTING,
+            McpRuntimePhase.NOT_STARTED,
+            McpRuntimePhase.UNKNOWN,
+        )
         val REAUTH_ERROR_CODES = setOf(
             "access_denied",
             "expired_token",

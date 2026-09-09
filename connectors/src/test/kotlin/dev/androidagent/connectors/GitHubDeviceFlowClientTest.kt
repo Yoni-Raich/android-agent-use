@@ -35,13 +35,15 @@ class GitHubDeviceFlowClientTest {
     }
 
     @Test
-    fun `default device request is least privilege and includes refresh opt in`() = runBlocking {
+    fun `default device request is least privilege`() = runBlocking {
         val http = FakeHttp(response(200, deviceJson()))
 
         GitHubOAuthDeviceFlowClient("public-client", http).requestDeviceAuthorization()
 
         val body = http.requests.single().body.orEmpty()
-        assertTrue(body.contains("scope=offline_access+repo"))
+        assertEquals("repo", GitHubOAuthScopes.issueWrite.single())
+        assertTrue(body.contains("scope=repo"))
+        assertFalse(body.contains("offline_access"))
         assertFalse(body.contains("admin%3A"))
         assertFalse(body.contains("delete_repo"))
     }
@@ -200,15 +202,35 @@ class GitHubDeviceFlowClientTest {
     }
 
     @Test
-    fun `missing access expiry is rejected instead of creating an immortal token`() = runBlocking {
+    fun `oauth app token without expires_in is accepted as non expiring`() = runBlocking {
+        // A GitHub OAuth App issues non-expiring tokens and omits
+        // expires_in. Rejecting that response broke sign-in entirely.
         val http = FakeHttp(
             response(200, deviceJson()),
-            response(200, """{"access_token":"gho_access"}"""),
+            response(
+                200,
+                """{"access_token":"gho_access","token_type":"bearer","scope":"repo"}""",
+            ),
+        )
+
+        val credentials = client(http).authenticate()
+
+        assertEquals("gho_access", credentials.accessToken)
+        assertEquals(null, credentials.accessTokenExpiresAtEpochSeconds)
+        assertEquals(null, credentials.refreshToken)
+        assertEquals(setOf(GitHubOAuthScopes.REPO), credentials.grantedScopes)
+    }
+
+    @Test
+    fun `a present but malformed expires_in is still rejected`() = runBlocking {
+        val http = FakeHttp(
+            response(200, deviceJson()),
+            response(200, """{"access_token":"gho_access","expires_in":9223372036854775807}"""),
         )
 
         val failure = try {
             client(http).authenticate()
-            throw AssertionError("expected missing expiry to be rejected")
+            throw AssertionError("expected overflowing expiry to be rejected")
         } catch (expected: GitHubOAuthException) {
             expected
         }
