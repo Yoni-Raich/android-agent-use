@@ -6,10 +6,12 @@ import dev.androidagent.connectors.AndroidKeystoreCredentialVault
 import dev.androidagent.connectors.ConnectorHttpRequest
 import dev.androidagent.connectors.ConnectorSnapshot
 import dev.androidagent.connectors.ConnectorState
+import dev.androidagent.connectors.ConnectorStateCorruptException
+import dev.androidagent.connectors.CredentialBundle
+import dev.androidagent.connectors.CredentialStoreCorruptException
 import dev.androidagent.connectors.GitHubConnectorCatalog
 import dev.androidagent.connectors.GitHubEndpoints
 import dev.androidagent.connectors.GitHubOAuthDeviceFlowClient
-import dev.androidagent.connectors.GitHubOAuthScopes
 import dev.androidagent.connectors.PermissionMode
 import dev.androidagent.connectors.SharedPreferencesConnectorStateStore
 import dev.androidagent.connectors.ToolSchemaFingerprint
@@ -18,13 +20,19 @@ import dev.androidagent.connectors.UrlConnectionHttpClient
 import dev.androidagent.core.AgentEngine
 import dev.androidagent.core.ConnectorEngineControl
 import dev.androidagent.core.McpHttpServerConfig
+import dev.androidagent.core.McpRuntimePhase
+import dev.androidagent.core.McpServerSnapshot
 import dev.androidagent.core.McpToolApprovalMode
-import dev.androidagent.core.RuntimeEgressPolicy
-import dev.androidagent.core.RuntimeEnvironmentOverlay
+import dev.androidagent.core.RuntimeConnector
+import dev.androidagent.core.SecretRedactor
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
@@ -35,7 +43,7 @@ import kotlinx.serialization.json.longOrNull
 class GitHubConnectorController(
     app: Application,
     private val clientId: String,
-) : RuntimeEnvironmentOverlay, RuntimeEgressPolicy {
+) : RuntimeConnector {
     private val preferences = app.getSharedPreferences("connectors", 0)
     private val vault = AndroidKeystoreCredentialVault(app)
     private val stateStore = SharedPreferencesConnectorStateStore(app)
@@ -43,38 +51,151 @@ class GitHubConnectorController(
     private val json = Json { ignoreUnknownKeys = true }
     private var engine: AgentEngine? = null
     private var control: ConnectorEngineControl? = null
+    private val lifecycleLock = Mutex()
+    @Volatile private var cachedPermissionMode = PermissionMode.ASK_BEFORE_WRITES
     private val mutable = MutableStateFlow(initialState())
+
+    /** Loaded on IO before the app-server is started; runtime reads only memory. */
+    @Volatile private var cachedCredentials: CredentialBundle? = null
+    @Volatile private var cachedSnapshot: ConnectorSnapshot? = null
+
     val state: StateFlow<GitHubConnectorUiState> = mutable.asStateFlow()
 
-    override fun snapshot(): Map<String, String> = vault.read(CREDENTIAL_KEY)?.let { credentials ->
-        mapOf(GitHubEndpoints.REMOTE_MCP_TOKEN_ENVIRONMENT to credentials.accessToken)
-    }.orEmpty()
+    override fun snapshot(): Map<String, String> = cachedCredentials
+        ?.takeIf { cachedSnapshot?.state == ConnectorState.CONNECTED && tokenIsUsable(it) }
+        ?.let { mapOf(GitHubEndpoints.REMOTE_MCP_TOKEN_ENVIRONMENT to it.accessToken) }
+        .orEmpty()
 
-    override fun allowedHttpsHosts(): Set<String> =
-        if (vault.read(CREDENTIAL_KEY) == null) emptySet() else setOf("api.githubcopilot.com")
+    override fun allowedHttpsHosts(): Set<String> = if (
+        cachedCredentials?.let(::tokenIsUsable) == true && cachedSnapshot?.state == ConnectorState.CONNECTED
+    ) {
+        setOf("api.githubcopilot.com")
+    } else {
+        emptySet()
+    }
 
     fun attach(engine: AgentEngine, control: ConnectorEngineControl) {
         this.engine = engine
         this.control = control
     }
 
-    suspend fun synchronize() {
-        val credentials = vault.read(CREDENTIAL_KEY) ?: return
-        val refreshed = refreshIfNeeded(credentials)
-        if (refreshed == null) {
+    suspend fun synchronize() = lifecycleLock.withLock {
+        loadPermissionMode()
+        val saved = try {
+            withContext(Dispatchers.IO) { stateStore.get(GitHubConnectorCatalog.ID) }
+        } catch (_: ConnectorStateCorruptException) {
+            cachedCredentials = null
+            cachedSnapshot = null
+            withContext(Dispatchers.IO) { vault.clear(CREDENTIAL_KEY) }
             mutable.value = mutable.value.copy(
                 connected = false,
+                accountLogin = null,
+                status = "GitHub connector state was reset. Connect again.",
+            )
+            return@withLock
+        }
+        val stored = try {
+            withContext(Dispatchers.IO) { vault.read(CREDENTIAL_KEY) }
+        } catch (_: CredentialStoreCorruptException) {
+            cachedCredentials = null
+            withContext(Dispatchers.IO) { vault.clear(CREDENTIAL_KEY) }
+            val reauth = saved?.copy(
+                state = ConnectorState.REAUTH_REQUIRED,
+                lastErrorCode = "credential_corrupt",
+                lastUpdatedAtEpochSeconds = nowSeconds(),
+            )
+            withContext(Dispatchers.IO) {
+                reauth?.let { stateStore.put(it) }
+            }
+            cachedSnapshot = reauth
+            mutable.value = mutable.value.copy(
+                connected = false,
+                accountLogin = saved?.accountLogin,
+                status = "GitHub credentials could not be opened. Connect again.",
+            )
+            return@withLock
+        }
+        if (stored == null) {
+            cachedCredentials = null
+            val missing = saved?.takeIf { it.state != ConnectorState.DISCONNECTED }?.copy(
+                state = ConnectorState.REAUTH_REQUIRED,
+                lastErrorCode = "credential_missing",
+                lastUpdatedAtEpochSeconds = nowSeconds(),
+            )
+            withContext(Dispatchers.IO) {
+                missing?.let { stateStore.put(it) }
+            }
+            cachedSnapshot = missing ?: saved
+            mutable.value = mutable.value.copy(
+                connected = false,
+                accountLogin = saved?.accountLogin,
+                status = if (missing == null) "Not connected" else "GitHub credential missing. Connect again.",
+            )
+            return@withLock
+        }
+        if (saved != null && saved.state != ConnectorState.CONNECTED) {
+            cachedCredentials = null
+            cachedSnapshot = saved
+            mutable.value = mutable.value.copy(
+                connected = false,
+                accountLogin = saved.accountLogin,
+                status = "GitHub sign-in needs attention. Connect again.",
+            )
+            return@withLock
+        }
+
+        var snapshot = saved ?: ConnectorSnapshot(
+            connectorId = GitHubConnectorCatalog.ID,
+            state = ConnectorState.CONNECTED,
+            grantedScopes = stored.grantedScopes,
+            accessTokenExpiresAtEpochSeconds = stored.accessTokenExpiresAtEpochSeconds,
+            refreshTokenExpiresAtEpochSeconds = stored.refreshTokenExpiresAtEpochSeconds,
+            lastUpdatedAtEpochSeconds = nowSeconds(),
+        )
+        if (saved == null) {
+            withContext(Dispatchers.IO) { stateStore.put(snapshot) }
+        }
+        val refreshed = withContext(Dispatchers.IO) { refreshIfNeeded(stored) }
+        if (refreshed == null) {
+            cachedCredentials = null
+            val expired = snapshot.copy(
+                state = ConnectorState.REAUTH_REQUIRED,
+                lastErrorCode = "token_expired",
+                lastUpdatedAtEpochSeconds = nowSeconds(),
+            )
+            withContext(Dispatchers.IO) {
+                vault.clear(CREDENTIAL_KEY)
+                stateStore.put(expired)
+            }
+            cachedSnapshot = expired
+            mutable.value = mutable.value.copy(
+                connected = false,
+                accountLogin = snapshot.accountLogin,
                 status = "GitHub sign-in expired. Connect again.",
             )
-            stateStore.get(GitHubConnectorCatalog.ID)?.let {
-                stateStore.put(it.copy(state = ConnectorState.REAUTH_REQUIRED, lastErrorCode = "token_expired"))
-            }
-            return
+            return@withLock
         }
-        configureAndInspect(restart = false)
+
+        cachedCredentials = refreshed
+        snapshot = snapshot.copy(
+            state = ConnectorState.CONNECTED,
+            grantedScopes = refreshed.grantedScopes,
+            accessTokenExpiresAtEpochSeconds = refreshed.accessTokenExpiresAtEpochSeconds,
+            refreshTokenExpiresAtEpochSeconds = refreshed.refreshTokenExpiresAtEpochSeconds,
+            lastUpdatedAtEpochSeconds = nowSeconds(),
+        )
+        withContext(Dispatchers.IO) { stateStore.put(snapshot) }
+        cachedSnapshot = snapshot
+        try {
+            configureAndInspect(restart = refreshed.accessToken != stored.accessToken)
+        } catch (failure: Throwable) {
+            if (failure is CancellationException) throw failure
+            markConfigurationFailure(failure, snapshot)
+        }
     }
 
-    suspend fun connect() {
+    suspend fun connect() = lifecycleLock.withLock {
+        loadPermissionMode()
         check(clientId.isNotBlank()) {
             "This build has no GitHub OAuth client ID. Set githubOAuthClientId in Gradle properties."
         }
@@ -86,7 +207,7 @@ class GitHubConnectorController(
         )
         try {
             val credentials = GitHubOAuthDeviceFlowClient(clientId, http).authenticate(
-                scopes = GitHubOAuthScopes.supported,
+                scopes = GitHubConnectorCatalog.definition.defaultScopes,
                 onAuthorization = { authorization ->
                     mutable.value = mutable.value.copy(
                         userCode = authorization.userCode,
@@ -96,20 +217,43 @@ class GitHubConnectorController(
                 },
                 onStatus = { mutable.value = mutable.value.copy(status = "Waiting for GitHub approval…") },
             )
-            val identity = loadIdentity(credentials.accessToken)
-            vault.write(CREDENTIAL_KEY, credentials)
-            stateStore.put(
-                ConnectorSnapshot(
-                    connectorId = GitHubConnectorCatalog.ID,
-                    state = ConnectorState.CONNECTED,
-                    accountLogin = identity.first,
-                    accountId = identity.second,
-                    grantedScopes = credentials.grantedScopes,
-                    accessTokenExpiresAtEpochSeconds = credentials.accessTokenExpiresAtEpochSeconds,
-                    refreshTokenExpiresAtEpochSeconds = credentials.refreshTokenExpiresAtEpochSeconds,
-                    lastUpdatedAtEpochSeconds = nowSeconds(),
-                ),
+
+            // Persist first so a successful grant is recoverable even if the
+            // identity request is temporarily rate-limited or offline. If the
+            // verification fails, the provisional grant is cleared below.
+            val provisional = ConnectorSnapshot(
+                connectorId = GitHubConnectorCatalog.ID,
+                state = ConnectorState.AUTHORIZING,
+                grantedScopes = credentials.grantedScopes,
+                accessTokenExpiresAtEpochSeconds = credentials.accessTokenExpiresAtEpochSeconds,
+                refreshTokenExpiresAtEpochSeconds = credentials.refreshTokenExpiresAtEpochSeconds,
+                lastUpdatedAtEpochSeconds = nowSeconds(),
             )
+            withContext(Dispatchers.IO) {
+                vault.write(CREDENTIAL_KEY, credentials)
+                stateStore.put(provisional)
+            }
+            cachedSnapshot = provisional
+            cachedCredentials = credentials
+
+            val identity = try {
+                loadIdentity(credentials.accessToken)
+            } catch (failure: Throwable) {
+                withContext(Dispatchers.IO) {
+                    vault.clear(CREDENTIAL_KEY)
+                    stateStore.remove(GitHubConnectorCatalog.ID)
+                }
+                cachedCredentials = null
+                cachedSnapshot = null
+                throw failure
+            }
+            val snapshot = provisional.copy(
+                state = ConnectorState.CONNECTED,
+                accountLogin = identity.first,
+                accountId = identity.second,
+            )
+            withContext(Dispatchers.IO) { stateStore.put(snapshot) }
+            cachedSnapshot = snapshot
             mutable.value = mutable.value.copy(
                 connected = true,
                 connecting = false,
@@ -118,7 +262,14 @@ class GitHubConnectorController(
                 verificationUrl = null,
                 status = "Connected",
             )
-            configureAndInspect(restart = true)
+            // The token is part of the app-server process environment. Restart
+            // once when replacing credentials so the old value cannot remain.
+            try {
+                configureAndInspect(restart = true)
+            } catch (failure: Throwable) {
+                markConfigurationFailure(failure, snapshot)
+                throw failure
+            }
         } catch (cancelled: CancellationException) {
             mutable.value = mutable.value.copy(
                 connecting = false,
@@ -132,20 +283,39 @@ class GitHubConnectorController(
                 connecting = false,
                 userCode = null,
                 verificationUrl = null,
-                status = failure.message ?: "GitHub sign-in failed",
+                status = safeFailure(failure, "GitHub sign-in failed"),
             )
             throw failure
         }
     }
 
-    suspend fun disconnect() {
+    suspend fun disconnect() = lifecycleLock.withLock {
+        var removedFromMcp = control != null
         control?.let { connector ->
-            runCatching { connector.removeMcpServer(SERVER_NAME) }
-            runCatching { connector.reloadMcpServers() }
+            try {
+                connector.removeMcpServer(SERVER_NAME)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                removedFromMcp = false
+            }
+            try {
+                connector.reloadMcpServers()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                removedFromMcp = false
+            }
         }
-        engine?.close()
-        vault.clear(CREDENTIAL_KEY)
-        stateStore.remove(GitHubConnectorCatalog.ID)
+        if (!removedFromMcp) {
+            try { engine?.close() } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { }
+        }
+        cachedCredentials = null
+        cachedSnapshot = null
+        withContext(Dispatchers.IO) {
+            vault.clear(CREDENTIAL_KEY)
+            stateStore.remove(GitHubConnectorCatalog.ID)
+        }
         mutable.value = GitHubConnectorUiState(
             available = clientId.isNotBlank(),
             permissionMode = permissionMode(),
@@ -153,10 +323,24 @@ class GitHubConnectorController(
         )
     }
 
-    suspend fun setPermissionMode(mode: PermissionMode) {
-        preferences.edit().putString(PERMISSION_KEY, mode.name).apply()
+    suspend fun setPermissionMode(mode: PermissionMode) = lifecycleLock.withLock {
+        withContext(Dispatchers.IO) {
+            check(preferences.edit().putString(PERMISSION_KEY, mode.name).commit()) {
+                "Could not persist GitHub permission mode"
+            }
+        }
+        cachedPermissionMode = mode
         mutable.value = mutable.value.copy(permissionMode = mode)
-        if (mutable.value.connected) configureAndInspect(restart = false)
+        if (mutable.value.connected) {
+            val snapshot = cachedSnapshot
+            try {
+                configureAndInspect(restart = false)
+            } catch (failure: Throwable) {
+                if (failure is CancellationException) throw failure
+                snapshot?.let { markConfigurationFailure(failure, it) }
+                throw failure
+            }
+        }
     }
 
     private suspend fun configureAndInspect(restart: Boolean) {
@@ -164,76 +348,109 @@ class GitHubConnectorController(
         val connector = control ?: return
         if (restart) currentEngine.close()
         currentEngine.connect()
-        val mode = permissionMode()
-        connector.configureMcpServer(
-            McpHttpServerConfig(
-                name = SERVER_NAME,
-                url = GitHubEndpoints.REMOTE_MCP,
-                bearerTokenEnvironmentVariable = GitHubEndpoints.REMOTE_MCP_TOKEN_ENVIRONMENT,
-                approvalMode = when (mode) {
-                    PermissionMode.READ_ONLY -> McpToolApprovalMode.APPROVE
-                    PermissionMode.ASK_BEFORE_WRITES -> McpToolApprovalMode.WRITES
-                    PermissionMode.FULL_CONTROL -> McpToolApprovalMode.APPROVE
-                },
-                httpHeaders = if (mode == PermissionMode.READ_ONLY) {
-                    mapOf("X-MCP-Readonly" to "true")
-                } else emptyMap(),
-            ),
-        )
-        connector.reloadMcpServers()
-        val server = connector.listMcpServers().firstOrNull { it.name == SERVER_NAME }
-        val fingerprint = server?.let {
-            ToolSchemaFingerprint.forTools(
-                GitHubConnectorCatalog.ID,
-                "mcp-http",
-                it.tools.map { tool ->
-                    ConnectorToolSchema(tool.name, tool.description, tool.inputSchema, tool.readOnly)
-                },
-            )
-        }
-        val saved = stateStore.get(GitHubConnectorCatalog.ID)
-        if (
-            saved?.toolSchemaFingerprint != null &&
-            fingerprint != null &&
-            saved.toolSchemaFingerprint != fingerprint &&
-            mode == PermissionMode.FULL_CONTROL
-        ) {
-            preferences.edit().putString(PERMISSION_KEY, PermissionMode.ASK_BEFORE_WRITES.name).apply()
-            mutable.value = mutable.value.copy(
-                permissionMode = PermissionMode.ASK_BEFORE_WRITES,
-                status = "GitHub tools changed. Write approvals were turned back on.",
-            )
-            configureAndInspect(restart = false)
-            return
-        }
-        val needsAuth = server?.phase == dev.androidagent.core.McpRuntimePhase.AUTHENTICATION_REQUIRED ||
-            server?.authStatus?.lowercase() in setOf("expired", "unauthenticated", "authentication_required")
-        if (saved != null) {
-            stateStore.put(
-                saved.copy(
-                    state = if (needsAuth) ConnectorState.REAUTH_REQUIRED else ConnectorState.CONNECTED,
-                    lastErrorCode = if (needsAuth) "authentication_required" else null,
-                    toolSchemaFingerprint = fingerprint ?: saved.toolSchemaFingerprint,
-                    lastUpdatedAtEpochSeconds = nowSeconds(),
+
+        var mode = permissionMode()
+        var server: McpServerSnapshot? = null
+        var fingerprint: String? = null
+        var saved = withContext(Dispatchers.IO) { stateStore.get(GitHubConnectorCatalog.ID) }
+            ?: cachedSnapshot?.also { fallback ->
+                withContext(Dispatchers.IO) { stateStore.put(fallback) }
+            }
+        var downgraded = false
+        repeat(2) {
+            connector.configureMcpServer(
+                McpHttpServerConfig(
+                    name = SERVER_NAME,
+                    url = GitHubEndpoints.REMOTE_MCP,
+                    bearerTokenEnvironmentVariable = GitHubEndpoints.REMOTE_MCP_TOKEN_ENVIRONMENT,
+                    approvalMode = approvalModeFor(mode),
+                    httpHeaders = if (mode == PermissionMode.READ_ONLY) {
+                        mapOf("X-MCP-Readonly" to "true")
+                    } else emptyMap(),
                 ),
             )
+            connector.reloadMcpServers()
+            val listed = connector.listMcpServers().firstOrNull { it.name == SERVER_NAME }
+            server = listed
+            fingerprint = listed?.let {
+                ToolSchemaFingerprint.forTools(
+                    GitHubConnectorCatalog.ID,
+                    "mcp-http",
+                    it.tools.map { tool ->
+                        ConnectorToolSchema(tool.name, tool.description, tool.inputSchema, tool.readOnly)
+                    },
+                )
+            }
+            if (
+                saved?.toolSchemaFingerprint != null &&
+                fingerprint != null &&
+                saved?.toolSchemaFingerprint != fingerprint &&
+                mode == PermissionMode.FULL_CONTROL
+            ) {
+                mode = PermissionMode.ASK_BEFORE_WRITES
+                downgraded = true
+                withContext(Dispatchers.IO) {
+                    check(preferences.edit().putString(PERMISSION_KEY, mode.name).commit()) {
+                        "Could not persist GitHub permission mode"
+                    }
+                }
+                cachedPermissionMode = mode
+                mutable.value = mutable.value.copy(permissionMode = mode)
+            } else {
+                return@repeat
+            }
+        }
+
+        val current = server
+        val savedFingerprint = saved?.toolSchemaFingerprint
+        val needsAuth = current?.phase == McpRuntimePhase.AUTHENTICATION_REQUIRED ||
+            current?.authStatus?.lowercase() in setOf("expired", "unauthenticated", "authentication_required")
+        val connected = current?.phase == McpRuntimePhase.CONNECTED && !needsAuth && current.error == null
+        val nextState = when {
+            connected -> saved?.copy(
+                state = ConnectorState.CONNECTED,
+                lastErrorCode = null,
+                toolSchemaFingerprint = fingerprint ?: savedFingerprint,
+                lastUpdatedAtEpochSeconds = nowSeconds(),
+            )
+            needsAuth -> saved?.copy(
+                state = ConnectorState.REAUTH_REQUIRED,
+                lastErrorCode = "authentication_required",
+                toolSchemaFingerprint = fingerprint ?: savedFingerprint,
+                lastUpdatedAtEpochSeconds = nowSeconds(),
+            )
+            else -> saved?.copy(
+                state = ConnectorState.ERROR,
+                lastErrorCode = if (current == null) "mcp_status_missing" else "mcp_${current.phase.name.lowercase()}",
+                toolSchemaFingerprint = fingerprint ?: savedFingerprint,
+                lastUpdatedAtEpochSeconds = nowSeconds(),
+            )
+        }
+        if (nextState != null) {
+            withContext(Dispatchers.IO) { stateStore.put(nextState) }
+            saved = nextState
+        }
+        cachedSnapshot = saved
+        if (!connected && (needsAuth || current?.phase == McpRuntimePhase.FAILED || current?.error != null)) {
+            try { currentEngine.close() } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { }
         }
         mutable.value = mutable.value.copy(
-            connected = !needsAuth,
+            connected = connected,
             connecting = false,
-            toolCount = server?.tools?.size ?: 0,
+            accountLogin = saved?.accountLogin ?: mutable.value.accountLogin,
+            toolCount = current?.tools?.size ?: 0,
             status = when {
+                downgraded -> "GitHub tools changed. Write approvals were turned back on."
                 needsAuth -> "GitHub sign-in expired. Connect again."
-                server?.error != null -> server.error ?: "GitHub MCP reported an error"
-                server == null -> "Connected; tool status is pending"
-                else -> "Connected · ${server.tools.size} tools"
+                current == null -> "GitHub MCP status is unavailable"
+                current.error != null -> safeFailure(IllegalStateException(current.error), "GitHub MCP reported an error")
+                current.phase != McpRuntimePhase.CONNECTED -> "GitHub MCP is ${current.phase.name.lowercase()}"
+                else -> "Connected · ${current.tools.size} tools"
             },
         )
     }
 
-    private suspend fun refreshIfNeeded(
-        credentials: dev.androidagent.connectors.CredentialBundle,
-    ): dev.androidagent.connectors.CredentialBundle? {
+    private suspend fun refreshIfNeeded(credentials: CredentialBundle): CredentialBundle? {
         val expiresAt = credentials.accessTokenExpiresAtEpochSeconds ?: return credentials
         if (expiresAt > nowSeconds() + TOKEN_REFRESH_LEEWAY_SECONDS) return credentials
         val refreshToken = credentials.refreshToken ?: return null
@@ -242,7 +459,10 @@ class GitHubConnectorController(
             GitHubOAuthDeviceFlowClient(clientId, http).refresh(refreshToken, credentials.grantedScopes).also {
                 vault.write(CREDENTIAL_KEY, it)
             }
-        }.getOrNull()
+        }.getOrElse { failure ->
+            if (failure is CancellationException) throw failure
+            null
+        }
     }
 
     private suspend fun loadIdentity(token: String): Pair<String, Long?> {
@@ -257,39 +477,67 @@ class GitHubConnectorController(
                 ),
             ),
         )
-        check(response.statusCode in 200..299) { "GitHub account verification failed (${response.statusCode})." }
+        check(response.statusCode in 200..299) {
+            "GitHub account verification failed (${response.statusCode})."
+        }
         val body = json.parseToJsonElement(response.body).jsonObject
         val login = body["login"]?.jsonPrimitive?.contentOrNull.orEmpty()
         check(login.isNotBlank()) { "GitHub account response did not include a login." }
         return login to body["id"]?.jsonPrimitive?.longOrNull
     }
 
-    private fun initialState(): GitHubConnectorUiState {
-        val saved = stateStore.get(GitHubConnectorCatalog.ID)
-        val connected = saved?.state == ConnectorState.CONNECTED && vault.read(CREDENTIAL_KEY) != null
-        return GitHubConnectorUiState(
-            available = clientId.isNotBlank(),
-            connected = connected,
-            accountLogin = saved?.accountLogin,
-            permissionMode = permissionMode(),
-            status = when {
-                clientId.isBlank() -> "GitHub OAuth is not configured in this build"
-                connected -> "Connected"
-                else -> "Not connected"
-            },
+    private suspend fun markConfigurationFailure(failure: Throwable, snapshot: ConnectorSnapshot) {
+        try { engine?.close() } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { }
+        val safe = safeFailure(failure, "GitHub MCP configuration failed")
+        val failed = snapshot.copy(
+            state = ConnectorState.ERROR,
+            lastErrorCode = "mcp_configuration_failed",
+            lastUpdatedAtEpochSeconds = nowSeconds(),
         )
+        cachedSnapshot = failed
+        mutable.value = mutable.value.copy(connected = false, connecting = false, status = safe)
+        withContext(Dispatchers.IO) { runCatching { stateStore.put(failed) } }
     }
 
-    private fun permissionMode(): PermissionMode = runCatching {
-        PermissionMode.valueOf(preferences.getString(PERMISSION_KEY, null).orEmpty())
-    }.getOrDefault(PermissionMode.ASK_BEFORE_WRITES)
+    private fun initialState(): GitHubConnectorUiState = GitHubConnectorUiState(
+        available = clientId.isNotBlank(),
+        permissionMode = permissionMode(),
+        status = if (clientId.isBlank()) {
+            "GitHub OAuth is not configured in this build"
+        } else {
+            "Not connected"
+        },
+    )
+
+    private fun permissionMode(): PermissionMode = cachedPermissionMode
+
+    private suspend fun loadPermissionMode() {
+        cachedPermissionMode = withContext(Dispatchers.IO) {
+            runCatching {
+                PermissionMode.valueOf(preferences.getString(PERMISSION_KEY, null).orEmpty())
+            }.getOrDefault(PermissionMode.ASK_BEFORE_WRITES)
+        }
+        mutable.value = mutable.value.copy(permissionMode = cachedPermissionMode)
+    }
+
+    private fun safeFailure(failure: Throwable, fallback: String): String =
+        SecretRedactor.redact(failure.message ?: fallback).take(500).ifBlank { fallback }
 
     private fun nowSeconds(): Long = System.currentTimeMillis() / 1_000L
 
-    private companion object {
+    private fun tokenIsUsable(credentials: CredentialBundle): Boolean =
+        credentials.accessTokenExpiresAtEpochSeconds?.let { it > nowSeconds() } ?: true
+
+    internal companion object {
         const val SERVER_NAME = "github"
         const val CREDENTIAL_KEY = "github.oauth"
         const val PERMISSION_KEY = "github.permission"
         const val TOKEN_REFRESH_LEEWAY_SECONDS = 60L
+
+        internal fun approvalModeFor(mode: PermissionMode): McpToolApprovalMode = when (mode) {
+            PermissionMode.READ_ONLY -> McpToolApprovalMode.PROMPT
+            PermissionMode.ASK_BEFORE_WRITES -> McpToolApprovalMode.WRITES
+            PermissionMode.FULL_CONTROL -> McpToolApprovalMode.APPROVE
+        }
     }
 }

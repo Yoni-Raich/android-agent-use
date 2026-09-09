@@ -358,6 +358,7 @@ private fun ColumnScope.ConnectorSettings(state: AgentUiState, actions: AgentUiA
                     RadioButton(
                         selected = github.permissionMode == mode,
                         onClick = { actions.onGitHubPermissionChanged(mode) },
+                        enabled = !github.connecting,
                     )
                     Column {
                         Text(
@@ -370,7 +371,7 @@ private fun ColumnScope.ConnectorSettings(state: AgentUiState, actions: AgentUiA
                         )
                         Text(
                             when (mode) {
-                                PermissionMode.READ_ONLY -> "GitHub hides every write tool."
+                                PermissionMode.READ_ONLY -> "Uses the strictest local approval and requests read-only tools."
                                 PermissionMode.ASK_BEFORE_WRITES -> "Reads run directly; every write needs your approval."
                                 PermissionMode.FULL_CONTROL -> "All tools allowed by your GitHub account can run directly."
                             },

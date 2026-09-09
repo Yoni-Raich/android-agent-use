@@ -2,6 +2,11 @@ import java.util.Properties
 plugins { id("com.android.application"); kotlin("android"); kotlin("plugin.compose") }
 val appVersion = Properties().apply { rootProject.file("version.properties").inputStream().use(::load) }
 val githubOAuthClientId = providers.gradleProperty("githubOAuthClientId").orElse("")
+fun escapeBuildConfigString(value: String): String = value
+    .replace("\\", "\\\\")
+    .replace("\"", "\\\"")
+    .replace("\r", "\\r")
+    .replace("\n", "\\n")
 configurations.configureEach { exclude(group = "org.jetbrains", module = "annotations-java5") }
 android {
     namespace = "dev.androidagent.app"
@@ -12,7 +17,7 @@ android {
         targetSdk = 35
         versionCode = appVersion.getProperty("versionCode").toInt()
         versionName = appVersion.getProperty("versionName")
-        buildConfigField("String", "GITHUB_OAUTH_CLIENT_ID", "\"${githubOAuthClientId.get()}\"")
+        buildConfigField("String", "GITHUB_OAUTH_CLIENT_ID", "\"${escapeBuildConfigString(githubOAuthClientId.get())}\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // Package native Codex binaries for both the ARM64 phone and the local
         // x86_64 emulator so emulator tests do not use ARM translation.

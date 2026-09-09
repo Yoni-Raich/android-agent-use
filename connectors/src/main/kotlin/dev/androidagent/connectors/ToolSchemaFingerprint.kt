@@ -51,7 +51,6 @@ object ToolSchemaFingerprint {
                     add(
                         buildJsonObject {
                             put("name", tool.name)
-                            put("description", tool.description)
                             tool.readOnly?.let { put("readOnly", it) }
                             put("inputSchema", tool.inputSchema)
                         },

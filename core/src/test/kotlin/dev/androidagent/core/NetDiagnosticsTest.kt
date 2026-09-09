@@ -55,4 +55,14 @@ class NetDiagnosticsTest {
         assertFalse(safe.contains("sid=private"))
         assertTrue(safe.contains("auth.openai.com"))
     }
+
+    @Test
+    fun `redaction removes bare github token forms`() {
+        val safe = SecretRedactor.redact("gho_abc123456789 ghp_private123456 github_pat_abc123456789")
+
+        assertFalse(safe.contains("gho_abc123456789"))
+        assertFalse(safe.contains("ghp_private123456"))
+        assertFalse(safe.contains("github_pat_abc123456789"))
+        assertTrue(safe.contains("REDACTED_GITHUB_TOKEN"))
+    }
 }

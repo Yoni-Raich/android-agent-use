@@ -11,6 +11,25 @@ import java.io.File
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class AgentCoordinatorTest {
+    @Test fun mcp_status_events_update_an_active_run_and_redact_errors() = runTest {
+        val rig = Rig(this)
+        rig.coordinator.send("one", "Check connector")
+        runCurrent()
+
+        rig.engine.emit(
+            EngineEvent.McpStatusChanged(
+                server = "github",
+                phase = McpRuntimePhase.FAILED,
+                error = "token=gho_secret123",
+            )
+        )
+        runCurrent()
+
+        assertEquals("github failed: token=[REDACTED]", rig.coordinator.state.value.status)
+        assertTrue(rig.store.messages.any { it.role == "system" && it.text.contains("[REDACTED]") })
+        rig.close()
+    }
+
     @Test fun stopRevokesBeforeWaitingForEngineAndBlocksAnActionWaitingForOverlay() = runTest {
         val rig = Rig(this)
         rig.overlay.waitForShow = CompletableDeferred()

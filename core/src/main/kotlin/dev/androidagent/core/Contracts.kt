@@ -61,6 +61,34 @@ fun interface RuntimeEgressPolicy {
     fun allowedHttpsHosts(): Set<String>
 }
 
+/** A connector contribution that can be merged into the supervised runtime. */
+interface RuntimeConnector : RuntimeEnvironmentOverlay, RuntimeEgressPolicy
+
+/**
+ * Provider-neutral runtime composition. New connectors contribute namespaced
+ * environment keys and exact HTTPS hosts without changing the runtime host.
+ */
+class CompositeRuntimeConnector(
+    private val contributors: List<RuntimeConnector>,
+) : RuntimeConnector {
+    override fun snapshot(): Map<String, String> {
+        val merged = linkedMapOf<String, String>()
+        contributors.forEach { contributor ->
+            contributor.snapshot().forEach { (name, value) ->
+                require(name !in merged) { "Connector environment key collision: $name" }
+                merged[name] = value
+            }
+        }
+        return merged
+    }
+
+    override fun allowedHttpsHosts(): Set<String> = contributors
+        .flatMap { it.allowedHttpsHosts() }
+        .map { it.lowercase().trim().trimEnd('.') }
+        .filter { it.isNotEmpty() }
+        .toSet()
+}
+
 enum class McpRuntimePhase { UNKNOWN, NOT_STARTED, STARTING, CONNECTED, AUTHENTICATION_REQUIRED, FAILED, CANCELLED, DISABLED }
 
 data class McpToolSummary(

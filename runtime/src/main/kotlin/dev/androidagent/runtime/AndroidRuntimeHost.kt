@@ -264,12 +264,11 @@ class AndroidRuntimeHost(
             override fun onError(category: String) = recordProxyEvent("proxy-error:$category")
             override fun onStopped() = recordProxyEvent("stopped")
         }
-        val connectorHosts = egressPolicy.allowedHttpsHosts()
-            .map { it.lowercase().trim().trimEnd('.') }
-            .filter { it.isNotEmpty() }
-            .toSet()
         val next = LocalhostConnectProxy(
-            allowedHosts = NetDiagnostics.defaultAllowedHosts + connectorHosts,
+            allowedHosts = mergeAllowedHosts(
+                NetDiagnostics.defaultAllowedHosts,
+                egressPolicy.allowedHttpsHosts(),
+            ),
             listener = events,
         )
         proxy = next
@@ -337,12 +336,7 @@ class AndroidRuntimeHost(
             "TMPDIR" to tmpDirectory.absolutePath,
             "PATH" to path
         )
-        environmentOverlay.snapshot().forEach { (name, value) ->
-            require(name.matches(Regex("[A-Z][A-Z0-9_]{2,127}"))) { "Invalid runtime environment key" }
-            require(name !in RESERVED_ENVIRONMENT_KEYS) { "Connector cannot override runtime environment" }
-            if (value.isNotBlank()) environment[name] = value
-        }
-        return environment
+        return mergeEnvironmentOverlay(environment, environmentOverlay.snapshot())
     }
 
     /**
@@ -418,11 +412,33 @@ class AndroidRuntimeHost(
         private const val TAG = "AndroidRuntimeHost"
         private const val MAX_PROXY_EVENTS = 64
         private const val REALTIME_FEATURE = "realtime_conversation"
+        private val ENVIRONMENT_KEY = Regex("[A-Z][A-Z0-9_]{2,127}")
         private val RESERVED_ENVIRONMENT_KEYS = setOf(
             "HOME", "CODEX_HOME", "TMPDIR", "PATH", "HTTP_PROXY", "HTTPS_PROXY",
             "http_proxy", "https_proxy", "NO_PROXY", "no_proxy", "SSL_CERT_FILE",
             "CODEX_CA_CERTIFICATE", "CODEX_SANDBOX",
         )
+
+        internal fun mergeEnvironmentOverlay(
+            base: Map<String, String>,
+            overlay: Map<String, String>,
+        ): Map<String, String> {
+            val merged = LinkedHashMap(base)
+            overlay.forEach { (name, value) ->
+                require(name.matches(ENVIRONMENT_KEY)) { "Invalid runtime environment key" }
+                require(name !in RESERVED_ENVIRONMENT_KEYS) { "Connector cannot override runtime environment" }
+                if (value.isNotBlank()) merged[name] = value
+            }
+            return merged
+        }
+
+        internal fun mergeAllowedHosts(
+            base: Set<String>,
+            overlay: Set<String>,
+        ): Set<String> = (base + overlay)
+            .map { it.lowercase().trim().trimEnd('.') }
+            .filter { it.isNotEmpty() }
+            .toSet()
         private const val DEFAULT_CONFIG =
             "# Managed by Android Agent. Credentials stay in app-private CODEX_HOME.\n" +
                 "# Helper discovery (rg/code-mode-host/zsh) is limited while the\n" +
