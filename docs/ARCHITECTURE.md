@@ -7,6 +7,7 @@ One Android project, with replaceable modules and small core contracts.
 | app | Compose chat, setup, foreground lifecycle, dependency wiring |
 | core | Neutral contracts, coordinator, run state, local cancellation |
 | engine-codex | Bidirectional Codex app-server protocol and event mapping |
+| connectors | Provider-neutral connector catalog, GitHub Device Flow, secure token vault, and connector policy |
 | voice | Android microphone, speaker, and realtime audio lifecycle |
 | runtime | On-phone executable provisioning and process supervision |
 | workspace | Durable sessions, messages, artifacts and session directories |
@@ -542,11 +543,38 @@ call rather than captured, both because the composite contains this gateway -
 which would otherwise be a construction cycle - and so a step reaches whichever
 backend currently serves that tool.
 
-## Connected Apps: the surface exists, the answer does not
+## Connected Apps and MCP connector store
 
-`.codex-work/runtime/probe_apps.py` probes a running on-phone app-server for
-`app/list`, `app/installed`, `plugin/list`, `plugin/installed`,
-`mcpServerStatus/list` and `experimentalFeature/list`.
+The `connectors` module is the provider-neutral store boundary. Each provider
+contributes a definition, auth strategy, endpoint allowlist, permission modes,
+non-secret state, and a secure credential adapter. The first catalog entry is
+GitHub. It uses GitHub's public OAuth App Device Flow, so the APK carries only
+the public client ID and never a client secret.
+
+After the user finishes the official GitHub device page, the app verifies
+`GET /user`, stores the token only in an AES-GCM blob protected by Android
+Keystore, and starts the Codex app-server with the token in an in-memory
+environment overlay. The token is not written to `config.toml`, preferences,
+RPC logs, proxy diagnostics, or UI state. The runtime CONNECT proxy adds only
+`api.githubcopilot.com` while the connector is enabled.
+
+The app writes the official remote MCP server at
+`https://api.githubcopilot.com/mcp/x/all`, then reloads and reads its tool
+status through app-server control methods. The UI exposes three local policy
+modes: read-only (also sends `X-MCP-Readonly: true`), ask before writes (the
+default, using Codex's `writes` approval mode), and full control (Codex's
+`approve` mode). The GitHub token itself still cannot exceed the account and
+organization permissions granted by GitHub.
+
+The connector records a canonical SHA-256 tool-schema fingerprint. If a user
+selected full control and the remote schema changes, the app automatically
+downgrades to ask-before-writes before exposing the changed tools. Disconnect
+removes the app-server entry, stops the supervised process, and clears the
+Keystore-backed credential.
+
+The older `.codex-work/runtime/probe_apps.py` probe remains useful for checking
+whether an app-server exposes the generic control surface, but it is not the
+connector store and it cannot authenticate a user's account.
 
 All six answer on the shipped build (rust-v0.153.4) rather than erroring, so
 the surface is present. `experimentalFeature/list` returns 135 flags, which is

@@ -27,6 +27,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     val ui: StateFlow<AgentUiState> = mutable.asStateFlow()
     private val usageByThread = mutableMapOf<String, TokenUsage>()
     private var setupJob: Job? = null
+    private var githubConnectJob: Job? = null
     private var voiceLocalSessionId: String? = null
     private val pendingVoiceTexts = java.util.ArrayDeque<String>()
 
@@ -76,6 +77,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         viewModelScope.launch { graph.voice.state.collect { state -> mutable.update { it.copy(voiceState = state) } } }
+        viewModelScope.launch { graph.githubConnector.state.collect { state -> mutable.update { it.copy(githubConnector = state) } } }
         viewModelScope.launch { graph.engine.voiceEvents.collect(::handleVoiceEvent) }
         viewModelScope.launch { graph.engine.events.collect { event ->
             when (event) {
@@ -194,7 +196,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         setupJob = task {
             mutable.update { it.copy(isPreparingRuntime = true, errorMessage = null) }
             try {
-                graph.runtime.prepare(); graph.engine.connect()
+                graph.runtime.prepare(); graph.engine.connect(); graph.githubConnector.synchronize()
                 val account = graph.engine.account()
                 mutable.update { it.copy(accountStatus = account) }
                 loadModels()
@@ -218,6 +220,34 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         } finally {
             mutable.update { it.copy(isRefreshingAccount = false) }
         }
+    }
+
+    fun connectGitHub() {
+        if (githubConnectJob?.isActive == true) return
+        if (graph.coordinator.state.value.active || graph.voice.state.value.active) {
+            error("Stop the current run or voice conversation before changing connections.")
+            return
+        }
+        githubConnectJob = task { graph.githubConnector.connect() }
+    }
+
+    fun cancelGitHubConnect() {
+        githubConnectJob?.cancel()
+        githubConnectJob = null
+    }
+
+    fun disconnectGitHub() = task {
+        check(!graph.coordinator.state.value.active && !graph.voice.state.value.active) {
+            "Stop the current run or voice conversation before changing connections."
+        }
+        graph.githubConnector.disconnect()
+    }
+
+    fun githubPermission(mode: dev.androidagent.connectors.PermissionMode) = task {
+        check(!graph.coordinator.state.value.active && !graph.voice.state.value.active) {
+            "Stop the current run or voice conversation before changing connections."
+        }
+        graph.githubConnector.setPermissionMode(mode)
     }
 
     /**

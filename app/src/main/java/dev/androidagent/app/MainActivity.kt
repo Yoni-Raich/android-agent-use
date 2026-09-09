@@ -120,6 +120,10 @@ class MainActivity : ComponentActivity() {
             openWirelessDebugging()
         },
         onDismissInfo = { model.editUi { it.copy(infoMessage = null) } },
+        onConnectGitHub = { ensureService(); model.connectGitHub() },
+        onCancelGitHubConnect = model::cancelGitHubConnect,
+        onDisconnectGitHub = model::disconnectGitHub,
+        onGitHubPermissionChanged = model::githubPermission,
     )
 
     /**

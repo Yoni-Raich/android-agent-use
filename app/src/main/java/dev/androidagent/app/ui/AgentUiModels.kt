@@ -17,6 +17,19 @@ import dev.androidagent.core.SetupChecklist
 import dev.androidagent.core.SetupRow
 import dev.androidagent.core.SetupSignals
 import dev.androidagent.core.VoiceState
+import dev.androidagent.connectors.PermissionMode
+
+data class GitHubConnectorUiState(
+    val available: Boolean = true,
+    val connected: Boolean = false,
+    val connecting: Boolean = false,
+    val accountLogin: String? = null,
+    val permissionMode: PermissionMode = PermissionMode.ASK_BEFORE_WRITES,
+    val userCode: String? = null,
+    val verificationUrl: String? = null,
+    val toolCount: Int = 0,
+    val status: String = "Not connected",
+)
 
 /**
  * A file that is waiting to be sent with the next user message.
@@ -120,6 +133,7 @@ data class AgentUiState(
     val updateStatus: UpdateStatus = UpdateStatus.Idle,
     val updateInfo: AppUpdateInfo? = null,
     val isUpdateBannerVisible: Boolean = true,
+    val githubConnector: GitHubConnectorUiState = GitHubConnectorUiState(),
 )
 
 /**
@@ -171,6 +185,10 @@ data class AgentUiActions(
     /** Open the pairing dialog and read the code from it instead of asking for it. */
     val onCapturePairing: () -> Unit = {},
     val onDismissInfo: () -> Unit = {},
+    val onConnectGitHub: () -> Unit = {},
+    val onCancelGitHubConnect: () -> Unit = {},
+    val onDisconnectGitHub: () -> Unit = {},
+    val onGitHubPermissionChanged: (PermissionMode) -> Unit = {},
 )
 
 /** The setup checklist for this state, so no screen assembles the signals itself. */

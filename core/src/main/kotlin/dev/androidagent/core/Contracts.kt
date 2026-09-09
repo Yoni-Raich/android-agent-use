@@ -51,6 +51,60 @@ interface RuntimeHost {
     suspend fun stop()
 }
 
+/** App-owned, in-memory additions to the environment of the supervised runtime. */
+fun interface RuntimeEnvironmentOverlay {
+    fun snapshot(): Map<String, String>
+}
+
+/** Exact HTTPS hosts an enabled external connector allows the runtime to reach. */
+fun interface RuntimeEgressPolicy {
+    fun allowedHttpsHosts(): Set<String>
+}
+
+enum class McpRuntimePhase { UNKNOWN, NOT_STARTED, STARTING, CONNECTED, AUTHENTICATION_REQUIRED, FAILED, CANCELLED, DISABLED }
+
+data class McpToolSummary(
+    val name: String,
+    val description: String = "",
+    val inputSchema: JsonObject = JsonObject(emptyMap()),
+    val readOnly: Boolean? = null,
+)
+
+data class McpServerSnapshot(
+    val name: String,
+    val authStatus: String = "unknown",
+    val phase: McpRuntimePhase = McpRuntimePhase.UNKNOWN,
+    val tools: List<McpToolSummary> = emptyList(),
+    val error: String? = null,
+)
+
+enum class McpToolApprovalMode(val wireValue: String) {
+    AUTO("auto"), PROMPT("prompt"), WRITES("writes"), APPROVE("approve")
+}
+
+data class McpHttpServerConfig(
+    val name: String,
+    val url: String,
+    val bearerTokenEnvironmentVariable: String,
+    val approvalMode: McpToolApprovalMode,
+    val httpHeaders: Map<String, String> = emptyMap(),
+    val enabled: Boolean = true,
+)
+
+/** Control-plane methods for remote MCP servers; chat remains on [AgentEngine]. */
+interface ConnectorEngineControl {
+    suspend fun configureMcpServer(config: McpHttpServerConfig)
+    suspend fun removeMcpServer(name: String)
+    suspend fun reloadMcpServers()
+    suspend fun listMcpServers(threadId: String? = null): List<McpServerSnapshot>
+    suspend fun callMcpTool(
+        threadId: String,
+        server: String,
+        tool: String,
+        arguments: JsonObject = JsonObject(emptyMap()),
+    ): JsonObject
+}
+
 data class ToolDefinition(val name: String, val description: String, val inputSchema: JsonObject)
 data class ToolResult(val text: String, val imageBase64: String? = null, val success: Boolean = true, val attachmentPaths: List<String> = emptyList())
 data class LocalIntentRequest(
@@ -96,6 +150,8 @@ sealed interface EngineEvent {
     data class Activity(val text: String, val threadId: String? = null, val turnId: String? = null) : EngineEvent
     data class TurnFinished(val status: String, val error: String? = null, val threadId: String? = null, val turnId: String? = null) : EngineEvent
     data class AccountChanged(val status: AccountStatus) : EngineEvent
+    data class McpStatusChanged(val server: String, val phase: McpRuntimePhase, val error: String? = null) : EngineEvent
+    data class McpOauthCompleted(val server: String, val success: Boolean, val error: String? = null) : EngineEvent
     data object SkillsChanged : EngineEvent
     data class Failure(val message: String, val threadId: String? = null, val turnId: String? = null) : EngineEvent
 }
