@@ -1,6 +1,7 @@
 import java.util.Properties
 plugins { id("com.android.application"); kotlin("android"); kotlin("plugin.compose") }
 val appVersion = Properties().apply { rootProject.file("version.properties").inputStream().use(::load) }
+val githubOAuthClientId = providers.gradleProperty("githubOAuthClientId").orElse("")
 configurations.configureEach { exclude(group = "org.jetbrains", module = "annotations-java5") }
 android {
     namespace = "dev.androidagent.app"
@@ -11,6 +12,7 @@ android {
         targetSdk = 35
         versionCode = appVersion.getProperty("versionCode").toInt()
         versionName = appVersion.getProperty("versionName")
+        buildConfigField("String", "GITHUB_OAUTH_CLIENT_ID", "\"${githubOAuthClientId.get()}\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // Package native Codex binaries for both the ARM64 phone and the local
         // x86_64 emulator so emulator tests do not use ARM translation.
@@ -43,7 +45,7 @@ val prepareCodexRuntime by tasks.registering(Exec::class) {
 }
 tasks.named("preBuild") { dependsOn(prepareCodexRuntime) }
 dependencies {
-    implementation(project(":core")); implementation(project(":workspace")); implementation(project(":runtime"))
+    implementation(project(":core")); implementation(project(":workspace")); implementation(project(":runtime")); implementation(project(":connectors"))
     implementation(project(":engine-codex")); implementation(project(":adb")); implementation(project(":device-tools")); implementation(project(":overlay")); implementation(project(":voice")); implementation(project(":a11y"))
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.activity:activity-compose:1.9.3")
@@ -54,6 +56,7 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("io.noties.markwon:core:4.6.2")
     implementation("io.noties.markwon:ext-tables:4.6.2")

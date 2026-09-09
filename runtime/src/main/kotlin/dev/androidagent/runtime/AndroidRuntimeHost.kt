@@ -3,6 +3,8 @@ package dev.androidagent.runtime
 import android.content.Context
 import android.util.Log
 import dev.androidagent.core.NetDiagnostics
+import dev.androidagent.core.RuntimeEgressPolicy
+import dev.androidagent.core.RuntimeEnvironmentOverlay
 import dev.androidagent.core.RuntimeHost
 import dev.androidagent.core.RuntimePhase
 import dev.androidagent.core.RuntimeStatus
@@ -56,7 +58,11 @@ import java.nio.file.StandardCopyOption
  * writes a minimal feature config.toml when needed. It never reads
  * auth.json or any credential file, and it supervises only its own process.
  */
-class AndroidRuntimeHost(private val appContext: Context) : RuntimeHost {
+class AndroidRuntimeHost(
+    private val appContext: Context,
+    private val environmentOverlay: RuntimeEnvironmentOverlay = RuntimeEnvironmentOverlay { emptyMap() },
+    private val egressPolicy: RuntimeEgressPolicy = RuntimeEgressPolicy { emptySet() },
+) : RuntimeHost {
 
     private val _status = MutableStateFlow(RuntimeStatus())
     override val status: StateFlow<RuntimeStatus> = _status
@@ -258,7 +264,14 @@ class AndroidRuntimeHost(private val appContext: Context) : RuntimeHost {
             override fun onError(category: String) = recordProxyEvent("proxy-error:$category")
             override fun onStopped() = recordProxyEvent("stopped")
         }
-        val next = LocalhostConnectProxy(listener = events)
+        val connectorHosts = egressPolicy.allowedHttpsHosts()
+            .map { it.lowercase().trim().trimEnd('.') }
+            .filter { it.isNotEmpty() }
+            .toSet()
+        val next = LocalhostConnectProxy(
+            allowedHosts = NetDiagnostics.defaultAllowedHosts + connectorHosts,
+            listener = events,
+        )
         proxy = next
         return runCatching { next.start() }.getOrElse {
             proxy = null
@@ -318,12 +331,18 @@ class AndroidRuntimeHost(private val appContext: Context) : RuntimeHost {
             File(packageLinkDirectory, "codex-path").absolutePath,
             "/system/bin"
         ).joinToString(":")
-        return mapOf(
+        val environment = linkedMapOf(
             "HOME" to homeDirectory.absolutePath,
             "CODEX_HOME" to codexHomeDirectory.absolutePath,
             "TMPDIR" to tmpDirectory.absolutePath,
             "PATH" to path
         )
+        environmentOverlay.snapshot().forEach { (name, value) ->
+            require(name.matches(Regex("[A-Z][A-Z0-9_]{2,127}"))) { "Invalid runtime environment key" }
+            require(name !in RESERVED_ENVIRONMENT_KEYS) { "Connector cannot override runtime environment" }
+            if (value.isNotBlank()) environment[name] = value
+        }
+        return environment
     }
 
     /**
@@ -399,6 +418,11 @@ class AndroidRuntimeHost(private val appContext: Context) : RuntimeHost {
         private const val TAG = "AndroidRuntimeHost"
         private const val MAX_PROXY_EVENTS = 64
         private const val REALTIME_FEATURE = "realtime_conversation"
+        private val RESERVED_ENVIRONMENT_KEYS = setOf(
+            "HOME", "CODEX_HOME", "TMPDIR", "PATH", "HTTP_PROXY", "HTTPS_PROXY",
+            "http_proxy", "https_proxy", "NO_PROXY", "no_proxy", "SSL_CERT_FILE",
+            "CODEX_CA_CERTIFICATE", "CODEX_SANDBOX",
+        )
         private const val DEFAULT_CONFIG =
             "# Managed by Android Agent. Credentials stay in app-private CODEX_HOME.\n" +
                 "# Helper discovery (rg/code-mode-host/zsh) is limited while the\n" +

@@ -13,7 +13,7 @@ import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
-class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoiceEngine {
+class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoiceEngine, ConnectorEngineControl {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val connectLock = Mutex()
     private val writeLock = Mutex()
@@ -111,6 +111,92 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
     override suspend fun logout() { connect(); request("account/logout", buildJsonObject {}); stream.emit(EngineEvent.AccountChanged(AccountStatus(false, "Sign in to Codex"))) }
 
     override suspend fun models(): List<String> = modelCatalog().map { it.id }
+
+    override suspend fun configureMcpServer(config: McpHttpServerConfig) {
+        connect()
+        request("config/batchWrite", buildJsonObject {
+            put("edits", buildJsonArray {
+                add(buildJsonObject {
+                    put("keyPath", "mcp_servers.${config.name}")
+                    put("mergeStrategy", "replace")
+                    put("value", buildJsonObject {
+                        put("url", config.url)
+                        put("bearer_token_env_var", config.bearerTokenEnvironmentVariable)
+                        put("enabled", config.enabled)
+                        put("supports_parallel_tool_calls", false)
+                        put("default_tools_approval_mode", config.approvalMode.wireValue)
+                        if (config.httpHeaders.isNotEmpty()) {
+                            put("http_headers", buildJsonObject {
+                                config.httpHeaders.forEach { (name, value) -> put(name, value) }
+                            })
+                        }
+                    })
+                })
+            })
+            put("reloadUserConfig", true)
+        })
+    }
+
+    override suspend fun removeMcpServer(name: String) {
+        connect()
+        request("config/value/write", buildJsonObject {
+            put("keyPath", "mcp_servers.$name")
+            put("value", JsonNull)
+            put("mergeStrategy", "replace")
+        })
+    }
+
+    override suspend fun reloadMcpServers() {
+        connect()
+        request("config/mcpServer/reload", buildJsonObject {})
+    }
+
+    override suspend fun listMcpServers(threadId: String?): List<McpServerSnapshot> {
+        connect()
+        val result = request("mcpServerStatus/list", buildJsonObject {
+            put("detail", "full")
+            put("limit", 100)
+            if (!threadId.isNullOrBlank()) put("threadId", threadId)
+        })
+        val values = result["data"] as? JsonArray ?: return emptyList()
+        return values.mapNotNull { element ->
+            val server = element as? JsonObject ?: return@mapNotNull null
+            val name = server.string("name").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val tools = (server["tools"] as? JsonArray).orEmpty().mapNotNull { toolElement ->
+                val tool = toolElement as? JsonObject ?: return@mapNotNull null
+                val toolName = tool.string("name").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val annotations = tool["annotations"] as? JsonObject
+                McpToolSummary(
+                    name = toolName,
+                    description = tool.string("description"),
+                    inputSchema = tool["inputSchema"] as? JsonObject ?: buildJsonObject {},
+                    readOnly = (annotations?.get("readOnlyHint") as? JsonPrimitive)?.booleanOrNull,
+                )
+            }
+            McpServerSnapshot(
+                name = name,
+                authStatus = server.string("authStatus").ifBlank { "unknown" },
+                phase = parseMcpPhase(server.string("runtimeStatus")),
+                tools = tools,
+                error = server.string("error").ifBlank { null },
+            )
+        }
+    }
+
+    override suspend fun callMcpTool(
+        threadId: String,
+        server: String,
+        tool: String,
+        arguments: JsonObject,
+    ): JsonObject {
+        connect()
+        return request("mcpServer/tool/call", buildJsonObject {
+            put("threadId", threadId)
+            put("server", server)
+            put("tool", tool)
+            put("arguments", arguments)
+        })
+    }
 
     override suspend fun modelCatalog(): List<AgentModel> {
         connect()
@@ -338,6 +424,24 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
                 stream.emit(EngineEvent.ToolCall(id, params.string("tool"), value, params.string("threadId"), params.string("turnId")))
             }
             id != null && method.endsWith("requestApproval") -> stream.emit(EngineEvent.Approval(id, method, params, params.string("threadId"), params.string("turnId")))
+            method == "mcpServer/startupStatus/updated" -> {
+                stream.emit(
+                    EngineEvent.McpStatusChanged(
+                        server = params.string("name"),
+                        phase = parseMcpPhase(params.string("status")),
+                        error = params.string("error").ifBlank { null },
+                    )
+                )
+            }
+            method == "mcpServer/oauthLogin/completed" -> {
+                stream.emit(
+                    EngineEvent.McpOauthCompleted(
+                        server = params.string("name"),
+                        success = (params["success"] as? JsonPrimitive)?.booleanOrNull == true,
+                        error = params.string("error").ifBlank { null },
+                    )
+                )
+            }
             method == "thread/realtime/started" -> {
                 val threadId = params.string("threadId")
                 val sessionId = params.string("realtimeSessionId").ifBlank { null }
@@ -449,6 +553,17 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
         val safeMessage = SecretRedactor.redact(message).ifBlank { "Realtime voice error" }
         mutableVoiceState.value = VoiceState(VoicePhase.ERROR, safeMessage, threadId)
         voiceStream.emit(VoiceEvent.Failure(safeMessage, threadId))
+    }
+
+    private fun parseMcpPhase(value: String): McpRuntimePhase = when (value.lowercase()) {
+        "notstarted", "not_started" -> McpRuntimePhase.NOT_STARTED
+        "starting" -> McpRuntimePhase.STARTING
+        "connected", "ready" -> McpRuntimePhase.CONNECTED
+        "authenticationrequired", "authentication_required" -> McpRuntimePhase.AUTHENTICATION_REQUIRED
+        "failed" -> McpRuntimePhase.FAILED
+        "cancelled" -> McpRuntimePhase.CANCELLED
+        "disabled" -> McpRuntimePhase.DISABLED
+        else -> McpRuntimePhase.UNKNOWN
     }
 
     /** Keep a redacted, bounded stderr tail so RPC failures retain their cause chain. */

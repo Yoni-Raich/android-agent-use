@@ -30,7 +30,8 @@ class AgentApplication : Application() {
 class AgentGraph(private val app: Application) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     val sessions = LocalSessionStore(app)
-    val runtime = AndroidRuntimeHost(app)
+    val githubConnector = GitHubConnectorController(app, BuildConfig.GITHUB_OAUTH_CLIENT_ID)
+    val runtime = AndroidRuntimeHost(app, githubConnector, githubConnector)
     val engine = CodexEngine(runtime)
     val adb = AndroidAdbTransport(app)
     private lateinit var runCoordinator: AgentCoordinator
@@ -79,6 +80,7 @@ class AgentGraph(private val app: Application) {
         get() = runCoordinator
     val queue: SessionRunQueue
     init {
+        githubConnector.attach(engine, engine)
         runCoordinator = AgentCoordinator(scope, engine, sessions, tools, overlay) { adb.status.value }
         queue = SessionRunQueue(scope, coordinator, sessions)
         runCatching {

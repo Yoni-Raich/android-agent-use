@@ -776,7 +776,12 @@ class AgentCoordinator(
                     completion?.complete(Unit)
                 }
             }
-            is EngineEvent.AccountChanged, is EngineEvent.UsageChanged, EngineEvent.SkillsChanged -> Unit
+            is EngineEvent.AccountChanged,
+            is EngineEvent.UsageChanged,
+            is EngineEvent.McpStatusChanged,
+            is EngineEvent.McpOauthCompleted,
+            EngineEvent.SkillsChanged,
+            -> Unit
         }
     }
 
@@ -933,7 +938,12 @@ class AgentCoordinator(
         is EngineEvent.MessageCompleted -> event.threadId
         is EngineEvent.GeneratedImage -> event.threadId
         is EngineEvent.Activity -> event.threadId
-        is EngineEvent.UsageChanged, is EngineEvent.AccountChanged, EngineEvent.SkillsChanged -> null
+        is EngineEvent.UsageChanged,
+        is EngineEvent.AccountChanged,
+        is EngineEvent.McpStatusChanged,
+        is EngineEvent.McpOauthCompleted,
+        EngineEvent.SkillsChanged,
+        -> null
     }
 
     private fun turnIdOf(event: EngineEvent): String? = when (event) {
@@ -946,7 +956,12 @@ class AgentCoordinator(
         is EngineEvent.MessageCompleted -> event.turnId
         is EngineEvent.GeneratedImage -> event.turnId
         is EngineEvent.Activity -> event.turnId
-        is EngineEvent.UsageChanged, is EngineEvent.AccountChanged, EngineEvent.SkillsChanged -> null
+        is EngineEvent.UsageChanged,
+        is EngineEvent.AccountChanged,
+        is EngineEvent.McpStatusChanged,
+        is EngineEvent.McpOauthCompleted,
+        EngineEvent.SkillsChanged,
+        -> null
     }
 
     private fun message(session: String, role: String, text: String, attachments: List<String> = emptyList()) =
