@@ -582,7 +582,6 @@ control and the remote schema changes, the app automatically downgrades to
 ask-before-writes before exposing the changed tools; the warning is kept after
 the second status read. Disconnect removes and reloads the app-server entry,
 closing the supervised process only if that cleanup cannot be confirmed, and
-closing the supervised process only if that cleanup cannot be confirmed, and
 clears the Keystore-backed credential. A refresh watcher retries near-expiry
 tokens while the app is running; transient network failures retain the sealed
 refresh token, while explicit OAuth invalidation requires re-authentication.
