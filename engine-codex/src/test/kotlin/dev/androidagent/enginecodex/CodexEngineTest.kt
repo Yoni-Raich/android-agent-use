@@ -393,6 +393,75 @@ class CodexEngineTest {
         assertEquals(1, startParams["dynamicTools"]?.jsonArray?.size)
     }
 
+    @Test fun closingTheEngineDoesNotCrashTheProcessWhenStderrIsTornDown() = runBlocking {
+        // Reproduces issue #43: returning from the GitHub OAuth browser runs
+        // configureAndInspect(restart = true), which closes the engine. The
+        // process teardown closes stderr under the blocked read, and the
+        // resulting InterruptedIOException used to reach Android's default
+        // uncaught-exception handler and kill the app.
+        val serverIn = java.io.PipedInputStream()
+        val clientOut = java.io.PipedOutputStream(serverIn)
+        val clientIn = java.io.PipedInputStream()
+        val serverOut = java.io.PipedOutputStream(clientIn)
+
+        val destroyed = CompletableDeferred<Unit>()
+        val stderr = object : java.io.InputStream() {
+            override fun read(): Int {
+                runBlocking { destroyed.await() }
+                throw java.io.InterruptedIOException("read interrupted by close() on another thread")
+            }
+        }
+        val fakeProcess = object : Process() {
+            override fun getOutputStream() = clientOut
+            override fun getInputStream() = clientIn
+            override fun getErrorStream(): java.io.InputStream = stderr
+            override fun waitFor() = 0
+            override fun exitValue() = 0
+            override fun destroy() { destroyed.complete(Unit) }
+        }
+        val fakeRuntime = object : dev.androidagent.core.RuntimeHost {
+            override val status = kotlinx.coroutines.flow.MutableStateFlow(dev.androidagent.core.RuntimeStatus())
+            override val homeDirectory = File("/tmp/home")
+            override suspend fun prepare() = Unit
+            override suspend fun startAppServer(): Process = fakeProcess
+            override suspend fun stop() { fakeProcess.destroy() }
+        }
+
+        val serverReader = serverIn.bufferedReader()
+        val serverWriter = serverOut.bufferedWriter()
+        val serverJob = CoroutineScope(Dispatchers.IO).launch {
+            while (isActive) {
+                val line = serverReader.readLine() ?: break
+                val request = Json.parseToJsonElement(line).jsonObject
+                val id = request["id"]?.jsonPrimitive?.content ?: continue
+                serverWriter.write("""{"id":$id,"result":{}}""" + "\n")
+                serverWriter.flush()
+            }
+        }
+
+        // Stand in for Android's default handler: anything that reaches it
+        // would have been a process-killing crash on the device.
+        val fatal = java.util.Collections.synchronizedList(mutableListOf<Throwable>())
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { _, error -> fatal.add(error) }
+
+        val engine = CodexEngine(fakeRuntime)
+        try {
+            engine.connect()
+            engine.close()
+            // The pump stays blocked until destroy() runs, so give the
+            // failure it then raises time to reach the handler.
+            destroyed.await()
+            delay(500)
+            assertTrue("stream teardown must not reach the crash handler: $fatal", fatal.isEmpty())
+        } finally {
+            Thread.setDefaultUncaughtExceptionHandler(previous)
+            serverJob.cancel()
+            runCatching { clientOut.close() }
+            runCatching { serverOut.close() }
+        }
+    }
+
     @Test fun openSessionFallsBackToThreadStartOnResumeFailure() = runBlocking {
         val serverIn = java.io.PipedInputStream()
         val clientOut = java.io.PipedOutputStream(serverIn)
