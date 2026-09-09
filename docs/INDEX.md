@@ -14,3 +14,5 @@
 
 The detailed historical progress log is kept in
 [docs/history/PROGRESS-2026-09-09.md](history/PROGRESS-2026-09-09.md).
+The repository cleanup record is kept in
+[docs/history/CLEANUP-2026-09-09.md](history/CLEANUP-2026-09-09.md).
