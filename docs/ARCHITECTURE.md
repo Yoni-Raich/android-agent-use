@@ -12,6 +12,7 @@ One Android project, with replaceable modules and small core contracts.
 | workspace | Durable sessions, messages, artifacts and session directories |
 | adb | Persistent pairing identity, discovery, localhost transport |
 | device-tools | Sole agent-facing device gateway, reads/control/shell/files |
+| a11y | Optional in-process accessibility screen observation and control |
 | overlay | Floating steering card, status and direct local stop |
 
 A model change is configuration. An engine change replaces the engine adapter. Runtime packaging must not affect chat or ADB APIs. The UI observes app events, never raw Codex JSON.
