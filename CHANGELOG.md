@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- `read_ui` can now be asked a focused question instead of returning the whole
+  screen and silently dropping the tail. It takes `text`, `resourceId`, `class`,
+  `package`, `rootNodeId`, `clickableOnly` and `scrollableOnly` filters plus
+  `offset`, `maxNodes` and `maxChars`, and every reply reports `totalNodes`,
+  `returnedNodes`, `matchedNodes` and a `nextOffset` cursor when it left
+  something out. Filters change only what is listed, so node ids stay valid for
+  `tap_node`, `set_text` and `scroll_node`. Fixes #45.
+
 - Added public Developer Preview documentation, privacy notes, contribution
   guidance, and release evidence rules.
 - Added the current screen-awake behavior for active typed and voice runs.

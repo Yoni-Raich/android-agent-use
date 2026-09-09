@@ -281,6 +281,65 @@ class AndroidDeviceToolsTest {
         assertTrue(adb.timeouts.single() in 1..AndroidDeviceTools.READ_UI_DEFAULT_TIMEOUT_MS)
     }
 
+    @Test fun readUiFiltersTheParsedScreenWhenTheModelAsksAFocusedQuestion() = runBlocking {
+        val adb = ScriptedUiAdb(mutableListOf(CommandResult(SAMPLE_UI_XML, 0)))
+        val tools = AndroidDeviceTools(adb)
+        tools.beginRun("ui", Files.createTempDirectory("ws").toFile())
+
+        val result = tools.invoke("read_ui", buildJsonObject { put("text", "send") })
+
+        assertTrue(result.success)
+        val json = Json.parseToJsonElement(result.text).jsonObject
+        assertEquals(2, json["totalNodes"]!!.jsonPrimitive.content.toInt())
+        assertEquals(1, json["matchedNodes"]!!.jsonPrimitive.content.toInt())
+        assertEquals("send", json["query"]!!.jsonObject["text"]!!.jsonPrimitive.content)
+        assertEquals(
+            listOf("Send"),
+            json["nodes"]!!.jsonArray.map { it.jsonObject["text"]!!.jsonPrimitive.content },
+        )
+        // Still one dump: a query narrows the reply, never the read.
+        assertEquals(1, adb.commands.size)
+    }
+
+    @Test fun readUiReturnsASubtreeWhenGivenARootNodeIdFromTheXmlParser() = runBlocking {
+        val adb = ScriptedUiAdb(mutableListOf(CommandResult(SAMPLE_UI_XML, 0)))
+        val tools = AndroidDeviceTools(adb)
+        tools.beginRun("ui", Files.createTempDirectory("ws").toFile())
+
+        val result = tools.invoke("read_ui", buildJsonObject { put("rootNodeId", "n0") })
+
+        assertTrue(result.success)
+        val ids = Json.parseToJsonElement(result.text).jsonObject["nodes"]!!.jsonArray
+            .map { it.jsonObject["nodeId"]!!.jsonPrimitive.content }
+        // The container plus the label under it; the unlabelled sibling was
+        // never emitted, so it is not part of the flat subtree either.
+        assertEquals(listOf("n0", "n1"), ids)
+    }
+
+    @Test fun readUiRejectsARootNodeIdThatIsNotOnScreen() = runBlocking {
+        val adb = ScriptedUiAdb(mutableListOf(CommandResult(SAMPLE_UI_XML, 0)))
+        val tools = AndroidDeviceTools(adb)
+        tools.beginRun("ui", Files.createTempDirectory("ws").toFile())
+
+        val result = tools.invoke("read_ui", buildJsonObject { put("rootNodeId", "n99") })
+
+        assertFalse(result.success)
+        val json = Json.parseToJsonElement(result.text).jsonObject
+        assertEquals("ui_unknown_node", json["errorType"]!!.jsonPrimitive.content)
+    }
+
+    @Test fun readUiAdvertisesTheFocusedQueryArguments() {
+        val schema = AndroidDeviceTools(FakeAdb()).definitions.first { it.name == "read_ui" }
+        val properties = schema.inputSchema["properties"]!!.jsonObject
+        for (key in listOf(
+            "text", "resourceId", "class", "package", "rootNodeId",
+            "clickableOnly", "scrollableOnly", "offset", "maxNodes", "maxChars",
+        )) {
+            assertTrue("read_ui must advertise $key", properties.containsKey(key))
+        }
+        assertTrue(schema.description.contains("nextOffset"))
+    }
+
     @Test fun uiDumpCommandRestoresRotationLockThawedByUiautomator() {
         val command = AndroidDeviceTools.uiDumpCommand("/sdcard/window_dump.xml")
 

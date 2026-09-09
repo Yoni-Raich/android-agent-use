@@ -23,9 +23,47 @@ The normal result is compact JSON. Raw XML is available only with `raw=true` for
 {"ok":true,"revision":12,"activePackage":"com.example","stable":true,"nodes":[{"nodeId":"n3","text":"Search","resourceId":"com.example:id/search_box","contentDescription":"Search query","bounds":[72,140,936,260],"clickable":true,"enabled":true}]}
 ```
 
+### Focused Queries and Paging
+A busy screen does not fit in one reply. Never treat that as "the rest is not
+there" — narrow the question, or page through it.
+
+| Argument | Effect |
+|---|---|
+| `text` | Node whose `text` or `contentDescription` contains this (case-insensitive). |
+| `resourceId` | Node whose `resourceId` contains this. |
+| `class` | Node whose class name contains this, e.g. `EditText`, `RecyclerView`. |
+| `package` | Node from this package, e.g. `package="whatsapp"`. |
+| `rootNodeId` | That node and every node under it, and nothing else. |
+| `clickableOnly` / `scrollableOnly` | Only what can be tapped, or only what can be scrolled. |
+| `offset` | Skip this many matches. Use the `nextOffset` the previous reply handed you. |
+| `maxNodes` / `maxChars` | Lower the caps for a small, cheap reply. |
+
+Filters combine with AND. They change only what is **listed**: every node is
+still on screen, and its `nodeId` still works with `tap_node`, `set_text` and
+`scroll_node`.
+
+Every reply reports what it left out:
+```json
+{"ok":true,"revision":12,"truncated":true,"totalNodes":812,"returnedNodes":96,"matchedNodes":240,
+ "query":{"package":"whatsapp"},"nextOffset":96,"hint":"Nodes 1-96 of 240 matching. ...","nodes":[...]}
+```
+- `truncated:true` with `nextOffset` means there is more. Call `read_ui` again
+  with `offset=<nextOffset>`, or ask a narrower question.
+- `matchedNodes:0` means your filter matched nothing while `totalNodes` were on
+  screen. That is a bad filter, not an empty screen.
+- `rootNodeId` naming a node that is not on screen fails with
+  `errorType:"ui_unknown_node"` instead of returning an empty list.
+
+Worked example — find one contact in a long chat list:
+```text
+read_ui(package="whatsapp", text="Amir")   -> the row and its labels only
+read_ui(rootNodeId="n42")                  -> everything inside that row
+read_ui(clickableOnly=true, maxNodes=40)   -> just what can be tapped
+```
+
 ### Unchanged Screens
-When the screen is identical to the previous observation, the node list is not
-resent:
+When the screen and the query are both identical to the previous observation,
+the node list is not resent:
 ```json
 {"ok":true,"revision":13,"activePackage":"com.example","stable":true,"unchanged":true,"unchangedSinceRevision":12,"nodeCount":41}
 ```
@@ -33,7 +71,9 @@ Reuse the nodes from revision 12; they are still valid. This is diagnostic
 information, not an error. If the action before it was meant to change the
 screen, the action did not land — pick a different target or dismiss whatever is
 covering it rather than repeating the same tap. Use `force=true` only when the
-earlier node list is no longer available to you.
+earlier node list is no longer available to you. Changing the query is enough on
+its own to get a fresh reply, so a different filter or `offset` is never
+suppressed as unchanged.
 
 ### Addressing Rules
 1. **Search Criteria**: Look for elements where:
@@ -53,6 +93,7 @@ earlier node list is no longer available to you.
 - `ui_timeout` and `ui_idle_failure` are bounded failures. Do not repeat the same read in a loop.
 - Use `screenshot` when visual state is enough, or perform one bounded retry only after a real state change.
 - `ui_parse_failure` means semantic parsing failed safely. Use `read_ui(raw=true)` only to debug it.
+- `ui_unknown_node` means the `rootNodeId` you passed is not on the current screen. Re-read without it and use an id from that reply.
 
 ---
 
