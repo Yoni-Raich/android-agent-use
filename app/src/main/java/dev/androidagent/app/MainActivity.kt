@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.view.WindowManager
 import android.webkit.MimeTypeMap
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.SystemBarStyle
@@ -19,6 +20,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.androidagent.app.ui.*
+import dev.androidagent.core.KeepAwakePolicy
 
 class MainActivity : ComponentActivity() {
     private val model: AgentViewModel by viewModels()
@@ -34,6 +36,17 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.BLACK))
         setContent {
             val state by model.ui.collectAsStateWithLifecycle()
+            // The visible activity uses a window flag only. The background
+            // foreground service owns the screen wake lock while active, so
+            // the user's display timeout and system settings are never written.
+            val keepAwake = KeepAwakePolicy.shouldKeepAwake(state.runState, state.voiceState)
+            LaunchedEffect(keepAwake) {
+                if (keepAwake) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+            DisposableEffect(Unit) {
+                onDispose { window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+            }
             AndroidAgentScreen(state, actions())
         }
         ensureService()
