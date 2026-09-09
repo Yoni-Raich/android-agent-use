@@ -13,6 +13,9 @@ import dev.androidagent.core.ChatSession
 import dev.androidagent.core.EngineEvent
 import dev.androidagent.core.RunState
 import dev.androidagent.core.RuntimeStatus
+import dev.androidagent.core.SetupChecklist
+import dev.androidagent.core.SetupRow
+import dev.androidagent.core.SetupSignals
 import dev.androidagent.core.VoiceState
 
 /**
@@ -51,6 +54,18 @@ data class AgentStatusCard(
 )
 
 /**
+ * Android grants the app asks for outside the permission dialog flow. They are
+ * changed in system Settings, so they are re-read when the app resumes rather
+ * than observed.
+ */
+data class DevicePermissions(
+    val overlay: Boolean = false,
+    val notifications: Boolean = false,
+    val installUnknownApps: Boolean = false,
+    val microphone: Boolean = false,
+)
+
+/**
  * All data needed by the screen. It is intentionally free of ViewModel or
  * engine references so the root app can map its own flows into this state.
  */
@@ -71,6 +86,7 @@ data class AgentUiState(
     val usageLimits: List<dev.androidagent.core.UsageLimit> = emptyList(),
     val adbStatus: AdbStatus = AdbStatus(),
     val a11yStatus: A11yStatus = A11yStatus(declaredEnabled = false, connected = false),
+    val permissions: DevicePermissions = DevicePermissions(),
     val runtimeStatus: RuntimeStatus = RuntimeStatus(),
     /**
      * Why the tunnel to OpenAI last failed, in one sentence, or null when it
@@ -151,6 +167,27 @@ data class AgentUiActions(
     val onInstallUpdate: () -> Unit = {},
     val onDismissUpdateBanner: () -> Unit = {},
     val onOpenInstallPermission: () -> Unit = {},
+    val onOpenNotificationSettings: () -> Unit = {},
+    /** Open the pairing dialog and read the code from it instead of asking for it. */
+    val onCapturePairing: () -> Unit = {},
+    val onDismissInfo: () -> Unit = {},
+)
+
+/** The setup checklist for this state, so no screen assembles the signals itself. */
+internal fun AgentUiState.setupRows(): List<SetupRow> = SetupChecklist.rows(
+    SetupSignals(
+        runtimePhase = runtimeStatus.phase,
+        signedIn = accountStatus?.signedIn,
+        loginPending = accountStatus?.signedIn == false && accountStatus?.loginUrl != null,
+        a11yConnected = a11yStatus.connected,
+        a11yDeclared = a11yStatus.declaredEnabled,
+        overlayGranted = permissions.overlay,
+        notificationsGranted = permissions.notifications,
+        installUpdatesGranted = permissions.installUnknownApps,
+        microphoneGranted = permissions.microphone,
+        adbPhase = adbStatus.phase,
+        adbPort = adbStatus.port,
+    ),
 )
 
 internal fun EngineEvent.Approval.detailsText(): String = details.toString().removeSurrounding("{", "}")

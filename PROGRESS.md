@@ -18,11 +18,27 @@ not production-ready.
   integration, Wireless ADB support, an accessibility device backend, visible
   control state, local Stop, skills, workflows, and experimental realtime voice
   paths.
+- The setup hub, quota meter and run indicator were built and run on an
+  attached Android 13 phone on 2026-09-09. The hub read every readiness signal
+  correctly, including the overlay permission the app never reported before;
+  the quota ring and its breakdown matched the account's real windows; and
+  `:core:test`, `:adb:test`, `:a11y:testDebugUnitTest` plus
+  `:app:compileProdDebugKotlin` and `:app:compileProdDebugAndroidTestKotlin`
+  passed. Two bugs were found by running it rather than by reading it: system
+  back closed the whole settings sheet from a detail page, and
+  `WIRELESS_DEBUGGING_SETTINGS` does not resolve at all on HyperOS, so every
+  tap on it was an unguarded `startActivity`. Both are fixed and the back fix
+  was re-verified on the phone.
 
 ### Not proven yet
 
 - A complete signed-in Codex chat and device-control flow on a supported phone.
 - Reliable same-phone Wireless ADB pairing, reconnect, and app-UID self-ADB.
+- Reading the pairing code off the system dialog end to end. The parser has
+  unit tests, but AGP disables the accessibility service on every reinstall and
+  re-pairing was out of scope, so the live capture has not run once.
+- That each readiness dot flips after a trip to a system settings screen, and
+  that `ChatUiTest` still passes after the composer and settings changes.
 - Full physical checks for accessibility, voice, overlay visuals, recovery,
   and all device tools.
 - Production signing, production packaging, and production readiness.

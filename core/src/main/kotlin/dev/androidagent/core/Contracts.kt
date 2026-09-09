@@ -213,8 +213,15 @@ interface RealtimeVoiceEngine {
 }
 
 enum class RunPhase { IDLE, STARTING, THINKING, TOOL, CONTROLLING, STOPPING, ERROR }
-data class RunState(val phase: RunPhase = RunPhase.IDLE, val sessionId: String? = null, val status: String = "Ready", val controlling: Boolean = false, val approval: EngineEvent.Approval? = null) {
+data class RunState(val phase: RunPhase = RunPhase.IDLE, val sessionId: String? = null, val status: String = "Ready", val controlling: Boolean = false, val approval: EngineEvent.Approval? = null, val toolName: String? = null) {
     val active: Boolean get() = phase !in setOf(RunPhase.IDLE, RunPhase.ERROR)
+
+    /**
+     * The tool the run is executing right now, or null when it is doing
+     * anything else. Reading it through the phase means a name left behind by
+     * an earlier call can never be reported as still running.
+     */
+    val tool: String? get() = toolName?.takeIf { phase == RunPhase.TOOL || phase == RunPhase.CONTROLLING }
 }
 enum class OverlayPhase { STARTING, THINKING, RUNNING, CONTROLLING, STOPPING, DONE, ERROR }
 data class OverlayState(val phase: OverlayPhase, val detail: String? = null) {
