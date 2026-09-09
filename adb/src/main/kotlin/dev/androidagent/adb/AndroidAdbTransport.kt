@@ -146,6 +146,44 @@ class AndroidAdbTransport(context: Context) : AdbTransport, AdbFileTransport {
         }
     }
 
+    /**
+     * Pair, then find the connect port and use it. Wireless Debugging only
+     * advertises its connect service once pairing is accepted, and it can take
+     * a moment to appear, so this looks more than once instead of making the
+     * user read the port off the system dialog.
+     *
+     * Returns the port it connected on. On failure the pairing identity is
+     * still stored, so [startAutoReconnect] keeps trying in the background.
+     */
+    suspend fun pairAndConnect(pairingPort: Int, code: String, onProgress: (String) -> Unit): Int {
+        pair(pairingPort, code)
+        val deadline = System.currentTimeMillis() + AdbAutoConnectPlan.TOTAL_BUDGET_MS
+        val tried = mutableSetOf<Int>()
+        var attempt = 0
+        while (attempt < AdbAutoConnectPlan.MAX_ATTEMPTS && System.currentTimeMillis() < deadline) {
+            currentCoroutineContext().ensureActive()
+            val endpoints = discover()
+            // Re-read the saved port every pass: a successful connect writes it.
+            val port = AdbAutoConnectPlan.target(savedConnectPort(), endpoints, tried)
+            onProgress(AdbAutoConnectPlan.attemptMessage(attempt, port))
+            if (port != null) {
+                tried += port
+                try {
+                    connect(port)
+                    return port
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // Keep the failure quiet and try the next endpoint; connect()
+                    // has already published the error status.
+                }
+            }
+            attempt++
+            delay(AdbReconnectPolicy.retryDelayMs(attempt))
+        }
+        throw IOException(AdbAutoConnectPlan.giveUpMessage(wirelessDebuggingEnabled()))
+    }
+
     override suspend fun connect(port: Int) {
         requireValidPort(port)
         operationMutex.withLock {

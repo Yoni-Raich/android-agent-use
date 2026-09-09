@@ -1,12 +1,9 @@
 package dev.androidagent.app.ui
 
-import androidx.compose.material.icons.filled.EditNote
-import androidx.compose.material.icons.filled.DataUsage
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,10 +24,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -38,33 +33,25 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowUpward
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.AttachFile
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.ErrorOutline
-import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GraphicEq
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Link
-import androidx.compose.material.icons.filled.Login
-import androidx.compose.material.icons.filled.Logout
-import androidx.compose.material.icons.filled.Memory
-import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Send
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.AttachFile
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.EditNote
+import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.PictureInPictureAlt
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -76,20 +63,19 @@ import androidx.compose.material3.DividerDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SheetState
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -98,7 +84,6 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -111,43 +96,42 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.DrawerValue
-import androidx.compose.material3.ModalBottomSheetDefaults
 import androidx.compose.material3.rememberDrawerState
-import androidx.compose.material3.rememberModalBottomSheetState
 import dev.androidagent.core.ChatMessage
 import dev.androidagent.core.ConnectionPhase
 import dev.androidagent.core.EngineEvent
 import dev.androidagent.app.update.AppUpdateInfo
 import dev.androidagent.app.update.UpdateStatus
 import dev.androidagent.core.RunPhase
-import dev.androidagent.core.RuntimePhase
+import dev.androidagent.core.SetupChecklist
+import dev.androidagent.core.UsageSummary
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+
+/** Disabled fill and ink for the composer's circular buttons. */
+private val DisabledFill = Color(0xFF444444)
+private val DisabledInk = Color(0xFF999999)
+
+/** Longest approval payload shown before it is folded behind "Show all". */
+private const val APPROVAL_DETAIL_LIMIT = 600
 
 private val AgentDarkColors = darkColorScheme(
     primary = Color(0xFFF4F4F4),
@@ -164,30 +148,16 @@ private val AgentDarkColors = darkColorScheme(
     onSurface = Color(0xFFF2F2F2),
     surfaceVariant = Color(0xFF303030),
     onSurfaceVariant = Color(0xFFAAAAAA),
+    // Used by the approval card and the one-time-code box. Without them the
+    // scheme fell through to the Material baseline purple.
+    tertiaryContainer = Color(0xFF1E3A34),
+    onTertiaryContainer = Color(0xFFCDEFE5),
+    outlineVariant = Color(0xFF3A3A3A),
     error = Color(0xFFFFB4AB),
     errorContainer = Color(0xFF2B1D1B),
     onErrorContainer = Color(0xFFFFDAD6),
 )
 
-private val AgentLightColors = lightColorScheme(
-    primary = Color(0xFF4658A8),
-    onPrimary = Color.White,
-    primaryContainer = Color(0xFFDDE2FF),
-    onPrimaryContainer = Color(0xFF001452),
-    secondary = Color(0xFF21685E),
-    onSecondary = Color.White,
-    secondaryContainer = Color(0xFFA5F2E3),
-    onSecondaryContainer = Color(0xFF00201B),
-    background = Color(0xFFF8F8FF),
-    onBackground = Color(0xFF1A1B20),
-    surface = Color(0xFFF8F8FF),
-    onSurface = Color(0xFF1A1B20),
-    surfaceVariant = Color(0xFFE2E2EC),
-    onSurfaceVariant = Color(0xFF303030),
-    error = Color(0xFFBA1A1A),
-    errorContainer = Color(0xFFFFDAD6),
-    onErrorContainer = Color(0xFF410002),
-)
 
 @Composable
 fun AndroidAgentTheme(content: @Composable () -> Unit) {
@@ -238,10 +208,20 @@ fun AndroidAgentScreen(
                 }
             },
         ) {
+            val snackbars = remember { SnackbarHostState() }
+            // Progress and confirmations used to be list items, which the
+            // follow-the-latest scroll pushed out of sight as soon as they
+            // arrived. A snackbar also replaces itself, which a list cannot.
+            LaunchedEffect(state.infoMessage) {
+                val message = state.infoMessage ?: return@LaunchedEffect
+                snackbars.showSnackbar(message)
+                actions.onDismissInfo()
+            }
             Scaffold(
                 modifier = Modifier.fillMaxSize().imePadding(),
                 contentWindowInsets = WindowInsets.safeDrawing,
                 containerColor = MaterialTheme.colorScheme.background,
+                snackbarHost = { SnackbarHost(snackbars) },
                 topBar = {
                     AgentTopBar(
                         state = state,
@@ -250,6 +230,7 @@ fun AndroidAgentScreen(
                         onOpenWirelessSettings = actions.onOpenWirelessSettings,
                         onOpenFiles = actions.onOpenWorkspaceFiles,
                         onNewChat = actions.onNewChat,
+                        onRefreshUsage = actions.onRefreshAccount,
                     )
                 },
                 bottomBar = {
@@ -284,8 +265,14 @@ private fun AgentTopBar(
     onOpenWirelessSettings: () -> Unit,
     onOpenFiles: () -> Unit,
     onNewChat: () -> Unit,
+    onRefreshUsage: () -> Unit,
 ) {
     var confirmNew by remember { mutableStateOf(false) }
+    // Recomputed when the limits change, not per frame: the countdown text is
+    // coarse enough that a redraw every minute would be wasted work.
+    val usageWindows = remember(state.usageLimits) {
+        UsageSummary.windows(state.usageLimits, System.currentTimeMillis() / 1000L)
+    }
     if (confirmNew) AlertDialog(onDismissRequest = { confirmNew = false },
         title = { Text("Start a new chat?") },
         text = { Text("The current task will keep running. New tasks will wait in the queue.") },
@@ -317,24 +304,32 @@ private fun AgentTopBar(
                 onClick = onOpenDrawer,
                 modifier = Modifier.semantics { contentDescription = "Open sessions" },
             ) {
-                Icon(Icons.Default.Menu, contentDescription = null)
+                Icon(Icons.Outlined.Menu, contentDescription = null)
             }
         },
         actions = {
+            // The quota ring sits first: it is a reading, not an action, and it
+            // is the thing that decides whether the next run will work at all.
+            UsageMeter(
+                windows = usageWindows,
+                usage = state.tokenUsage,
+                refreshing = state.isRefreshingAccount,
+                onRefresh = onRefreshUsage,
+            )
             IconButton(onClick = { if (state.runState.active) confirmNew = true else onNewChat() }) {
-                Icon(Icons.Default.EditNote, contentDescription = "New chat")
+                Icon(Icons.Outlined.EditNote, contentDescription = "New chat")
             }
             IconButton(
                 onClick = onOpenFiles,
                 modifier = Modifier.semantics { contentDescription = "Open workspace files" },
             ) {
-                Icon(Icons.Default.FolderOpen, contentDescription = null)
+                Icon(Icons.Outlined.Folder, contentDescription = null)
             }
             IconButton(
                 onClick = onOpenSettings,
                 modifier = Modifier.semantics { contentDescription = "Open settings" },
             ) {
-                Icon(Icons.Default.Settings, contentDescription = null)
+                Icon(Icons.Outlined.Settings, contentDescription = null)
             }
         },
         colors = TopAppBarDefaults.topAppBarColors(
@@ -348,11 +343,14 @@ private fun AdbStatusPill(
     status: dev.androidagent.core.AdbStatus,
     onClick: () -> Unit,
 ) {
+    val working = status.phase == ConnectionPhase.DISCOVERING ||
+        status.phase == ConnectionPhase.PAIRING ||
+        status.phase == ConnectionPhase.CONNECTING
     val color = when (status.phase) {
-        ConnectionPhase.CONNECTED -> Color(0xFF4ADE80)
+        ConnectionPhase.CONNECTED -> MaterialTheme.colorScheme.secondary
         ConnectionPhase.DISCOVERING,
         ConnectionPhase.PAIRING,
-        ConnectionPhase.CONNECTING -> Color(0xFFFBBF24)
+        ConnectionPhase.CONNECTING -> MaterialTheme.colorScheme.primary
         ConnectionPhase.ERROR -> MaterialTheme.colorScheme.error
         ConnectionPhase.DISCONNECTED -> MaterialTheme.colorScheme.onSurfaceVariant
     }
@@ -371,16 +369,15 @@ private fun AdbStatusPill(
             .clip(RoundedCornerShape(999.dp))
             .clickable(onClick = onClick)
             .semantics {
+                liveRegion = LiveRegionMode.Polite
                 contentDescription = "$label. ${status.message}. Open Wireless Debugging settings"
             }
-            .padding(horizontal = 6.dp, vertical = 3.dp),
+            // It opens Wireless Debugging setup, so it has to be reachable by a
+            // thumb rather than a stylus.
+            .heightIn(min = 40.dp)
+            .padding(horizontal = 8.dp),
     ) {
-        Box(
-            modifier = Modifier
-                .size(7.dp)
-                .clip(CircleShape)
-                .background(color),
-        )
+        StatusDot(color = color, size = 7.dp, pulsing = working)
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
@@ -402,14 +399,11 @@ private fun RunStatusPill(runState: dev.androidagent.core.RunState) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(5.dp),
-        modifier = Modifier.padding(top = 2.dp),
+        modifier = Modifier
+            .padding(top = 2.dp)
+            .semantics { liveRegion = LiveRegionMode.Polite },
     ) {
-        Box(
-            modifier = Modifier
-                .size(7.dp)
-                .clip(CircleShape)
-                .background(color),
-        )
+        StatusDot(color = color, size = 7.dp, pulsing = active && runState.phase != RunPhase.ERROR)
         Text(
             text = if (runState.controlling) "Controlling device" else readableRunPhase(runState.phase),
             style = MaterialTheme.typography.labelSmall,
@@ -441,7 +435,7 @@ private fun AgentDrawer(
                 Text("Local Codex workspace", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             IconButton(onClick = close) {
-                Icon(Icons.Default.Close, contentDescription = "Close sessions")
+                Icon(Icons.Outlined.Close, contentDescription = "Close sessions")
             }
         }
 
@@ -455,7 +449,7 @@ private fun AgentDrawer(
                 .fillMaxWidth()
                 .heightIn(min = 48.dp),
         ) {
-            Icon(Icons.Default.Add, contentDescription = null)
+            Icon(Icons.Outlined.Add, contentDescription = null)
             Spacer(Modifier.width(8.dp))
             Text("New chat")
         }
@@ -517,7 +511,7 @@ private fun AgentDrawer(
                 close()
                 actions.onOpenWorkspaceFiles()
             },
-            icon = { Icon(Icons.Default.FolderOpen, contentDescription = null) },
+            icon = { Icon(Icons.Outlined.Folder, contentDescription = null) },
         )
         NavigationDrawerItem(
             label = { Text("Settings") },
@@ -526,7 +520,7 @@ private fun AgentDrawer(
                 close()
                 actions.onOpenSettings()
             },
-            icon = { Icon(Icons.Default.Settings, contentDescription = null) },
+            icon = { Icon(Icons.Outlined.Settings, contentDescription = null) },
         )
     }
 }
@@ -575,12 +569,12 @@ private fun SessionRow(
                     onClick = { menuOpen = true },
                     modifier = Modifier.semantics { contentDescription = "Session actions" },
                 ) {
-                    Icon(Icons.Default.MoreVert, contentDescription = null)
+                    Icon(Icons.Outlined.MoreVert, contentDescription = null)
                 }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                     DropdownMenuItem(
                         text = { Text("Rename") },
-                        leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                        leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
                         onClick = {
                             menuOpen = false
                             renameText = session.title
@@ -589,7 +583,7 @@ private fun SessionRow(
                     )
                     DropdownMenuItem(
                         text = { Text("Delete") },
-                        leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
+                        leadingIcon = { Icon(Icons.Outlined.DeleteOutline, contentDescription = null) },
                         onClick = {
                             menuOpen = false
                             deleteOpen = true
@@ -695,8 +689,9 @@ private fun AgentChatContent(
                 )
             }
         }
-        if (state.infoMessage != null) {
-            item(key = "info") { InfoBanner(state.infoMessage) }
+        val outstanding = SetupChecklist.outstanding(state.setupRows())
+        if (outstanding > 0) {
+            item(key = "setup-prompt") { SetupPrompt(outstanding, actions.onOpenSettings) }
         }
         val updateInfo = state.updateInfo
         if (updateInfo?.isUpdateAvailable == true && state.isUpdateBannerVisible) {
@@ -747,6 +742,32 @@ private fun AgentChatContent(
     }
 }
 
+/** Quiet reminder that the agent cannot run yet. It disappears when nothing is outstanding. */
+@Composable
+private fun SetupPrompt(outstanding: Int, onOpenSettings: () -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenSettings),
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.52f),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            StatusDot(color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                if (outstanding == 1) "1 thing to finish before the agent can run" else
+                    "$outstanding things to finish before the agent can run",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text("Open settings", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+        }
+    }
+}
+
 @Composable
 private fun EmptyChatCard(hasSession: Boolean) {
     Column(
@@ -787,7 +808,11 @@ private fun MessageBubble(message: ChatMessage) {
     val system = role == "system" || role == "tool"
     if (system) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            ActivityDetail(if (role == "tool") "Device activity" else "Run details", dev.androidagent.core.SecretRedactor.redact(message.text))
+            ActivityDetail(
+                title = if (role == "tool") "Device activity" else "Run details",
+                detail = dev.androidagent.core.SecretRedactor.redact(message.text),
+                key = message.id,
+            )
             InlineImages(message.attachmentPaths)
         }
         return
@@ -823,17 +848,9 @@ private fun MessageBubble(message: ChatMessage) {
             ) {
                 if (!user && message.state.lowercase() in setOf("error", "failed")) {
                     Text(
-                        text = when (message.state.lowercase()) {
-                            "streaming", "running" -> "Streaming"
-                            "error", "failed" -> "Failed"
-                            else -> message.state
-                        },
+                        text = "Failed",
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (message.state.lowercase() == "error" || message.state.lowercase() == "failed") {
-                            MaterialTheme.colorScheme.error
-                        } else {
-                            MaterialTheme.colorScheme.primary
-                        },
+                        color = MaterialTheme.colorScheme.error,
                     )
                 }
                 if (message.text.isNotBlank()) {
@@ -845,16 +862,20 @@ private fun MessageBubble(message: ChatMessage) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
                             IconButton(
                                 onClick = { clipboard.setText(AnnotatedString(message.text)) },
-                                modifier = Modifier.size(32.dp).semantics { contentDescription = "Copy message" },
+                                modifier = Modifier.size(40.dp).semantics { contentDescription = "Copy message" },
                             ) {
-                                Icon(Icons.Default.ContentCopy, contentDescription = "Copy message", modifier = Modifier.size(16.dp),
+                                Icon(Icons.Outlined.ContentCopy, contentDescription = "Copy message", modifier = Modifier.size(16.dp),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
                     }
                 } else if (message.state.equals("streaming", ignoreCase = true)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        CircularProgressIndicator(modifier = Modifier.size(15.dp), strokeWidth = 2.dp)
+                    Row(
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        AgentPulse(modifier = Modifier.size(34.dp))
                         Text("Working…", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 } else {
@@ -867,7 +888,7 @@ private fun MessageBubble(message: ChatMessage) {
                             AssistChip(
                                 onClick = {},
                                 label = { Text(path.substringAfterLast('/').substringAfterLast('\\'), maxLines = 1) },
-                                leadingIcon = { Icon(Icons.Default.AttachFile, contentDescription = null) },
+                                leadingIcon = { Icon(Icons.Outlined.AttachFile, contentDescription = null) },
                             )
                         }
                     }
@@ -882,8 +903,7 @@ private fun RunCard(runState: dev.androidagent.core.RunState) {
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 1.5.dp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        AgentPulse(Modifier.size(28.dp), phase = runState.phase, controlling = runState.controlling, tool = runState.tool)
         Text(if (runState.controlling) "Controlling device" else readableRunPhase(runState.phase),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodyMedium)
@@ -904,14 +924,32 @@ private fun ApprovalCard(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Text("Approval needed", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            // Nothing else in the app is assertive: this one blocks the run
+            // until the user answers, so it has to interrupt a screen reader.
+            Text(
+                "Approval needed",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
+            )
             Text(approval.method, style = MaterialTheme.typography.bodyMedium)
             if (approval.details.isNotEmpty()) {
-                Text(
-                    approval.detailsText(),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onTertiaryContainer,
-                )
+                var showAll by rememberSaveable(approval.requestId) { mutableStateOf(false) }
+                val details = approval.detailsText()
+                val long = details.length > APPROVAL_DETAIL_LIMIT
+                SelectionContainer {
+                    Text(
+                        if (long && !showAll) details.take(APPROVAL_DETAIL_LIMIT) + "…" else details,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer,
+                    )
+                }
+                if (long) {
+                    TextButton(onClick = { showAll = !showAll }) {
+                        Text(if (showAll) "Show less" else "Show all")
+                    }
+                }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { onApproval(approval.requestId, false) }) { Text("Deny") }
@@ -922,16 +960,16 @@ private fun ApprovalCard(
 }
 
 @Composable
-private fun ActivityDetail(title: String, detail: String, failed: Boolean = false) {
-    var expanded by rememberSaveable(title, detail) { mutableStateOf(false) }
+private fun ActivityDetail(title: String, detail: String, failed: Boolean = false, key: Any = title) {
+    var expanded by rememberSaveable(key) { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth().clickable { expanded = !expanded }.padding(vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Icon(if (failed) Icons.Default.ErrorOutline else Icons.Default.Terminal, null,
+            Icon(if (failed) Icons.Outlined.ErrorOutline else Icons.Outlined.PictureInPictureAlt, null,
                 Modifier.size(18.dp), tint = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
             Text(title, Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium)
-            if (detail.isNotBlank()) Icon(Icons.Default.ExpandMore,
+            if (detail.isNotBlank()) Icon(Icons.Outlined.ExpandMore,
                 if (expanded) "Hide activity details" else "Show activity details", Modifier.size(18.dp))
         }
         if (expanded && detail.isNotBlank()) SelectionContainer {
@@ -943,21 +981,14 @@ private fun ActivityDetail(title: String, detail: String, failed: Boolean = fals
 
 @Composable
 private fun ToolCard(card: ToolStatusCard) {
-    ActivityDetail(card.title, card.detail, card.state == AgentCardState.ERROR)
+    ActivityDetail(card.title, card.detail, card.state == AgentCardState.ERROR, key = card.id)
 }
 
 @Composable
 private fun StatusCard(card: AgentStatusCard) {
-    ActivityDetail(card.title, card.detail, card.state == AgentCardState.ERROR)
+    ActivityDetail(card.title, card.detail, card.state == AgentCardState.ERROR, key = card.id)
 }
 
-@Composable
-private fun cardColors(state: AgentCardState): Triple<Color, Color, androidx.compose.ui.graphics.vector.ImageVector> = when (state) {
-    AgentCardState.ACTIVE -> Triple(MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.onPrimaryContainer, Icons.Default.PlayArrow)
-    AgentCardState.COMPLETE -> Triple(MaterialTheme.colorScheme.secondaryContainer, MaterialTheme.colorScheme.onSecondaryContainer, Icons.Default.Check)
-    AgentCardState.ERROR -> Triple(MaterialTheme.colorScheme.errorContainer, MaterialTheme.colorScheme.onErrorContainer, Icons.Default.ErrorOutline)
-    AgentCardState.BLOCKED -> Triple(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant, Icons.Default.Info)
-}
 
 @Composable
 private fun WorkspaceFilesCard(
@@ -972,7 +1003,7 @@ private fun WorkspaceFilesCard(
     ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.FolderOpen, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Icon(Icons.Outlined.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                 Spacer(Modifier.width(8.dp))
                 Text("Workspace files", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.weight(1f))
@@ -1009,41 +1040,41 @@ private fun WorkspaceFilesCard(
 @Composable
 private fun ErrorBanner(message: String, onRetry: () -> Unit, onDismiss: () -> Unit) {
     var expanded by rememberSaveable(message) { mutableStateOf(false) }
-    Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp),
-        color = MaterialTheme.colorScheme.errorContainer) {
+    val clipboard = LocalClipboardManager.current
+    Surface(
+        Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Assertive },
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.errorContainer,
+    ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.ErrorOutline, null, tint = MaterialTheme.colorScheme.error,
+                Icon(Icons.Outlined.ErrorOutline, null, tint = MaterialTheme.colorScheme.error,
                     modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(10.dp))
                 Text("Something went wrong", Modifier.weight(1f), fontWeight = FontWeight.Medium)
-                IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, "Dismiss error") }
+                IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, "Dismiss error") }
             }
-            // Technical details stay available without occupying the conversation.
-            if (expanded) SelectionContainer {
-                Text(message, style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            // The message itself is what tells the user whether this is theirs
+            // to fix. Hiding all of it behind a toggle made every failure look
+            // the same.
+            SelectionContainer {
+                Text(
+                    message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    maxLines = if (expanded) Int.MAX_VALUE else 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = onRetry) { Text("Retry setup") }
-                TextButton(onClick = { expanded = !expanded }) {
-                    Text(if (expanded) "Hide details" else "Show details")
+                TextButton(onClick = onRetry) { Text("Try again") }
+                TextButton(onClick = { clipboard.setText(AnnotatedString(message)) }) { Text("Copy") }
+                if (message.length > 120) {
+                    TextButton(onClick = { expanded = !expanded }) {
+                        Text(if (expanded) "Less" else "More")
+                    }
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun InfoBanner(message: String) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.62f),
-    ) {
-        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-            Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -1063,7 +1094,7 @@ private fun UpdateBanner(
     ) {
         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.ArrowUpward, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.size(20.dp))
+                Icon(Icons.Outlined.Download, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(8.dp))
                 Text(
                     "Update available: v${info.latestVersionName}",
@@ -1072,8 +1103,8 @@ private fun UpdateBanner(
                     color = MaterialTheme.colorScheme.onSecondaryContainer,
                     modifier = Modifier.weight(1f),
                 )
-                IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
-                    Icon(Icons.Default.Close, contentDescription = "Dismiss update", tint = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.size(16.dp))
+                IconButton(onClick = onDismiss, modifier = Modifier.size(40.dp)) {
+                    Icon(Icons.Outlined.Close, contentDescription = "Dismiss update", tint = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.size(16.dp))
                 }
             }
             if (info.releaseNotes.isNotBlank()) {
@@ -1178,7 +1209,7 @@ private fun AgentComposer(state: AgentUiState, actions: AgentUiActions) {
         if (voiceActive) {
             Button(onClick = actions.onStop, enabled = !voiceStopping, modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.errorContainer, contentColor = MaterialTheme.colorScheme.onErrorContainer)) {
-                Icon(Icons.Default.Stop, null); Spacer(Modifier.width(8.dp)); Text("Stop voice")
+                Icon(Icons.Outlined.Stop, null); Spacer(Modifier.width(8.dp)); Text("Stop voice")
             }
         }
         if (matchingSkills.isNotEmpty()) {
@@ -1274,7 +1305,7 @@ private fun AgentComposer(state: AgentUiState, actions: AgentUiActions) {
                         AssistChip(onClick = { actions.onRemoveAttachment(attachment.id) },
                             label = { Text(attachment.name, maxLines = 1, overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.widthIn(max = 180.dp)) },
-                            trailingIcon = { Icon(Icons.Default.Close, "Remove ${attachment.name}", Modifier.size(16.dp)) })
+                            trailingIcon = { Icon(Icons.Outlined.Close, "Remove ${attachment.name}", Modifier.size(16.dp)) })
                     }
                 }
                 TextField(value = draft, onValueChange = { draft = it },
@@ -1288,18 +1319,20 @@ private fun AgentComposer(state: AgentUiState, actions: AgentUiActions) {
                         unfocusedContainerColor = Color.Transparent, disabledContainerColor = Color.Transparent,
                         focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent,
                         disabledIndicatorColor = Color.Transparent))
+                // Attach + both pickers + three circular buttons have to fit a
+                // 360 dp screen, so the pickers are capped and ellipsise.
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = actions.onAttach, enabled = !active && !voiceActive && state.activeSessionId != null) {
-                        Icon(Icons.Default.Add, "Attach file")
+                        Icon(Icons.Outlined.Add, "Attach file")
                     }
                     Spacer(Modifier.weight(1f))
                     Box {
                         TextButton(onClick = { if (state.availableModels.isEmpty()) actions.onOpenSettings() else modelMenu = true },
-                            enabled = !active && !voiceActive, modifier = Modifier.widthIn(max = 190.dp)) {
+                            enabled = !active && !voiceActive, modifier = Modifier.widthIn(max = 120.dp)) {
                             Text(state.selectedModel?.removePrefix("gpt-") ?: "Choose model",
                                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                                 style = MaterialTheme.typography.labelMedium)
-                            Icon(Icons.Default.ExpandMore, null, Modifier.size(16.dp))
+                            Icon(Icons.Outlined.ExpandMore, null, Modifier.size(16.dp))
                         }
                         DropdownMenu(expanded = modelMenu, onDismissRequest = { modelMenu = false }) {
                             state.availableModels.forEach { model ->
@@ -1314,7 +1347,7 @@ private fun AgentComposer(state: AgentUiState, actions: AgentUiActions) {
                             onClick = { reasoningMenu = true },
                             enabled = !active && !voiceActive && reasoningOptions.isNotEmpty(),
                             modifier = Modifier
-                                .widthIn(max = 110.dp)
+                                .widthIn(max = 96.dp)
                                 .semantics { contentDescription = "Choose reasoning effort" },
                         ) {
                             Text(
@@ -1323,12 +1356,12 @@ private fun AgentComposer(state: AgentUiState, actions: AgentUiActions) {
                                 overflow = TextOverflow.Ellipsis,
                                 style = MaterialTheme.typography.labelMedium,
                             )
-                            Icon(Icons.Default.ExpandMore, null, Modifier.size(16.dp))
+                            Icon(Icons.Outlined.ExpandMore, null, Modifier.size(16.dp))
                         }
                         DropdownMenu(expanded = reasoningMenu, onDismissRequest = { reasoningMenu = false }) {
                             DropdownMenuItem(
                                 text = { Text("Default") },
-                                trailingIcon = if (state.selectedReasoningEffort == null) ({ Icon(Icons.Default.Check, contentDescription = null) }) else null,
+                                trailingIcon = if (state.selectedReasoningEffort == null) ({ Icon(Icons.Outlined.Check, contentDescription = null) }) else null,
                                 onClick = {
                                     reasoningMenu = false
                                     actions.onReasoningEffortSelected(null)
@@ -1344,7 +1377,7 @@ private fun AgentComposer(state: AgentUiState, actions: AgentUiActions) {
                                             }
                                         }
                                     },
-                                    trailingIcon = if (option.value == state.selectedReasoningEffort) ({ Icon(Icons.Default.Check, contentDescription = null) }) else null,
+                                    trailingIcon = if (option.value == state.selectedReasoningEffort) ({ Icon(Icons.Outlined.Check, contentDescription = null) }) else null,
                                     onClick = {
                                         reasoningMenu = false
                                         actions.onReasoningEffortSelected(option.value)
@@ -1355,8 +1388,9 @@ private fun AgentComposer(state: AgentUiState, actions: AgentUiActions) {
                     }
                     // Stop is always reachable, including while a steering draft is typed.
                     if (active) IconButton(onClick = actions.onStop, enabled = !stopping,
-                        modifier = Modifier.size(48.dp).padding(3.dp).background(Color.White, CircleShape)) {
-                        Icon(Icons.Default.Stop, "Stop agent", tint = Color.Black)
+                        modifier = Modifier.size(48.dp).padding(3.dp)
+                            .background(if (stopping) DisabledFill else Color.White, CircleShape)) {
+                        Icon(Icons.Default.Stop, "Stop agent", tint = if (stopping) DisabledInk else Color.Black)
                     }
                     if (!active || draft.isNotBlank()) IconButton(onClick = {
                         val text = draft.trim()
@@ -1365,9 +1399,9 @@ private fun AgentComposer(state: AgentUiState, actions: AgentUiActions) {
                             draft = ""
                         }
                     }, enabled = canSend, modifier = Modifier.size(48.dp).padding(3.dp)
-                        .background(if (canSend) Color.White else Color(0xFF444444), CircleShape)) {
+                        .background(if (canSend) Color.White else DisabledFill, CircleShape)) {
                         Icon(Icons.Default.ArrowUpward, if (active) "Steer agent" else "Send message",
-                            tint = if (canSend) Color.Black else Color(0xFF999999))
+                            tint = if (canSend) Color.Black else DisabledInk)
                     }
                     if (!state.runState.active || voiceActive) IconButton(
                         onClick = actions.onVoiceToggle,
@@ -1412,509 +1446,6 @@ private fun AgentComposer(state: AgentUiState, actions: AgentUiActions) {
         }
     }
 }
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun AgentSettingsSheet(state: AgentUiState, actions: AgentUiActions) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val scrollState = rememberScrollState()
-    val uriHandler = LocalUriHandler.current
-    var pairCode by rememberSaveable { mutableStateOf("") }
-    var pairPort by rememberSaveable { mutableStateOf("") }
-    var connectPort by rememberSaveable { mutableStateOf("") }
-    var modelsExpanded by remember { mutableStateOf(false) }
-
-    LaunchedEffect(state.adbStatus.phase) {
-        if (state.adbStatus.phase == ConnectionPhase.CONNECTING || state.adbStatus.phase == ConnectionPhase.CONNECTED) {
-            // Pairing codes are short lived. Keep them only while the form is in use.
-            pairCode = ""
-        }
-    }
-
-    ModalBottomSheet(
-        onDismissRequest = actions.onCloseSettings,
-        sheetState = sheetState,
-        modifier = Modifier.fillMaxHeight(0.94f),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .verticalScroll(scrollState)
-                .imePadding()
-                .navigationBarsPadding()
-                .padding(horizontal = 20.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = actions.onCloseSettings) {
-                    Icon(Icons.Default.ArrowBack, contentDescription = "Close settings")
-                }
-                Text("Settings", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            }
-
-            SettingsSection(title = "Usage", icon = Icons.Default.DataUsage) {
-                val usage = state.tokenUsage
-                Text(if (usage == null) "Token usage is not available yet." else
-                    "${usage.total} tokens · ${usage.input} input · ${usage.output} output · ${usage.cachedInput} cached")
-                if (state.usageLimits.isEmpty()) Text("Account quota is not available for this account yet.")
-                state.usageLimits.forEach { limit ->
-                    val remaining = limit.usedPercent?.let { "${(100 - it).toInt()}% remaining" } ?: "Unavailable"
-                    val reset = limit.resetsAt?.let { java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT).format(java.util.Date(it * 1000)) }
-                    Text("${limit.name}: $remaining${if (reset != null) " · resets $reset" else ""}")
-                }
-                TextButton(onClick = actions.onRefreshAccount) { Text("Refresh usage") }
-            }
-            SettingsSection(title = "Runtime", icon = Icons.Default.Memory) {
-                StatusLine(
-                    title = readableRuntimePhase(state.runtimeStatus.phase),
-                    detail = state.runtimeStatus.message,
-                    color = statusColor(state.runtimeStatus.phase),
-                )
-                state.runtimeStatus.progress?.let { progress ->
-                    LinearProgressIndicator(
-                        progress = progress.coerceIn(0f, 1f),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-                // Proxy metadata only: category, host and port. The buffer this
-                // is derived from never holds tunnel bytes, headers or
-                // credentials, and that has to stay true of anything shown here.
-                state.networkDiagnostic?.let { diagnostic ->
-                    StatusLine(
-                        title = "Network",
-                        detail = diagnostic,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-                Button(
-                    onClick = actions.onPrepareRuntime,
-                    enabled = !state.isPreparingRuntime,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    if (state.isPreparingRuntime) {
-                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Preparing…")
-                    } else {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text(if (state.runtimeStatus.phase == RuntimePhase.READY) "Runtime ready" else "Prepare runtime")
-                    }
-                }
-            }
-
-            SettingsSection(title = "Codex account", icon = Icons.Default.Link) {
-                val account = state.accountStatus
-                StatusLine(
-                    title = account?.label ?: "Account status unavailable",
-                    detail = when {
-                        account == null -> "Connect the engine to read account status."
-                        account.signedIn -> "Signed in"
-                        else -> "Sign in to use Codex."
-                    },
-                    color = if (account?.signedIn == true) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                account?.loginUrl?.let {
-                    Text("Browser login is waiting for completion.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    OutlinedButton(
-                        onClick = { uriHandler.openUri(it) },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Icon(Icons.Default.Link, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Open official login")
-                    }
-                }
-                account?.userCode?.takeIf { it.isNotBlank() }?.let { code ->
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("One-time code", style = MaterialTheme.typography.labelLarge)
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = MaterialTheme.colorScheme.surface,
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                        ) {
-                            SelectionContainer {
-                                Text(
-                                    code,
-                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.SemiBold,
-                                    letterSpacing = 1.2.sp,
-                                )
-                            }
-                        }
-                        Text("Select and copy this code in the browser if asked.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-                if (account?.signedIn == true) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        OutlinedButton(onClick = actions.onLogout, modifier = Modifier.weight(1f)) {
-                            Icon(Icons.Default.Logout, contentDescription = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("Log out")
-                        }
-                        OutlinedButton(
-                            onClick = actions.onRefreshAccount,
-                            enabled = !state.isRefreshingAccount,
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            if (state.isRefreshingAccount) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                            else Icon(Icons.Default.Refresh, contentDescription = null)
-                            Spacer(Modifier.width(6.dp))
-                            Text("Refresh")
-                        }
-                    }
-                } else {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        Button(onClick = actions.onLogin, modifier = Modifier.weight(1f)) {
-                            Icon(Icons.Default.Login, contentDescription = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("Log in")
-                        }
-                        OutlinedButton(
-                            onClick = actions.onRefreshAccount,
-                            enabled = !state.isRefreshingAccount,
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            if (state.isRefreshingAccount) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                            else Icon(Icons.Default.Refresh, contentDescription = null)
-                            Spacer(Modifier.width(6.dp))
-                            Text("Refresh")
-                        }
-                    }
-                }
-            }
-
-            SettingsSection(title = "Accessibility control", icon = Icons.Default.Settings) {
-                StatusLine(
-                    title = if (state.a11yStatus.connected) "On" else "Off",
-                    detail = state.a11yStatus.message,
-                    color = if (state.a11yStatus.connected) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    "Lets the agent read the screen and tap without Wireless Debugging. " +
-                        "While a task runs it reads on-screen text and sends it to the model.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                if (state.a11yStatus.blockedByRestrictedSetting) {
-                    // Switched on but never connected. On Android 13+ that is
-                    // what a sideloaded build looks like before the user allows
-                    // restricted settings, and no API reports it directly.
-                    Text(
-                        "Android is blocking this because the app was installed outside the Play Store. " +
-                            "Open App info, tap the three-dot menu, choose \"Allow restricted settings\", " +
-                            "then turn it on again in Accessibility.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                    TextButton(onClick = actions.onOpenAppInfo, modifier = Modifier.fillMaxWidth()) {
-                        Icon(Icons.Default.Settings, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Open App info")
-                    }
-                }
-                TextButton(onClick = actions.onOpenAccessibilitySettings, modifier = Modifier.fillMaxWidth()) {
-                    Icon(Icons.Default.Settings, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Open accessibility settings")
-                }
-            }
-
-            SettingsSection(title = "Wireless ADB", icon = Icons.Default.Wifi) {
-                StatusLine(
-                    title = readableConnectionPhase(state.adbStatus.phase),
-                    detail = buildString {
-                        append(state.adbStatus.message)
-                        state.adbStatus.port?.let { append(" · port ").append(it) }
-                    },
-                    color = statusColor(state.adbStatus.phase),
-                )
-                if (state.adbStatus.phase == ConnectionPhase.ERROR) {
-                    Text(
-                        "Check the current pairing port and connect port in Wireless debugging, then try again.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-                TextButton(
-                    onClick = actions.onOpenWirelessSettings,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Icon(Icons.Default.Settings, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Open wireless debugging settings")
-                }
-                OutlinedTextField(
-                    value = pairCode,
-                    onValueChange = { pairCode = it.filter(Char::isDigit).take(12) },
-                    label = { Text("Pairing code") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = pairPort,
-                    onValueChange = { pairPort = it.filter(Char::isDigit).take(5) },
-                    label = { Text("Pairing port") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = connectPort,
-                    onValueChange = { connectPort = it.filter(Char::isDigit).take(5) },
-                    label = { Text("Connect port") },
-                    supportingText = { Text("Use the connect port shown by Wireless debugging, not the pairing port.") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    OutlinedButton(
-                        onClick = actions.onDiscover,
-                        enabled = !state.isDiscoveringAdb,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        if (state.isDiscoveringAdb) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                        else Icon(Icons.Default.Refresh, contentDescription = null)
-                        Spacer(Modifier.width(6.dp))
-                        Text("Discover")
-                    }
-                    Button(
-                        onClick = { actions.onPair(pairCode.trim(), pairPort.trim()) },
-                        enabled = pairCode.trim().isNotEmpty() && pairPort.toIntOrNull() != null && !state.isPairing,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        if (state.isPairing) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
-                        else Icon(Icons.Default.Link, contentDescription = null)
-                        Spacer(Modifier.width(6.dp))
-                        Text("Pair")
-                    }
-                }
-                Button(
-                    onClick = { actions.onConnect(connectPort.trim()) },
-                    enabled = connectPort.toIntOrNull() != null && !state.isConnecting,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    if (state.isConnecting) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
-                    else Icon(Icons.Default.Wifi, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Connect")
-                }
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    OutlinedButton(
-                        onClick = actions.onDisconnect,
-                        enabled = state.adbStatus.phase == ConnectionPhase.CONNECTED,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Icon(Icons.Default.Close, contentDescription = null)
-                        Spacer(Modifier.width(6.dp))
-                        Text("Disconnect")
-                    }
-                    TextButton(
-                        onClick = actions.onForgetPairing,
-                        enabled = state.adbStatus.phase != ConnectionPhase.PAIRING &&
-                            state.adbStatus.phase != ConnectionPhase.CONNECTING,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Icon(Icons.Default.Delete, contentDescription = null)
-                        Spacer(Modifier.width(6.dp))
-                        Text("Forget pairing")
-                    }
-                }
-                if (state.discoveredEndpoints.isEmpty()) {
-                    Text("No endpoints found yet.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } else {
-                    Text("Discovered endpoints", style = MaterialTheme.typography.labelLarge)
-                    state.discoveredEndpoints.forEach { endpoint ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(if (endpoint.pairing) Icons.Default.Link else Icons.Default.Wifi, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                "${endpoint.host}:${endpoint.port} · ${if (endpoint.pairing) "pairing" else "connect"}",
-                                modifier = Modifier.weight(1f),
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                            TextButton(onClick = {
-                                if (endpoint.pairing) pairPort = endpoint.port.toString() else connectPort = endpoint.port.toString()
-                            }) { Text("Use") }
-                        }
-                    }
-                }
-            }
-
-            SettingsSection(title = "Visible control", icon = Icons.Default.Terminal) {
-                Text(
-                    "Device taps and screenshots need a visible floating control. Grant overlay access before starting a run.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                OutlinedButton(
-                    onClick = actions.onOpenOverlayPermission,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Icon(Icons.Default.Terminal, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Open overlay permission")
-                }
-            }
-
-            SettingsSection(title = "Model", icon = Icons.Default.Tune) {
-                if (state.isLoadingModels) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                        Text("Loading models…", style = MaterialTheme.typography.bodySmall)
-                    }
-                } else if (state.availableModels.isEmpty()) {
-                    Text("Models are unavailable until the engine connects.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } else {
-                    Box {
-                        OutlinedButton(onClick = { modelsExpanded = true }, modifier = Modifier.fillMaxWidth()) {
-                            Text(state.selectedModel ?: "Choose a model", modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Start)
-                            Icon(Icons.Default.ExpandMore, contentDescription = "Choose model")
-                        }
-                        DropdownMenu(expanded = modelsExpanded, onDismissRequest = { modelsExpanded = false }) {
-                            state.availableModels.forEach { model ->
-                                DropdownMenuItem(
-                                    text = { Text(model) },
-                                    trailingIcon = if (model == state.selectedModel) ({ Icon(Icons.Default.Check, contentDescription = null) }) else null,
-                                    onClick = {
-                                        modelsExpanded = false
-                                        actions.onModelSelected(model)
-                                    },
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            SettingsSection(title = "Workspace", icon = Icons.Default.FolderOpen) {
-                if (state.isLoadingWorkspace) {
-                    Text("Loading workspace files…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } else if (state.workspaceError != null) {
-                    Text(state.workspaceError, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                } else {
-                    Text(
-                        if (state.workspaceFiles.isEmpty()) "No workspace files loaded." else "${state.workspaceFiles.size} files loaded.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                OutlinedButton(onClick = actions.onOpenWorkspaceFiles, modifier = Modifier.fillMaxWidth()) {
-                    Icon(Icons.Default.FolderOpen, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Open workspace files")
-                }
-            }
-
-            SettingsSection(title = "Updates", icon = Icons.Default.Refresh) {
-                StatusLine(
-                    title = "Version ${dev.androidagent.app.BuildConfig.VERSION_NAME}",
-                    detail = when (val s = state.updateStatus) {
-                        is UpdateStatus.Checking -> "Checking for updates…"
-                        is UpdateStatus.UpToDate -> "App is up to date (${s.currentVersion})"
-                        is UpdateStatus.Available -> "New version v${s.info.latestVersionName} available"
-                        is UpdateStatus.Downloading -> "Downloading update: ${(s.progress * 100).toInt()}%"
-                        is UpdateStatus.ReadyToInstall -> "Update downloaded and ready to install"
-                        is UpdateStatus.Error -> "Check failed: ${s.message}"
-                        UpdateStatus.Idle -> state.updateInfo?.let {
-                            if (it.isUpdateAvailable) "Update v${it.latestVersionName} available" else "Up to date"
-                        } ?: "Check GitHub for new releases"
-                    },
-                    color = when (state.updateStatus) {
-                        is UpdateStatus.Available, is UpdateStatus.ReadyToInstall -> MaterialTheme.colorScheme.secondary
-                        is UpdateStatus.Error -> MaterialTheme.colorScheme.error
-                        else -> MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
-                if (state.updateStatus is UpdateStatus.Downloading) {
-                    val dl = state.updateStatus as UpdateStatus.Downloading
-                    LinearProgressIndicator(
-                        progress = { dl.progress },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-                if (state.updateStatus is UpdateStatus.ReadyToInstall) {
-                    Button(
-                        onClick = actions.onInstallUpdate,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("Install update")
-                    }
-                } else if (state.updateStatus is UpdateStatus.Available || (state.updateInfo?.isUpdateAvailable == true && state.updateStatus !is UpdateStatus.Downloading)) {
-                    Button(
-                        onClick = actions.onDownloadUpdate,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("Download update")
-                    }
-                }
-                OutlinedButton(
-                    onClick = actions.onCheckForUpdates,
-                    enabled = state.updateStatus !is UpdateStatus.Checking && state.updateStatus !is UpdateStatus.Downloading,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    if (state.updateStatus is UpdateStatus.Checking) {
-                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Checking…")
-                    } else {
-                        Icon(Icons.Default.Refresh, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Check for updates")
-                    }
-                }
-            }
-            Spacer(Modifier.height(12.dp))
-        }
-    }
-}
-
-@Composable
-private fun SettingsSection(
-    title: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    content: @Composable ColumnScope.() -> Unit,
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.38f)),
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-            content = {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                    Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                }
-                content()
-            },
-        )
-    }
-}
-
-@Composable
-private fun StatusLine(title: String, detail: String, color: Color) {
-    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        Box(modifier = Modifier.padding(top = 5.dp).size(9.dp).clip(CircleShape).background(color))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(title, fontWeight = FontWeight.Medium)
-            Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
 private fun readableRunPhase(phase: RunPhase): String = when (phase) {
     RunPhase.IDLE -> "Ready"
     RunPhase.STARTING -> "Starting"
@@ -1925,30 +1456,8 @@ private fun readableRunPhase(phase: RunPhase): String = when (phase) {
     RunPhase.ERROR -> "Run error"
 }
 
-private fun readableRuntimePhase(phase: RuntimePhase): String = when (phase) {
-    RuntimePhase.MISSING -> "Runtime not ready"
-    RuntimePhase.PREPARING -> "Preparing runtime"
-    RuntimePhase.READY -> "Runtime ready"
-    RuntimePhase.RUNNING -> "Runtime running"
-    RuntimePhase.ERROR -> "Runtime error"
-}
 
-private fun readableConnectionPhase(phase: ConnectionPhase): String = when (phase) {
-    ConnectionPhase.DISCONNECTED -> "ADB disconnected"
-    ConnectionPhase.DISCOVERING -> "Discovering ADB"
-    ConnectionPhase.PAIRING -> "Pairing ADB"
-    ConnectionPhase.CONNECTING -> "Connecting ADB"
-    ConnectionPhase.CONNECTED -> "ADB connected"
-    ConnectionPhase.ERROR -> "ADB error"
-}
 
-@Composable
-private fun statusColor(value: Any): Color = when (value) {
-    RuntimePhase.READY, RuntimePhase.RUNNING, ConnectionPhase.CONNECTED -> MaterialTheme.colorScheme.secondary
-    RuntimePhase.ERROR, ConnectionPhase.ERROR -> MaterialTheme.colorScheme.error
-    RuntimePhase.PREPARING, ConnectionPhase.DISCOVERING, ConnectionPhase.PAIRING, ConnectionPhase.CONNECTING -> MaterialTheme.colorScheme.primary
-    else -> MaterialTheme.colorScheme.onSurfaceVariant
-}
 
 private fun formatBytes(bytes: Long): String = when {
     bytes < 1024L -> "$bytes B"

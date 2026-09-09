@@ -208,7 +208,44 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         mutable.update { it.copy(accountStatus = status, isSettingsOpen = true, errorMessage = null) }
     }
     fun logout() = task { check(!graph.coordinator.state.value.active && !graph.voice.state.value.active) { "Stop the current run or voice conversation before signing out." }; graph.engine.logout(); mutable.update { it.copy(accountStatus = AccountStatus(false, "Sign in to Codex")) } }
-    fun refreshAccount() = task { if (graph.runtime.status.value.phase in setOf(RuntimePhase.READY, RuntimePhase.RUNNING)) { val account = graph.engine.account(); mutable.update { it.copy(accountStatus = account) }; runCatching { graph.engine.refreshUsage() } } }
+    fun refreshAccount() = task {
+        if (graph.runtime.status.value.phase !in setOf(RuntimePhase.READY, RuntimePhase.RUNNING)) return@task
+        mutable.update { it.copy(isRefreshingAccount = true) }
+        try {
+            val account = graph.engine.account()
+            mutable.update { it.copy(accountStatus = account) }
+            runCatching { graph.engine.refreshUsage() }
+        } finally {
+            mutable.update { it.copy(isRefreshingAccount = false) }
+        }
+    }
+
+    /**
+     * Re-read the grants that are changed in system Settings rather than in a
+     * permission dialog, plus the accessibility switch. Nothing here is
+     * observable, so the app has to look again every time it comes back.
+     */
+    fun refreshPermissions() {
+        val app = getApplication<Application>()
+        val notifications = android.os.Build.VERSION.SDK_INT < 33 ||
+            androidx.core.content.ContextCompat.checkSelfPermission(app, android.Manifest.permission.POST_NOTIFICATIONS) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        val microphone = androidx.core.content.ContextCompat.checkSelfPermission(app, android.Manifest.permission.RECORD_AUDIO) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        val permissions = DevicePermissions(
+            overlay = runCatching { android.provider.Settings.canDrawOverlays(app) }.getOrDefault(false),
+            notifications = notifications,
+            installUnknownApps = runCatching { updateManager.canRequestPackageInstalls() }.getOrDefault(false),
+            microphone = microphone,
+        )
+        // The accessibility switch is only observed when the service binds, so a
+        // switch that was turned on but never started would otherwise stay stale
+        // exactly in the restricted-settings case the UI warns about.
+        val a11y = runCatching { dev.androidagent.a11y.A11yAvailability.status(app) }.getOrNull()
+        mutable.update { state ->
+            state.copy(permissions = permissions, a11yStatus = a11y ?: state.a11yStatus)
+        }
+    }
     private suspend fun loadModels() {
         mutable.update { it.copy(isLoadingModels = true) }
         try {
@@ -290,15 +327,51 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         }
         finally { mutable.update { it.copy(isDiscoveringAdb = false) } }
     }
+    /**
+     * Pair and then connect without asking for a second port. The transport
+     * finds the connect port from the services this phone advertises; the
+     * manual [connect] path stays for networks where discovery is blocked.
+     */
     fun pair(code: String, port: String) = task {
         check(!graph.coordinator.state.value.active) { "Stop the current run before changing the connection." }
-        mutable.update { it.copy(isPairing = true) }
+        pairAndConnect(code.trim(), parsePort(port))
+    }
+
+    /**
+     * Read the pairing code off the system dialog instead of asking the user to
+     * carry it back: the dialog wipes the code the moment it closes, which is
+     * why typing it meant splitting the screen.
+     */
+    fun capturePairing() = task {
+        check(!graph.coordinator.state.value.active) { "Stop the current run before changing the connection." }
+        if (!dev.androidagent.a11y.PairingWatcher.available) {
+            mutable.update {
+                it.copy(infoMessage = "Turn on Screen control to read the code automatically, or type it below.")
+            }
+            return@task
+        }
+        mutable.update {
+            it.copy(infoMessage = "Tap \"Pair device with pairing code\" — the code is read from the dialog.", errorMessage = null)
+        }
+        val details = dev.androidagent.a11y.PairingWatcher.await()
+        if (details == null) {
+            mutable.update { it.copy(infoMessage = "No pairing dialog was found. Type the code below instead.") }
+            return@task
+        }
+        pairAndConnect(details.code, details.port)
+    }
+
+    private suspend fun pairAndConnect(code: String, port: Int) {
+        mutable.update { it.copy(isPairing = true, errorMessage = null) }
         try {
-            graph.adb.pair(parsePort(port), code.trim())
-            mutable.update { it.copy(infoMessage = "Paired. Looking for the Wireless Debugging connect port…") }
+            val connected = graph.adb.pairAndConnect(port, code) { progress ->
+                mutable.update { it.copy(infoMessage = progress) }
+            }
+            mutable.update { it.copy(infoMessage = "Connected on port $connected.") }
+        } finally {
+            mutable.update { it.copy(isPairing = false) }
             discover()
         }
-        finally { mutable.update { it.copy(isPairing = false) } }
     }
     fun connect(port: String) = task {
         check(!graph.coordinator.state.value.active) { "Stop the current run before changing the connection." }
