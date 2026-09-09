@@ -27,6 +27,15 @@ not production-ready.
   the serializer, both parsers and the ADB gateway wiring only; it was **not**
   run against WhatsApp or any physical phone, so the original reproduction is
   still unverified on hardware.
+- Per-operation device capability reporting (issue #44) passed JVM tests and a
+  dev debug build on 2026-09-10. New tests cover the composite union over live
+  backends, the ready/blocked split, an ADB gateway that reports nothing while
+  disconnected, and a runtime snapshot that lists the accessibility tools by
+  name and no longer emits "Do not call device tools". This proves the snapshot
+  text and the gateway plumbing only; the reported scenario — accessibility on,
+  Wireless ADB off, `open_intent` on a WhatsApp deep link — has **not** been
+  re-run on a phone. The accessibility gateway's own `readyTools()` is not unit
+  tested, because `A11yServiceHandle` needs a bound service.
 - The app has Compose chat, per-session workspace storage, Codex app-server
   integration, Wireless ADB support, an accessibility device backend, visible
   control state, local Stop, skills, workflows, and experimental realtime voice

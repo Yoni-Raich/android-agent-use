@@ -229,7 +229,10 @@ class AgentCoordinator(
             }
             overlay.updateState(OverlayState(OverlayPhase.THINKING))
             beginTurn(token)
-            val startedTurn = engine.startTurn(openedThread, prompt, images, reasoningEffort, skill, adbStatus())
+            val startedTurn = engine.startTurn(
+                openedThread, prompt, images, reasoningEffort, skill,
+                DeviceCapabilities.of(tools, adbStatus()),
+            )
             if (!activateTurn(token, startedTurn)) return
             ensureCurrent(token)
             runCompletion.await()

@@ -70,6 +70,19 @@ class CompositeDeviceToolGateway(
     override fun statusLine(): String? =
         members.mapNotNull { it.statusLine() }.joinToString(" | ").takeIf { it.isNotEmpty() }
 
+    /**
+     * The union over live members, restricted to what this composite actually
+     * advertises.
+     *
+     * A name served by a dead first choice and a live fallback is ready: that
+     * is exactly what the fallback chain is for, and it is why a down ADB
+     * transport does not make `read_ui` or `open_intent` unavailable.
+     */
+    override fun readyTools(): Set<String> {
+        val live = members.flatMap { member -> runCatching { member.readyTools() }.getOrDefault(emptySet()) }
+        return definitions.map { it.name }.toSet() intersect live.toSet()
+    }
+
     override suspend fun invoke(name: String, arguments: JsonObject): ToolResult {
         if (name == "device_status") {
             // Only the composite knows every backend, so it answers this itself.

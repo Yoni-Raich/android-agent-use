@@ -243,6 +243,19 @@ class AndroidDeviceToolsTest {
         assertTrue(tools.needsControl("unknown_future_tool"))
     }
 
+    @Test fun noToolIsReadyWhileTheAdbTransportIsDown() {
+        // Everything this backend does needs the transport, so a disconnected
+        // ADB serves nothing. The advertised surface is untouched.
+        val tools = AndroidDeviceTools(FakeAdb(ConnectionPhase.DISCONNECTED))
+        assertTrue(tools.readyTools().isEmpty())
+        assertTrue(tools.definitions.isNotEmpty())
+    }
+
+    @Test fun everyAdvertisedToolIsReadyOnceAdbIsConnected() {
+        val tools = AndroidDeviceTools(FakeAdb())
+        assertEquals(tools.definitions.map { it.name }.toSet(), tools.readyTools())
+    }
+
     @Test fun shellInjectionSafelyQuotedInOpenApp() {
         val adb = FakeAdb()
         val tools = AndroidDeviceTools(adb)
@@ -538,8 +551,8 @@ class AndroidDeviceToolsTest {
         assertEquals(1, adb.calls)
     }
 
-    private class FakeAdb : AdbTransport {
-        private val state = MutableStateFlow(AdbStatus(ConnectionPhase.CONNECTED, "ok", 1))
+    private class FakeAdb(phase: ConnectionPhase = ConnectionPhase.CONNECTED) : AdbTransport {
+        private val state = MutableStateFlow(AdbStatus(phase, "ok", 1))
         override val status: StateFlow<AdbStatus> = state.asStateFlow()
         var calls = 0
         var lastCommand: String? = null

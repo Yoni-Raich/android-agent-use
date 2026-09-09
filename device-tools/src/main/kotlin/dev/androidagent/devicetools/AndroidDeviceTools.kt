@@ -3,6 +3,7 @@ package dev.androidagent.devicetools
 import dev.androidagent.adb.AdbFileTransport
 import dev.androidagent.core.AdbTransport
 import dev.androidagent.core.CommandResult
+import dev.androidagent.core.ConnectionPhase
 import dev.androidagent.core.DeviceToolGateway
 import dev.androidagent.core.READ_UI_DESCRIPTION
 import dev.androidagent.core.ObservationFingerprint
@@ -101,6 +102,18 @@ class AndroidDeviceTools(
         val port = s.port?.toString() ?: "-"
         return "ADB: phase=${s.phase} port=$port ${s.message}"
     }
+
+    /**
+     * Nothing here works without the transport, so a disconnected ADB serves
+     * no tool at all. The advertised list is untouched: a call still fails
+     * with its own typed error, this only tells the turn snapshot the truth.
+     */
+    override fun readyTools(): Set<String> =
+        if (adb.status.value.phase == ConnectionPhase.CONNECTED) {
+            definitions.map { it.name }.toSet()
+        } else {
+            emptySet()
+        }
 
     override suspend fun invoke(name: String, arguments: JsonObject): ToolResult {
         val ws = workspace
