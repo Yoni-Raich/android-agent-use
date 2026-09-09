@@ -7,6 +7,16 @@
 - Added the current screen-awake behavior for active typed and voice runs.
   Physical voice and broader end-to-end checks remain open.
 
+## 0.6.1 — 2026-09-09
+
+- Added the `repo-structure-guard` skill for agents that develop this
+  repository. It documents module ownership, safe paths, generated files,
+  worktree rules, evidence boundaries, and release checks.
+- Added the setup hub, quota meter, run indicator, pairing scan, and bounded
+  ADB setup flow from the merged `main` changes.
+- Built a dev-flavor test APK with v3 debug signing for the release candidate;
+  it is not published yet.
+
 ## 0.6.0 — 2026-09-08
 
 - Added workflows, intent handling, knowledge storage, accessibility capture,

@@ -17,6 +17,24 @@ This is test-only signing. It is installable for local testing, not a production
 release. The public release page is
 [v0.6.0 on GitHub](https://github.com/Yoni-Raich/android-agent-use/releases/tag/v0.6.0).
 
+## 0.6.1 release candidate
+
+The v0.6.1 candidate was built on 2026-09-09 from the latest validated `main`
+history plus the repository structure guard documentation:
+
+- package: `dev.androidagent.app.dev`;
+- versionCode: `17`;
+- APK: `android-agent-0.6.1.apk`;
+- SHA-256: `DAA863A1BC0D9379526F8404423F684AB3A1368DE27A2119B40E90D71B832732`;
+- signing: APK Signature Scheme v3 with the local Android debug key;
+- validation: full Gradle gate, runtime staging tests, metadata, zip alignment,
+  and v3 signature verification passed;
+- device status: not installed or tested on a physical phone in this release
+  step;
+- publication status: candidate only; it is not a public GitHub release yet.
+
+The signed local artifact is kept under the ignored `artifacts/` directory.
+
 ## Version rules
 
 Before a release, update both `versionCode` and `versionName` in

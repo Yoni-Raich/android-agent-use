@@ -11,6 +11,13 @@ evidence and small changes matter more than broad claims.
 - Do not commit credentials, tokens, pairing codes, keystores, raw private
   screen captures, or generated build output.
 
+## Repository work by agents
+
+Before an agent changes, reviews, builds, releases, cleans, or adds a skill,
+read [repo-structure-guard](.agents/skills/repo-structure-guard/SKILL.md).
+It is a development-repository skill and is not shipped in the APK. On-device
+skills belong under `app/src/main/assets/agent_stack/skills/`.
+
 ## Pull requests
 
 - Use a focused branch and a conventional commit message.
