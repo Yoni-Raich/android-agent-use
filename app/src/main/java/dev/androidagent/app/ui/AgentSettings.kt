@@ -40,6 +40,7 @@ import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Login
+import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Logout
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.MicNone
@@ -66,6 +67,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ModalBottomSheetProperties
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -89,6 +91,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.androidagent.app.update.UpdateStatus
+import dev.androidagent.connectors.PermissionMode
 import dev.androidagent.core.ConnectionPhase
 import dev.androidagent.core.RuntimePhase
 import dev.androidagent.core.SetupChecklist
@@ -104,7 +107,7 @@ import dev.androidagent.core.UsageSummary
 private enum class SettingsRoute {
     RUNTIME, ACCOUNT, SCREEN_CONTROL, FLOATING_CONTROL, WIRELESS_ADB,
     NOTIFICATIONS, INSTALL_UPDATES, MICROPHONE,
-    MODEL, WORKSPACE, USAGE, UPDATES,
+    CONNECTIONS, MODEL, WORKSPACE, USAGE, UPDATES,
 }
 
 private fun SetupItem.route(): SettingsRoute = when (this) {
@@ -127,6 +130,7 @@ private fun SettingsRoute.title(): String = when (this) {
     SettingsRoute.NOTIFICATIONS -> "Notifications"
     SettingsRoute.INSTALL_UPDATES -> "Install updates"
     SettingsRoute.MICROPHONE -> "Voice input"
+    SettingsRoute.CONNECTIONS -> "Connections"
     SettingsRoute.MODEL -> "Model"
     SettingsRoute.WORKSPACE -> "Workspace"
     SettingsRoute.USAGE -> "Usage"
@@ -142,6 +146,7 @@ private fun SettingsRoute.icon(): ImageVector = when (this) {
     SettingsRoute.NOTIFICATIONS -> Icons.Outlined.NotificationsNone
     SettingsRoute.INSTALL_UPDATES -> Icons.Outlined.Download
     SettingsRoute.MICROPHONE -> Icons.Outlined.MicNone
+    SettingsRoute.CONNECTIONS -> Icons.Outlined.Link
     SettingsRoute.MODEL -> Icons.Outlined.Tune
     SettingsRoute.WORKSPACE -> Icons.Outlined.Folder
     SettingsRoute.USAGE -> Icons.Outlined.DataUsage
@@ -268,6 +273,14 @@ private fun SettingsHub(state: AgentUiState, onOpen: (SettingsRoute) -> Unit) {
     // green would teach the eye to skip the markers that do mean something.
     HubGroup("Configure") {
         SettingsHubRow(
+            icon = SettingsRoute.CONNECTIONS.icon(),
+            title = SettingsRoute.CONNECTIONS.title(),
+            summary = if (state.githubConnector.connected) {
+                "GitHub connected${state.githubConnector.accountLogin?.let { " as @$it" }.orEmpty()}"
+            } else "Connect tools such as GitHub",
+            onClick = { onOpen(SettingsRoute.CONNECTIONS) },
+        )
+        SettingsHubRow(
             icon = SettingsRoute.MODEL.icon(),
             title = SettingsRoute.MODEL.title(),
             summary = state.selectedModel ?: "Not chosen yet",
@@ -308,10 +321,106 @@ private fun SettingsDetail(route: SettingsRoute, state: AgentUiState, actions: A
             SettingsRoute.NOTIFICATIONS -> NotificationSettings(state, actions)
             SettingsRoute.INSTALL_UPDATES -> InstallUpdatesSettings(state, actions)
             SettingsRoute.MICROPHONE -> MicrophoneSettings(state, actions)
+            SettingsRoute.CONNECTIONS -> ConnectorSettings(state, actions)
             SettingsRoute.MODEL -> ModelSettings(state, actions)
             SettingsRoute.WORKSPACE -> WorkspaceSettings(state, actions)
             SettingsRoute.USAGE -> UsageSettings(state, actions)
             SettingsRoute.UPDATES -> UpdateSettings(state, actions)
+        }
+    }
+}
+
+@Composable
+private fun ColumnScope.ConnectorSettings(state: AgentUiState, actions: AgentUiActions) {
+    val github = state.githubConnector
+    val uriHandler = LocalUriHandler.current
+    Text("Connector store", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+    Explanation("Connect official services once. Their MCP tools then become available to the agent on this phone.")
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("GitHub", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text("Official MCP", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+            }
+            StatusLine(
+                title = if (github.connected) "Connected" else if (github.connecting) "Connecting" else "Not connected",
+                detail = github.accountLogin?.let { "@$it · ${github.status}" } ?: github.status,
+                color = if (github.connected) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Text("Agent access", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            PermissionMode.entries.forEach { mode ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(
+                        selected = github.permissionMode == mode,
+                        onClick = { actions.onGitHubPermissionChanged(mode) },
+                        enabled = !github.connecting,
+                    )
+                    Column {
+                        Text(
+                            when (mode) {
+                                PermissionMode.READ_ONLY -> "Prompt every tool (read-only hint)"
+                                PermissionMode.ASK_BEFORE_WRITES -> "Ask before writes"
+                                PermissionMode.FULL_CONTROL -> "Full control"
+                            },
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Text(
+                            when (mode) {
+                                PermissionMode.READ_ONLY -> "Every GitHub tool needs your approval; the server is asked to expose read-only tools."
+                                PermissionMode.ASK_BEFORE_WRITES -> "Reads run directly; every write needs your approval."
+                                PermissionMode.FULL_CONTROL -> "All tools allowed by your GitHub account can run directly."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+
+            if (github.connecting && github.userCode != null && github.verificationUrl != null) {
+                Explanation("Open GitHub, sign in, and enter this one-time code:")
+                SelectionContainer {
+                    Text(
+                        github.userCode,
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 2.sp,
+                    )
+                }
+                Button(
+                    onClick = { uriHandler.openUri(github.verificationUrl) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Open GitHub") }
+                OutlinedButton(onClick = actions.onCancelGitHubConnect, modifier = Modifier.fillMaxWidth()) {
+                    Text("Cancel")
+                }
+            } else if (github.connected) {
+                if (github.toolCount > 0) Explanation("${github.toolCount} GitHub MCP tools are ready.")
+                OutlinedButton(onClick = actions.onDisconnectGitHub, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Outlined.DeleteOutline, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Disconnect GitHub")
+                }
+            } else {
+                Button(
+                    onClick = actions.onConnectGitHub,
+                    enabled = github.available && !github.connecting,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Outlined.Link, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Connect GitHub")
+                }
+                if (!github.available) {
+                    Explanation("This development build needs the public GitHub OAuth client ID before sign-in can start.")
+                }
+            }
+            Explanation("The access token is encrypted with Android Keystore. It is never written to Codex config or shown in logs.")
         }
     }
 }
@@ -767,11 +876,11 @@ private fun ColumnScope.WorkspaceSettings(state: AgentUiState, actions: AgentUiA
         Text(state.workspaceError, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
     } else {
         Explanation(
-            if (state.workspaceFiles.isEmpty()) "No workspace files loaded." else "${state.workspaceFiles.size} files loaded.",
+            "The files of this chat, plus the shared memory and skills the agent keeps across every chat.",
         )
     }
     OutlinedButton(onClick = actions.onOpenWorkspaceFiles, modifier = Modifier.fillMaxWidth()) {
-        LoadingButtonContent(loading = false, icon = Icons.Outlined.Folder, label = "Open workspace files")
+        LoadingButtonContent(loading = false, icon = Icons.Outlined.Folder, label = "Browse files")
     }
 }
 

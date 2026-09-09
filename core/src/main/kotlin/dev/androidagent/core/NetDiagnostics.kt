@@ -224,6 +224,8 @@ object NetDiagnostics {
             Regex("""\beyJ[A-Za-z0-9\-_]{8,}\.[A-Za-z0-9\-_]{8,}\.[A-Za-z0-9\-_]{8,}""") to "[REDACTED-JWT]",
             // OpenAI-style secret keys.
             Regex("""\bsk-[A-Za-z0-9\-_]{8,}""") to "[REDACTED-KEY]",
+            // GitHub OAuth and fine-grained personal access tokens.
+            Regex("""(?i)\b(?:github_pat_|gh[opurs]_)[A-Za-z0-9_]+""") to "[REDACTED-GITHUB-TOKEN]",
             // Bearer credentials.
             Regex("""(?i)(bearer\s+)[^\s;,\"']{4,}""") to "$1[REDACTED]",
             // Named secret fields (JSON or log style): keep the key, drop value.

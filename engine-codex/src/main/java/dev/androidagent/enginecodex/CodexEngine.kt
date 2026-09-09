@@ -8,13 +8,22 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
 import java.io.BufferedWriter
 import java.io.File
+import java.io.IOException
 import java.util.Base64
 import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
-class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoiceEngine {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoiceEngine, ConnectorEngineControl {
+    // A stream pump losing its process is routine shutdown, not a programming
+    // error. Without a handler here an uncaught failure in one of the launched
+    // readers reaches Android's default uncaught-exception handler and takes
+    // the whole app down, so it is recorded as diagnostics instead.
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, error ->
+            recordStderr("codex stream pump failed: ${error.javaClass.simpleName}: ${error.message}")
+        },
+    )
     private val connectLock = Mutex()
     private val writeLock = Mutex()
     private val pending = ConcurrentHashMap<String, CompletableDeferred<JsonObject>>()
@@ -31,6 +40,7 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
     private var process: Process? = null
     private var writer: BufferedWriter? = null
     private var readerJob: Job? = null
+    private var stderrJob: Job? = null
     private var initialized = false
     private val json = Json { ignoreUnknownKeys = true }
     private val stderrLock = Any()
@@ -76,9 +86,19 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
                 }
             }
         }
-        scope.launch {
-            started.errorStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
-                lines.forEach { if (isActive) recordStderr(it) }
+        stderrJob?.cancel()
+        stderrJob = scope.launch {
+            // close() destroys the process, which closes this stream under the
+            // blocked read and raises InterruptedIOException. That is the normal
+            // way this pump ends and must never surface as a fatal exception.
+            try {
+                started.errorStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
+                    lines.forEach { if (isActive) recordStderr(it) }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: IOException) {
+                // The app-server exited; the reader loop reports the outcome.
             }
         }
         request("initialize", buildJsonObject {
@@ -111,6 +131,70 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
     override suspend fun logout() { connect(); request("account/logout", buildJsonObject {}); stream.emit(EngineEvent.AccountChanged(AccountStatus(false, "Sign in to Codex"))) }
 
     override suspend fun models(): List<String> = modelCatalog().map { it.id }
+
+    override suspend fun configureMcpServer(config: McpHttpServerConfig) {
+        connect()
+        request("config/batchWrite", buildJsonObject {
+            put("edits", buildJsonArray {
+                add(buildJsonObject {
+                    put("keyPath", "mcp_servers.${config.name}")
+                    put("mergeStrategy", "replace")
+                    put("value", buildJsonObject {
+                        put("url", config.url)
+                        put("bearer_token_env_var", config.bearerTokenEnvironmentVariable)
+                        put("enabled", config.enabled)
+                        put("supports_parallel_tool_calls", false)
+                        put("default_tools_approval_mode", config.approvalMode.wireValue)
+                        if (config.httpHeaders.isNotEmpty()) {
+                            put("http_headers", buildJsonObject {
+                                config.httpHeaders.forEach { (name, value) -> put(name, value) }
+                            })
+                        }
+                    })
+                })
+            })
+            put("reloadUserConfig", true)
+        })
+    }
+
+    override suspend fun removeMcpServer(name: String) {
+        connect()
+        request("config/value/write", buildJsonObject {
+            put("keyPath", "mcp_servers.$name")
+            put("value", JsonNull)
+            put("mergeStrategy", "replace")
+        })
+    }
+
+    override suspend fun reloadMcpServers() {
+        connect()
+        request("config/mcpServer/reload", buildJsonObject {})
+    }
+
+    override suspend fun listMcpServers(threadId: String?): List<McpServerSnapshot> {
+        connect()
+        val result = request("mcpServerStatus/list", buildJsonObject {
+            put("detail", "full")
+            put("limit", 100)
+            if (!threadId.isNullOrBlank()) put("threadId", threadId)
+        })
+        return parseMcpServerSnapshots(result)
+    }
+
+    override suspend fun callMcpTool(
+        threadId: String,
+        server: String,
+        tool: String,
+        arguments: JsonObject,
+    ): JsonObject {
+        connect()
+        return request("mcpServer/tool/call", buildJsonObject {
+            put("threadId", threadId)
+            put("server", server)
+            put("tool", tool)
+            put("arguments", arguments)
+        })
+    }
 
     override suspend fun modelCatalog(): List<AgentModel> {
         connect()
@@ -297,6 +381,8 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
         voiceClosedSignal = null
         mutableVoiceState.value = VoiceState(VoicePhase.IDLE, "Closed", closedVoiceThreadId)
         readerJob?.cancel()
+        stderrJob?.cancel()
+        stderrJob = null
         withContext(Dispatchers.IO) { runCatching { writer?.close() }; writer = null }
         runtime.stop()
         process = null
@@ -338,6 +424,24 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
                 stream.emit(EngineEvent.ToolCall(id, params.string("tool"), value, params.string("threadId"), params.string("turnId")))
             }
             id != null && method.endsWith("requestApproval") -> stream.emit(EngineEvent.Approval(id, method, params, params.string("threadId"), params.string("turnId")))
+            method == "mcpServer/startupStatus/updated" -> {
+                stream.emit(
+                    EngineEvent.McpStatusChanged(
+                        server = params.string("name"),
+                        phase = parseMcpPhase(params.string("status")),
+                        error = params.string("error").ifBlank { null },
+                    )
+                )
+            }
+            method == "mcpServer/oauthLogin/completed" -> {
+                stream.emit(
+                    EngineEvent.McpOauthCompleted(
+                        server = params.string("name"),
+                        success = (params["success"] as? JsonPrimitive)?.booleanOrNull == true,
+                        error = params.string("error").ifBlank { null },
+                    )
+                )
+            }
             method == "thread/realtime/started" -> {
                 val threadId = params.string("threadId")
                 val sessionId = params.string("realtimeSessionId").ifBlank { null }
@@ -451,6 +555,8 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
         voiceStream.emit(VoiceEvent.Failure(safeMessage, threadId))
     }
 
+    private fun parseMcpPhase(value: String): McpRuntimePhase = parseMcpPhaseValue(value)
+
     /** Keep a redacted, bounded stderr tail so RPC failures retain their cause chain. */
     private fun recordStderr(line: String) {
         val safe = SecretRedactor.redactStderrLine(line)
@@ -506,6 +612,45 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
                         (window["windowDurationMins"] as? JsonPrimitive)?.longOrNull)
                 }
             }
+        }
+
+        /** Parse the app-server MCP status envelope without hiding protocol drift. */
+        internal fun parseMcpServerSnapshots(result: JsonObject): List<McpServerSnapshot> {
+            val values = result["data"] as? JsonArray
+                ?: error("MCP status response missing data")
+            return values.mapNotNull { element ->
+                val server = element as? JsonObject ?: return@mapNotNull null
+                val name = server.string("name").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val tools = (server["tools"] as? JsonArray).orEmpty().mapNotNull { toolElement ->
+                    val tool = toolElement as? JsonObject ?: return@mapNotNull null
+                    val toolName = tool.string("name").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    val annotations = tool["annotations"] as? JsonObject
+                    McpToolSummary(
+                        name = toolName,
+                        description = tool.string("description"),
+                        inputSchema = tool["inputSchema"] as? JsonObject ?: buildJsonObject {},
+                        readOnly = (annotations?.get("readOnlyHint") as? JsonPrimitive)?.booleanOrNull,
+                    )
+                }
+                McpServerSnapshot(
+                    name = name,
+                    authStatus = server.string("authStatus").ifBlank { "unknown" },
+                    phase = parseMcpPhaseValue(server.string("runtimeStatus")),
+                    tools = tools,
+                    error = server.string("error").ifBlank { null },
+                )
+            }
+        }
+
+        internal fun parseMcpPhaseValue(value: String): McpRuntimePhase = when (value.lowercase()) {
+            "notstarted", "not_started" -> McpRuntimePhase.NOT_STARTED
+            "starting" -> McpRuntimePhase.STARTING
+            "connected", "ready" -> McpRuntimePhase.CONNECTED
+            "authenticationrequired", "authentication_required" -> McpRuntimePhase.AUTHENTICATION_REQUIRED
+            "failed" -> McpRuntimePhase.FAILED
+            "cancelled" -> McpRuntimePhase.CANCELLED
+            "disabled" -> McpRuntimePhase.DISABLED
+            else -> McpRuntimePhase.UNKNOWN
         }
 
         /** Parse both the current model/list shape and older catalog aliases. */
@@ -767,7 +912,7 @@ Addressing Strategy:
 
 When a tool reports errorType "backend_unavailable" or "a11y_unavailable", no device action happened. Read its "remedy" and tell the user what to enable rather than retrying the same call. "no_text_focus" means you must tap the field before typing.
 
-Use the skills catalog supplied by Codex. Read a skill's full SKILL.md when its description matches the task or when the user explicitly invokes it with `${'$'}skill-name`. Consult AGENTS.md and preferences.json in the current workspace for project guidance and durable preferences.
+Use the skills catalog supplied by Codex. Read a skill's full SKILL.md when its description matches the task or when the user explicitly invokes it with `${'$'}skill-name`. Consult AGENTS.md in the current workspace for project guidance, and `~/memory/preferences.json` for durable user preferences. Anything the user asks you to remember belongs in a skill under `~/.agents/skills`, with its data in `~/memory/<skill-name>/`; the `personal-skills` skill has the recipe. The workspace itself is rebuilt on every open, so nothing written there survives the chat.
 
 Golden Rules:
 - Finish every turn with a separate user-facing final answer in the user's language. Say what completed, what failed, and what remains. A tool result or progress update is never the final answer. Do not claim success without evidence.

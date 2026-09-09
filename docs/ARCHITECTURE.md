@@ -7,6 +7,7 @@ One Android project, with replaceable modules and small core contracts.
 | app | Compose chat, setup, foreground lifecycle, dependency wiring |
 | core | Neutral contracts, coordinator, run state, local cancellation |
 | engine-codex | Bidirectional Codex app-server protocol and event mapping |
+| connectors | Provider-neutral connector catalog, GitHub Device Flow, secure token vault, and connector policy |
 | voice | Android microphone, speaker, and realtime audio lifecycle |
 | runtime | On-phone executable provisioning and process supervision |
 | workspace | Durable sessions, messages, artifacts and session directories |
@@ -168,16 +169,18 @@ catalog:
   `$HOME/.agents/skills` before the Codex app-server starts. It removes only
   app-managed legacy copies from the workspace `.agents/skills/`,
   `.codex/skills/`, and `$CODEX_HOME/skills`; unrelated skills are preserved.
-- **Layer 4: Durable Preferences**: `preferences.json` in the session workspace
+- **Layer 4: Durable Preferences**: `<homeDirectory>/memory/preferences.json`
   retains user defaults (preferred messaging apps, addresses) to prevent
-  redundant questioning while respecting intent fidelity.
+  redundant questioning while respecting intent fidelity. It is global across
+  chats; the per-session copy earlier releases wrote is absorbed into it once,
+  at app start, and then removed.
 - **Catalog and composer**: For each session workspace, the pinned app-server
   is queried through `skills/list` with that workspace as the CWD. The composer
   uses the returned catalog and explicit `$skill-name` invocations; the turn
   includes Codex's native skill input item with the catalog-provided name and
   path. `skills/changed` refreshes the catalog. There is no hard-coded
-  slash-skill list. `WorkspaceSeeder` still populates `AGENTS.md`, app cards,
-  `RECOVERY.md`, and `preferences.json` offline without duplicating skills.
+  slash-skill list. `WorkspaceSeeder` still populates `AGENTS.md`, app cards and
+  `RECOVERY.md` offline without duplicating skills.
 
 ## Bounded UI observation
 
@@ -486,6 +489,69 @@ tool name reaches the model without new plumbing, not because remembering is a
 device action — it touches no device, and `needsControl` is false for both
 tools.
 
+### What the user asks it to remember becomes a skill
+
+`KnowledgeStore` and `WorkflowStore` are both keyed by Android package, so they
+hold selectors and step sequences and nothing else. Everything else a user asks
+the agent to keep — a contact list, a lookup table, a procedure of their own —
+had nowhere to go but the session workspace, which is rebuilt from templates on
+every access. Writing it there is the same as discarding it.
+
+The durable form is a skill: a directory under `$HOME/.agents/skills` that the
+app-server already discovers through `skills/list` and offers back by name in
+every later chat. Nothing new was needed to make that work. What was missing was
+that the agent had never been told it could write one.
+
+**No tool was added for this.** Codex runs here with `sandbox:
+danger-full-access` and `approvalPolicy: never`, so its own shell can already
+create a directory, write a `SKILL.md` and drop a script beside it. A tool would
+have been a second, narrower way to do what a heredoc does, and four of them —
+one for notes, one for preferences, one for skills, one for recall — would have
+spent context on every turn to buy nothing. The bundled `personal-skills` skill
+carries the recipe instead: the shape, the front matter, the shell commands, and
+the worked contacts-to-`wa.me` example.
+
+Two directories, and the split between them matters:
+
+- `$HOME/.agents/skills/<name>/` — `SKILL.md` and any scripts.
+- `$HOME/memory/<name>/` — the data that skill reads.
+
+Data is kept out of the skill directory because `installDefaultSkills` replaces
+every app-managed skill *whole* on each start. That is what keeps them
+upgradeable, and it is why a lookup table stored inside one would be deleted by
+the next app update. `MemoryStore` owns `$HOME/memory`: the layout, a `README.md`
+that explains the split to whoever opens the folder, and `preferences.json`.
+
+Preferences merge rather than write-if-absent. The defaults run on every app
+start, so a key added by a later release reaches a phone that already has the
+file, while anything already recorded wins — a value the user chose is never
+replaced by the default it overrode. The per-session `preferences.json` that
+earlier releases wrote is absorbed once, at app start, newest file first, and
+each copy is removed after its content is safely merged. A file that cannot be
+parsed is left alone rather than deleted on a guess about what was in it.
+
+Scripts are invoked as `sh <path>`, never `./script`. App-private storage is
+mounted non-executable, so the execute bit does nothing; `/system/bin` is on the
+runtime's `PATH`, which is what makes `sh`, `sed` and `awk` available at all.
+
+### Seeing what was recorded
+
+The Files sheet lists three roots: this chat's workspace, `~/memory`, and the
+skills. It used to list only the workspace — the one root whose contents do not
+survive the chat — as a card appended to the conversation with no dismiss
+control, nothing to clear it, and a five-entry cap.
+
+Files open in an in-app viewer rather than through `ACTION_VIEW`. Everything the
+agent writes is Markdown or JSON; `MimeTypeMap` does not know `md`, and a chooser
+for `application/octet-stream` resolves to nothing on most phones, so the tap
+appeared to do nothing at all. The chooser remains as the fallback for types this
+app cannot render, and it now reports when nothing can handle the file instead of
+opening an empty picker.
+
+This screen is also the only way the user can audit what has been recorded about
+them, which is why `personal-skills` tells the agent to write as if it will be
+read.
+
 ## Why a 502 from the tunnel is now explained
 
 The proxy the app-server talks through is ours, injected deliberately because
@@ -542,11 +608,52 @@ call rather than captured, both because the composite contains this gateway -
 which would otherwise be a construction cycle - and so a step reaches whichever
 backend currently serves that tool.
 
-## Connected Apps: the surface exists, the answer does not
+## Connected Apps and MCP connector store
 
-`.codex-work/runtime/probe_apps.py` probes a running on-phone app-server for
-`app/list`, `app/installed`, `plugin/list`, `plugin/installed`,
-`mcpServerStatus/list` and `experimentalFeature/list`.
+The `connectors` module is the provider-neutral store boundary. Each provider
+contributes a definition, auth strategy, endpoint allowlist, permission modes,
+non-secret state, and a secure credential adapter. The first catalog entry is
+GitHub. Its runtime contribution is registered through the composite connector
+registry, so the runtime host and proxy do not need provider-specific changes
+when another connector is added. Colliding environment keys are rejected.
+GitHub uses the public OAuth App Device Flow, so the APK carries only the
+public client ID and never a client secret. The initial Issue flow requests
+only `repo` plus GitHub's `offline_access` refresh-token opt-in.
+
+After the user finishes the official GitHub device page, the app verifies
+`GET /user`, stores the token only in an AES-GCM blob protected by Android
+Keystore, and starts the Codex app-server with the token in an in-memory
+environment overlay. Credential and connector-state reads happen on the IO
+dispatcher. Only a `CONNECTED` snapshot exposes the cached token or egress
+host; expiry, reauthentication, disconnect, and configuration failure clear
+that runtime contribution. The token is not written to `config.toml`,
+preferences, RPC logs, proxy diagnostics, or UI state. The runtime CONNECT
+proxy adds only `api.githubcopilot.com` while the connector is enabled.
+
+The app writes the official remote MCP server at
+`https://api.githubcopilot.com/mcp/x/all`, then reloads and reads its tool
+status through app-server control methods. The UI exposes three local policy
+modes: prompt every tool (the local read-only safety mode, which also sends
+`X-MCP-Readonly: true` as a provider hint), ask before writes (the default,
+using Codex's `writes` approval mode), and full control (Codex's `approve`
+mode). The first mode guarantees that no GitHub tool runs without user
+approval; the remote hint is not treated as a hard security boundary. The
+GitHub token itself still cannot exceed the account and organization
+permissions granted by GitHub.
+
+The connector records a canonical SHA-256 tool-schema fingerprint based on tool
+names, descriptions, read-only annotations, and input schemas. If a user selected full
+control and the remote schema changes, the app automatically downgrades to
+ask-before-writes before exposing the changed tools; the warning is kept after
+the second status read. Disconnect removes and reloads the app-server entry,
+closing the supervised process only if that cleanup cannot be confirmed, and
+clears the Keystore-backed credential. A refresh watcher retries near-expiry
+tokens while the app is running; transient network failures retain the sealed
+refresh token, while explicit OAuth invalidation requires re-authentication.
+
+The older `.codex-work/runtime/probe_apps.py` probe remains useful for checking
+whether an app-server exposes the generic control surface, but it is not the
+connector store and it cannot authenticate a user's account.
 
 All six answer on the shipped build (rust-v0.153.4) rather than erroring, so
 the surface is present. `experimentalFeature/list` returns 135 flags, which is

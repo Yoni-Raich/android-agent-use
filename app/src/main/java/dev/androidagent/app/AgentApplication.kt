@@ -6,8 +6,10 @@ import dev.androidagent.a11y.A11yDeviceTools
 import dev.androidagent.adb.AndroidAdbTransport
 import dev.androidagent.core.AgentCoordinator
 import dev.androidagent.core.CompositeDeviceToolGateway
+import dev.androidagent.core.CompositeRuntimeConnector
 import dev.androidagent.core.KnowledgeStore
 import dev.androidagent.core.KnowledgeToolGateway
+import dev.androidagent.core.MemoryStore
 import dev.androidagent.core.ObservationState
 import dev.androidagent.core.WorkflowStore
 import dev.androidagent.core.WorkflowToolGateway
@@ -20,6 +22,7 @@ import dev.androidagent.workspace.LocalSessionStore
 import dev.androidagent.workspace.WorkspaceSeeder
 import dev.androidagent.voice.AndroidRealtimeVoiceController
 import kotlinx.coroutines.*
+import java.io.File
 
 class AgentApplication : Application() {
     lateinit var graph: AgentGraph
@@ -30,7 +33,9 @@ class AgentApplication : Application() {
 class AgentGraph(private val app: Application) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     val sessions = LocalSessionStore(app)
-    val runtime = AndroidRuntimeHost(app)
+    val githubConnector = GitHubConnectorController(app, BuildConfig.GITHUB_OAUTH_CLIENT_ID)
+    val runtimeConnectors = CompositeRuntimeConnector(listOf(githubConnector))
+    val runtime = AndroidRuntimeHost(app, runtimeConnectors, runtimeConnectors)
     val engine = CodexEngine(runtime)
     val adb = AndroidAdbTransport(app)
     private lateinit var runCoordinator: AgentCoordinator
@@ -79,10 +84,24 @@ class AgentGraph(private val app: Application) {
         get() = runCoordinator
     val queue: SessionRunQueue
     init {
+        githubConnector.attach(engine, engine)
         runCoordinator = AgentCoordinator(scope, engine, sessions, tools, overlay) { adb.status.value }
         queue = SessionRunQueue(scope, coordinator, sessions)
         runCatching {
             WorkspaceSeeder.installDefaultSkills(runtime.homeDirectory, app)
+        }
+        // Preferences were per-session until this release, so every existing
+        // chat holds a copy. Absorb them once, here, rather than per workspace:
+        // the global file is one file, and several open sessions seeding it at
+        // once would race for it.
+        runCatching {
+            WorkspaceSeeder.seedSharedMemory(
+                runtime.homeDirectory,
+                app,
+                legacyPreferences = sessions.sessionsRoot.listFiles()
+                    ?.map { File(it, "workspace/preferences.json") }
+                    .orEmpty(),
+            )
         }
     }
 }

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- The agent can now build its own skills, so anything the user asks it to
+  remember is available in every later chat. Added the bundled `personal-skills`
+  skill with the recipe, and `<homeDirectory>/memory` as the data directory
+  those skills read and write. No new tools: the runtime's own shell already
+  writes both directories.
+- Moved `preferences.json` out of the per-session workspace, where every chat
+  had its own copy and none of them lasted. Existing per-session files are
+  absorbed into the global one at first start and then removed.
+- Replaced the workspace-files card, which could not be dismissed and showed
+  five entries, with a Files sheet covering the chat workspace, the shared
+  memory and the skills, and an in-app viewer for Markdown and JSON.
+
 - Added public Developer Preview documentation, privacy notes, contribution
   guidance, and release evidence rules.
 - Added the current screen-awake behavior for active typed and voice runs.

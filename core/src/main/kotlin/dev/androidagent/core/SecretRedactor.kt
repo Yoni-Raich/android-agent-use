@@ -24,6 +24,7 @@ object SecretRedactor {
 
     private val bearerPattern = Regex("""(?i)\bBearer\s+[A-Za-z0-9\-._~+/=]{8,}""")
     private val apiKeyPattern = Regex("""\bsk-[A-Za-z0-9\-_]{8,}""")
+    private val githubTokenPattern = Regex("""(?i)\b(?:github_pat_|gh[opurs]_)[A-Za-z0-9_]+""")
     private val jwtPattern = Regex("""\beyJ[A-Za-z0-9\-_]{10,}\.[A-Za-z0-9\-_]{10,}[A-Za-z0-9\-_.]*""")
     private val keyValuePattern = Regex(
         """(?i)("?(?:access_token|refresh_token|id_token|api_key|apikey|authorization|cookie|set-cookie|user_code|userCode|device_code|deviceCode|client_secret|session_key|token)"?\s*[:=]\s*"?)([^",\s}]{3,})"""
@@ -42,6 +43,7 @@ object SecretRedactor {
         out = bearerPattern.replace(out, "Bearer [REDACTED]")
         out = jwtPattern.replace(out, "[REDACTED_JWT]")
         out = apiKeyPattern.replace(out, "[REDACTED_API_KEY]")
+        out = githubTokenPattern.replace(out, "[REDACTED_GITHUB_TOKEN]")
         out = keyValuePattern.replace(out, "\$1[REDACTED]")
         out = deviceCodePattern.replace(out, "\$1 [REDACTED]")
         out = bodyHintPattern.replace(out, "\$1[REDACTED]")
@@ -63,6 +65,7 @@ object SecretRedactor {
         out = bearerPattern.replace(out, "Bearer [REDACTED]")
         out = jwtPattern.replace(out, "[REDACTED_JWT]")
         out = apiKeyPattern.replace(out, "[REDACTED_API_KEY]")
+        out = githubTokenPattern.replace(out, "[REDACTED_GITHUB_TOKEN]")
         out = keyValuePattern.replace(out, "$1[REDACTED]")
         out = deviceCodePattern.replace(out, "$1 [REDACTED]")
         return out

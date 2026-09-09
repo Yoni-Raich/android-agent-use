@@ -4,6 +4,7 @@ import dev.androidagent.core.AgentModel
 import dev.androidagent.core.AgentSkill
 import dev.androidagent.core.AdbStatus
 import dev.androidagent.core.ConnectionPhase
+import dev.androidagent.core.McpRuntimePhase
 import dev.androidagent.core.RealtimeAudioChunk
 import dev.androidagent.core.ReasoningEffortOption
 import kotlinx.coroutines.*
@@ -17,10 +18,63 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Test
 import java.io.File
 
 class CodexEngineTest {
+    @Test
+    fun `mcp status parser preserves phase auth and read only annotations`() {
+        val result = Json.parseToJsonElement(
+            """
+            {
+              "data": [
+                {
+                  "name": "github",
+                  "authStatus": "authenticated",
+                  "runtimeStatus": "ready",
+                  "tools": [
+                    {
+                      "name": "issues.create",
+                      "description": "Create an issue",
+                      "inputSchema": {"type":"object"},
+                      "annotations": {"readOnlyHint": false}
+                    }
+                  ]
+                }
+              ]
+            }
+            """.trimIndent()
+        ).jsonObject
+
+        val server = CodexEngine.parseMcpServerSnapshots(result).single()
+
+        assertEquals("github", server.name)
+        assertEquals(McpRuntimePhase.CONNECTED, server.phase)
+        assertEquals("authenticated", server.authStatus)
+        assertEquals(false, server.tools.single().readOnly)
+        assertEquals("object", server.tools.single().inputSchema["type"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `mcp status parser rejects a response without data`() {
+        assertThrows(IllegalStateException::class.java) {
+            CodexEngine.parseMcpServerSnapshots(Json.parseToJsonElement("{}").jsonObject)
+        }
+    }
+
+    @Test
+    fun `mcp phase parser covers wire aliases and unknown values`() {
+        assertEquals(McpRuntimePhase.NOT_STARTED, CodexEngine.parseMcpPhaseValue("not_started"))
+        assertEquals(McpRuntimePhase.STARTING, CodexEngine.parseMcpPhaseValue("starting"))
+        assertEquals(McpRuntimePhase.CONNECTED, CodexEngine.parseMcpPhaseValue("connected"))
+        assertEquals(McpRuntimePhase.AUTHENTICATION_REQUIRED, CodexEngine.parseMcpPhaseValue("authenticationRequired"))
+        assertEquals(McpRuntimePhase.FAILED, CodexEngine.parseMcpPhaseValue("failed"))
+        assertEquals(McpRuntimePhase.CANCELLED, CodexEngine.parseMcpPhaseValue("cancelled"))
+        assertEquals(McpRuntimePhase.DISABLED, CodexEngine.parseMcpPhaseValue("disabled"))
+        assertEquals(McpRuntimePhase.UNKNOWN, CodexEngine.parseMcpPhaseValue("new_status"))
+    }
+
     @Test fun tokenUsageAndMultipleLimitWindowsAreParsedWithoutInventingMissingQuota() {
         val usage = CodexEngine.parseTokenUsage(Json.parseToJsonElement("""{"total":{"totalTokens":180,"inputTokens":120,"outputTokens":60,"cachedInputTokens":40},"modelContextWindow":200000}""").jsonObject)!!
         assertEquals(180L, usage.total)

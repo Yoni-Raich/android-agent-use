@@ -47,9 +47,10 @@ class WorkspaceSeederTest {
         val youtubeCard = File(ws, "cards/youtube.md")
         assertTrue("youtube.md card should exist", youtubeCard.isFile)
 
-        val prefs = File(ws, "preferences.json")
-        assertTrue("preferences.json should exist", prefs.isFile)
-        assertTrue("preferences.json should have default structure", prefs.readText().contains("\"messaging\": \"WhatsApp\""))
+        assertFalse(
+            "preferences are global now; a workspace copy would be a second answer",
+            File(ws, "preferences.json").exists(),
+        )
     }
 
     @Test
@@ -63,6 +64,7 @@ class WorkspaceSeederTest {
             "recovery-and-safety" to "recovery body",
             "user-preferences" to "preferences body",
             "app-cards" to "cards body",
+            "personal-skills" to "authoring body",
         )
 
         WorkspaceSeeder.installDefaultSkills(home) { relativePath ->
@@ -97,7 +99,37 @@ class WorkspaceSeederTest {
     }
 
     @Test
-    fun seedPreservesExistingUserPreferences() {
+    fun theSeededHarnessIsMarkdownRatherThanOneLongCodeBlock() {
+        // trimIndent() takes the smallest indent in the string, so one block
+        // pasted at column 0 left every other line indented by eight spaces -
+        // which Markdown reads as a code block, and the model reads as noise.
+        val ws = tempFolder.newFolder("workspace_indent")
+        WorkspaceSeeder.seed(ws, null)
+
+        val indented = File(ws, "AGENTS.md").readLines()
+            .filter { it.isNotBlank() && it.startsWith("    ") }
+        assertTrue("these lines would render as code: " + indented.take(3), indented.isEmpty())
+    }
+
+    @Test
+    fun theHarnessTellsTheModelWhereDurableMemoryLives() {
+        // The harness is the only place that says a workspace file does not
+        // survive the chat. Without it the agent writes notes into a directory
+        // that is rebuilt from templates the next time it is opened.
+        val ws = tempFolder.newFolder("workspace_memory_doc")
+        WorkspaceSeeder.seed(ws, null)
+
+        val agents = File(ws, "AGENTS.md").readText()
+        assertTrue("it should point at the skill root", agents.contains("~/.agents/skills"))
+        assertTrue("it should point at the data root", agents.contains("~/memory/<skill-name>/"))
+        assertTrue("it should route the user's ask to a skill", agents.contains("personal-skills"))
+        assertTrue("it should say the workspace does not survive", agents.contains("rebuilt from templates"))
+    }
+
+    @Test
+    fun seedLeavesAPreExistingWorkspacePreferencesFileAlone() {
+        // Reseeding must not touch it: the app-start migration is what absorbs
+        // it into the global store, and it can only do that if it is still here.
         val ws = tempFolder.newFolder("workspace_prefs")
         val customPrefs = """{"apps":{"messaging":"Signal"},"customKey":"preserved"}"""
         val prefsFile = File(ws, "preferences.json")
@@ -107,4 +139,63 @@ class WorkspaceSeederTest {
 
         assertEquals("Existing preferences.json must not be overwritten", customPrefs, prefsFile.readText())
     }
+
+    @Test
+    fun sharedMemoryIsSeededOnceAndAbsorbsPerSessionPreferences() {
+        val home = tempFolder.newFolder("home_memory")
+        val legacy = File(tempFolder.newFolder("old_session"), "preferences.json")
+        legacy.writeText("""{"apps":{"messaging":"Signal"}}""")
+
+        WorkspaceSeeder.seedSharedMemory(home, null, listOf(legacy))
+
+        val prefs = File(home, "memory/preferences.json")
+        assertTrue("global preferences should exist", prefs.isFile)
+        assertTrue("the user's own choice must survive the move", prefs.readText().contains("Signal"))
+        assertFalse("the per-session copy is removed once absorbed", legacy.exists())
+        assertTrue("the layout carries a signpost the user can read", File(home, "memory/README.md").isFile)
+    }
+
+    @Test
+    fun seedingSharedMemoryAgainDoesNotOverwriteWhatTheAgentLearned() {
+        val home = tempFolder.newFolder("home_memory_twice")
+        WorkspaceSeeder.seedSharedMemory(home, null)
+        val prefs = File(home, "memory/preferences.json")
+        prefs.writeText("""{"apps":{"messaging":"Signal"}}""")
+        // Standing in for a skill's data file, which the agent writes itself.
+        val note = File(home, "memory/contacts/contacts.json")
+        note.parentFile!!.mkdirs()
+        note.writeText("something worth keeping")
+
+        WorkspaceSeeder.seedSharedMemory(home, null)
+
+        assertTrue(prefs.readText().contains("Signal"))
+        assertEquals("something worth keeping", note.readText())
+    }
+
+    @Test
+    fun installingBundledSkillsLeavesALearnedSkillAlone() {
+        // The whole point of a learned skill is that it is still there after the
+        // app restarts and reinstalls its own.
+        val home = tempFolder.newFolder("home_skills")
+        val learned = File(home, ".agents/skills/order-coffee/SKILL.md")
+        learned.parentFile!!.mkdirs()
+        learned.writeText(skillFile("order-coffee", "mine", "steps"))
+
+        WorkspaceSeeder.installDefaultSkills(home) { relativePath ->
+            skillFile(relativePath.substringBefore('/'), "d", "body").toByteArray()
+        }
+
+        assertTrue("a learned skill must survive an app restart", learned.isFile)
+        assertTrue(learned.readText().contains("steps"))
+    }
+
+    private fun skillFile(name: String, description: String, body: String): String =
+        buildString {
+            appendLine("---")
+            appendLine("name: " + name)
+            appendLine("description: " + description)
+            appendLine("---")
+            appendLine()
+            appendLine(body)
+        }
 }

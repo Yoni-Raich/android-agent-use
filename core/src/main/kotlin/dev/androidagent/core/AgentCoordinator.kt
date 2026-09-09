@@ -776,8 +776,53 @@ class AgentCoordinator(
                     completion?.complete(Unit)
                 }
             }
-            is EngineEvent.AccountChanged, is EngineEvent.UsageChanged, EngineEvent.SkillsChanged -> Unit
+            is EngineEvent.McpStatusChanged -> handleMcpStatus(event)
+            is EngineEvent.McpOauthCompleted -> handleMcpOauthCompleted(event)
+            is EngineEvent.AccountChanged,
+            is EngineEvent.UsageChanged,
+            EngineEvent.SkillsChanged,
+            -> Unit
         }
+    }
+
+    private suspend fun handleMcpStatus(event: EngineEvent.McpStatusChanged) {
+        val detail = mcpStatusText(event)
+        val sessionId = synchronized(lifecycleLock) {
+            if (state.value.active && state.value.phase != RunPhase.STOPPING) {
+                mutableState.value = state.value.copy(status = detail)
+            }
+            state.value.sessionId
+        }
+        if (sessionId != null && event.phase in setOf(
+                McpRuntimePhase.AUTHENTICATION_REQUIRED,
+                McpRuntimePhase.FAILED,
+                McpRuntimePhase.CANCELLED,
+                McpRuntimePhase.DISABLED,
+                McpRuntimePhase.UNKNOWN,
+            )
+        ) {
+            sessions.append(message(sessionId, "system", detail))
+        }
+    }
+
+    private suspend fun handleMcpOauthCompleted(event: EngineEvent.McpOauthCompleted) {
+        if (event.success) return
+        val detail = SecretRedactor.redact(
+            "${event.server.ifBlank { "MCP" }} sign-in failed${event.error?.let { ": $it" }.orEmpty()}"
+        )
+        val sessionId = synchronized(lifecycleLock) {
+            if (state.value.active && state.value.phase != RunPhase.STOPPING) {
+                mutableState.value = state.value.copy(status = detail)
+            }
+            state.value.sessionId
+        }
+        if (sessionId != null) sessions.append(message(sessionId, "system", detail))
+    }
+
+    internal fun mcpStatusText(event: EngineEvent.McpStatusChanged): String {
+        val server = event.server.ifBlank { "MCP" }
+        val suffix = event.error?.let { ": ${SecretRedactor.redact(it)}" }.orEmpty()
+        return "$server ${event.phase.name.lowercase().replace('_', ' ')}$suffix"
     }
 
     private fun ensureCurrentTurn(token: Long, threadId: String, turnId: String) {
@@ -933,7 +978,12 @@ class AgentCoordinator(
         is EngineEvent.MessageCompleted -> event.threadId
         is EngineEvent.GeneratedImage -> event.threadId
         is EngineEvent.Activity -> event.threadId
-        is EngineEvent.UsageChanged, is EngineEvent.AccountChanged, EngineEvent.SkillsChanged -> null
+        is EngineEvent.UsageChanged,
+        is EngineEvent.AccountChanged,
+        is EngineEvent.McpStatusChanged,
+        is EngineEvent.McpOauthCompleted,
+        EngineEvent.SkillsChanged,
+        -> null
     }
 
     private fun turnIdOf(event: EngineEvent): String? = when (event) {
@@ -946,7 +996,12 @@ class AgentCoordinator(
         is EngineEvent.MessageCompleted -> event.turnId
         is EngineEvent.GeneratedImage -> event.turnId
         is EngineEvent.Activity -> event.turnId
-        is EngineEvent.UsageChanged, is EngineEvent.AccountChanged, EngineEvent.SkillsChanged -> null
+        is EngineEvent.UsageChanged,
+        is EngineEvent.AccountChanged,
+        is EngineEvent.McpStatusChanged,
+        is EngineEvent.McpOauthCompleted,
+        EngineEvent.SkillsChanged,
+        -> null
     }
 
     private fun message(session: String, role: String, text: String, attachments: List<String> = emptyList()) =

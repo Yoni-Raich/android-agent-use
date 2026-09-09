@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import dev.androidagent.app.ui.*
 import dev.androidagent.app.update.*
 import dev.androidagent.core.*
+import dev.androidagent.workspace.WorkspaceSeeder
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import java.io.File
@@ -27,6 +28,8 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     val ui: StateFlow<AgentUiState> = mutable.asStateFlow()
     private val usageByThread = mutableMapOf<String, TokenUsage>()
     private var setupJob: Job? = null
+    private var githubConnectJob: Job? = null
+    private var githubMonitorJob: Job? = null
     private var voiceLocalSessionId: String? = null
     private val pendingVoiceTexts = java.util.ArrayDeque<String>()
 
@@ -76,6 +79,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         viewModelScope.launch { graph.voice.state.collect { state -> mutable.update { it.copy(voiceState = state) } } }
+        viewModelScope.launch { graph.githubConnector.state.collect { state -> mutable.update { it.copy(githubConnector = state) } } }
         viewModelScope.launch { graph.engine.voiceEvents.collect(::handleVoiceEvent) }
         viewModelScope.launch { graph.engine.events.collect { event ->
             when (event) {
@@ -194,13 +198,41 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         setupJob = task {
             mutable.update { it.copy(isPreparingRuntime = true, errorMessage = null) }
             try {
-                graph.runtime.prepare(); graph.engine.connect()
+                graph.runtime.prepare()
+                // Hydrate connector credentials before the app-server captures
+                // its process environment. Connector/MCP failures are optional
+                // at startup and must not block account, model, or skills load.
+                try {
+                    graph.githubConnector.synchronize()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    // GitHub is an optional connector; Codex startup continues.
+                }
+                graph.engine.connect()
+                startGitHubMonitor()
                 val account = graph.engine.account()
                 mutable.update { it.copy(accountStatus = account) }
                 loadModels()
                 loadSkills()
                 runCatching { graph.engine.refreshUsage() }
             } finally { mutable.update { it.copy(isPreparingRuntime = false) } }
+        }
+    }
+
+    private fun startGitHubMonitor() {
+        if (githubMonitorJob?.isActive == true) return
+        githubMonitorJob = viewModelScope.launch {
+            while (isActive) {
+                delay(GITHUB_REFRESH_CHECK_INTERVAL_MS)
+                if (graph.runtime.status.value.phase in setOf(RuntimePhase.READY, RuntimePhase.RUNNING)) {
+                    runCatching {
+                        // The connector skips MCP reconfiguration while the
+                        // token is healthy and restarts only after a refresh.
+                        graph.githubConnector.synchronize(forceConfiguration = false)
+                    }
+                }
+            }
         }
     }
     fun login() = task {
@@ -218,6 +250,34 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         } finally {
             mutable.update { it.copy(isRefreshingAccount = false) }
         }
+    }
+
+    fun connectGitHub() {
+        if (githubConnectJob?.isActive == true) return
+        if (graph.coordinator.state.value.active || graph.voice.state.value.active) {
+            error("Stop the current run or voice conversation before changing connections.")
+            return
+        }
+        githubConnectJob = task { graph.githubConnector.connect() }
+    }
+
+    fun cancelGitHubConnect() {
+        githubConnectJob?.cancel()
+        githubConnectJob = null
+    }
+
+    fun disconnectGitHub() = task {
+        check(!graph.coordinator.state.value.active && !graph.voice.state.value.active) {
+            "Stop the current run or voice conversation before changing connections."
+        }
+        graph.githubConnector.disconnect()
+    }
+
+    fun githubPermission(mode: dev.androidagent.connectors.PermissionMode) = task {
+        check(!graph.coordinator.state.value.active && !graph.voice.state.value.active) {
+            "Stop the current run or voice conversation before changing connections."
+        }
+        graph.githubConnector.setPermissionMode(mode)
     }
 
     /**
@@ -409,18 +469,83 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun removeAttachment(id: String) { mutable.update { it.copy(attachments = it.attachments.filterNot { item -> item.id == id }) } }
     fun listFiles() = task {
-        mutable.update { it.copy(isLoadingWorkspace = true, workspaceError = null) }
+        mutable.update { it.copy(isFileBrowserOpen = true, isLoadingWorkspace = true, workspaceError = null) }
         try {
-            val root = current.value?.let { graph.sessions.workspace(it) } ?: return@task
-            val files = withContext(Dispatchers.IO) { root.walkTopDown().filter { it != root }.take(500).map { WorkspaceFileItem(it.relativeTo(root).path, it.length(), it.lastModified(), it.isDirectory) }.toList() }
+            val files = withContext(Dispatchers.IO) {
+                WorkspaceFileRoot.entries.flatMap { root -> listRoot(root) }
+            }
             mutable.update { it.copy(workspaceFiles = files) }
         } finally { mutable.update { it.copy(isLoadingWorkspace = false) } }
     }
+    fun closeFiles() = mutable.update { it.copy(isFileBrowserOpen = false, filePreview = null) }
+    fun closeFilePreview() = mutable.update { it.copy(filePreview = null) }
+
+    /**
+     * Read a file into the in-app viewer.
+     *
+     * Everything the agent writes is Markdown or JSON, and most phones have no
+     * app registered for either - so the old chooser-only path opened an empty
+     * chooser and looked like a dead tap. Text is shown here; anything else
+     * still goes out to another app, which is the only thing that can render it.
+     */
+    fun previewFile(item: WorkspaceFileItem) = task {
+        if (item.isDirectory) return@task
+        val file = resolveWorkspaceFile(item)
+        val preview = withContext(Dispatchers.IO) {
+            if (!isReadableText(file)) return@withContext WorkspaceFilePreview(item)
+            val bytes = file.readBytes()
+            val truncated = bytes.size > MAX_PREVIEW_BYTES
+            WorkspaceFilePreview(
+                item = item,
+                text = String(bytes, 0, minOf(bytes.size, MAX_PREVIEW_BYTES), Charsets.UTF_8),
+                truncated = truncated,
+            )
+        }
+        mutable.update { it.copy(filePreview = preview) }
+    }
+
     fun resolveWorkspaceFile(item: WorkspaceFileItem): File {
-        val root = graph.sessions.workspace(current.value ?: kotlin.error("No chat selected")).canonicalFile
+        val root = rootFor(item.root).canonicalFile
         val file = File(root, item.path).canonicalFile
-        require(file.toPath().startsWith(root.toPath())) { "File is outside this session." }
+        require(file.toPath().startsWith(root.toPath())) { "File is outside ${item.root.label}." }
         return file
+    }
+
+    private fun rootFor(root: WorkspaceFileRoot): File = when (root) {
+        WorkspaceFileRoot.SESSION ->
+            graph.sessions.workspace(current.value ?: kotlin.error("No chat selected"))
+        WorkspaceFileRoot.MEMORY -> MemoryStore.directoryIn(graph.runtime.homeDirectory)
+        WorkspaceFileRoot.SKILLS -> WorkspaceSeeder.skillsRoot(graph.runtime.homeDirectory)
+    }
+
+    private fun listRoot(root: WorkspaceFileRoot): List<WorkspaceFileItem> {
+        // A missing chat or an unseeded home is an empty section, not an error:
+        // the other two roots are still worth showing.
+        val base = runCatching { rootFor(root) }.getOrNull() ?: return emptyList()
+        if (!base.isDirectory) return emptyList()
+        return base.walkTopDown()
+            .filter { it != base }
+            .take(MAX_LISTED_FILES)
+            .map {
+                WorkspaceFileItem(
+                    path = it.relativeTo(base).path.replace(File.separatorChar, '/'),
+                    sizeBytes = it.length(),
+                    modifiedAt = it.lastModified(),
+                    isDirectory = it.isDirectory,
+                    root = root,
+                )
+            }
+            .toList()
+    }
+
+    private fun isReadableText(file: File): Boolean {
+        if (!file.isFile) return false
+        if (file.extension.lowercase() in TEXT_EXTENSIONS) return true
+        // No extension is the common case for a config file, so fall back to
+        // sniffing: a NUL byte in the first block means it is not text.
+        if (file.extension.isNotEmpty()) return false
+        val head = runCatching { file.inputStream().use { it.readNBytes(1024) } }.getOrNull() ?: return false
+        return head.isNotEmpty() && head.none { it == 0.toByte() }
     }
     fun error(message: String) { mutable.update { it.copy(errorMessage = message) } }
     fun checkForUpdates(manual: Boolean = true) = task {
@@ -537,5 +662,17 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     private fun task(block: suspend () -> Unit): Job = viewModelScope.launch {
         try { block() } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { error(failure.message ?: "Something went wrong.") }
+    }
+
+    private companion object {
+        /** Enough for any note or skill the agent writes, short of loading a log. */
+        const val MAX_PREVIEW_BYTES = 256 * 1024
+        const val MAX_LISTED_FILES = 500
+        val TEXT_EXTENSIONS = setOf(
+            "md", "json", "txt", "log", "csv", "tsv", "xml", "yml", "yaml",
+            "toml", "ini", "conf", "properties", "kt", "java", "py", "sh", "html", "css", "js",
+        )
+
+        const val GITHUB_REFRESH_CHECK_INTERVAL_MS = 30_000L
     }
 }
