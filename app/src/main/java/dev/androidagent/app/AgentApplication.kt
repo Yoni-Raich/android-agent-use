@@ -6,6 +6,7 @@ import dev.androidagent.a11y.A11yDeviceTools
 import dev.androidagent.adb.AndroidAdbTransport
 import dev.androidagent.core.AgentCoordinator
 import dev.androidagent.core.CompositeDeviceToolGateway
+import dev.androidagent.core.CompositeRuntimeConnector
 import dev.androidagent.core.KnowledgeStore
 import dev.androidagent.core.KnowledgeToolGateway
 import dev.androidagent.core.ObservationState
@@ -31,7 +32,8 @@ class AgentGraph(private val app: Application) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     val sessions = LocalSessionStore(app)
     val githubConnector = GitHubConnectorController(app, BuildConfig.GITHUB_OAUTH_CLIENT_ID)
-    val runtime = AndroidRuntimeHost(app, githubConnector, githubConnector)
+    val runtimeConnectors = CompositeRuntimeConnector(listOf(githubConnector))
+    val runtime = AndroidRuntimeHost(app, runtimeConnectors, runtimeConnectors)
     val engine = CodexEngine(runtime)
     val adb = AndroidAdbTransport(app)
     private lateinit var runCoordinator: AgentCoordinator

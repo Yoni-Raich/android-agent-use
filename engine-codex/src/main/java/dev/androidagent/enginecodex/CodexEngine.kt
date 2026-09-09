@@ -158,29 +158,7 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
             put("limit", 100)
             if (!threadId.isNullOrBlank()) put("threadId", threadId)
         })
-        val values = result["data"] as? JsonArray ?: return emptyList()
-        return values.mapNotNull { element ->
-            val server = element as? JsonObject ?: return@mapNotNull null
-            val name = server.string("name").takeIf { it.isNotBlank() } ?: return@mapNotNull null
-            val tools = (server["tools"] as? JsonArray).orEmpty().mapNotNull { toolElement ->
-                val tool = toolElement as? JsonObject ?: return@mapNotNull null
-                val toolName = tool.string("name").takeIf { it.isNotBlank() } ?: return@mapNotNull null
-                val annotations = tool["annotations"] as? JsonObject
-                McpToolSummary(
-                    name = toolName,
-                    description = tool.string("description"),
-                    inputSchema = tool["inputSchema"] as? JsonObject ?: buildJsonObject {},
-                    readOnly = (annotations?.get("readOnlyHint") as? JsonPrimitive)?.booleanOrNull,
-                )
-            }
-            McpServerSnapshot(
-                name = name,
-                authStatus = server.string("authStatus").ifBlank { "unknown" },
-                phase = parseMcpPhase(server.string("runtimeStatus")),
-                tools = tools,
-                error = server.string("error").ifBlank { null },
-            )
-        }
+        return parseMcpServerSnapshots(result)
     }
 
     override suspend fun callMcpTool(
@@ -555,16 +533,7 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
         voiceStream.emit(VoiceEvent.Failure(safeMessage, threadId))
     }
 
-    private fun parseMcpPhase(value: String): McpRuntimePhase = when (value.lowercase()) {
-        "notstarted", "not_started" -> McpRuntimePhase.NOT_STARTED
-        "starting" -> McpRuntimePhase.STARTING
-        "connected", "ready" -> McpRuntimePhase.CONNECTED
-        "authenticationrequired", "authentication_required" -> McpRuntimePhase.AUTHENTICATION_REQUIRED
-        "failed" -> McpRuntimePhase.FAILED
-        "cancelled" -> McpRuntimePhase.CANCELLED
-        "disabled" -> McpRuntimePhase.DISABLED
-        else -> McpRuntimePhase.UNKNOWN
-    }
+    private fun parseMcpPhase(value: String): McpRuntimePhase = parseMcpPhaseValue(value)
 
     /** Keep a redacted, bounded stderr tail so RPC failures retain their cause chain. */
     private fun recordStderr(line: String) {
@@ -621,6 +590,45 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
                         (window["windowDurationMins"] as? JsonPrimitive)?.longOrNull)
                 }
             }
+        }
+
+        /** Parse the app-server MCP status envelope without hiding protocol drift. */
+        internal fun parseMcpServerSnapshots(result: JsonObject): List<McpServerSnapshot> {
+            val values = result["data"] as? JsonArray
+                ?: error("MCP status response missing data")
+            return values.mapNotNull { element ->
+                val server = element as? JsonObject ?: return@mapNotNull null
+                val name = server.string("name").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val tools = (server["tools"] as? JsonArray).orEmpty().mapNotNull { toolElement ->
+                    val tool = toolElement as? JsonObject ?: return@mapNotNull null
+                    val toolName = tool.string("name").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    val annotations = tool["annotations"] as? JsonObject
+                    McpToolSummary(
+                        name = toolName,
+                        description = tool.string("description"),
+                        inputSchema = tool["inputSchema"] as? JsonObject ?: buildJsonObject {},
+                        readOnly = (annotations?.get("readOnlyHint") as? JsonPrimitive)?.booleanOrNull,
+                    )
+                }
+                McpServerSnapshot(
+                    name = name,
+                    authStatus = server.string("authStatus").ifBlank { "unknown" },
+                    phase = parseMcpPhaseValue(server.string("runtimeStatus")),
+                    tools = tools,
+                    error = server.string("error").ifBlank { null },
+                )
+            }
+        }
+
+        internal fun parseMcpPhaseValue(value: String): McpRuntimePhase = when (value.lowercase()) {
+            "notstarted", "not_started" -> McpRuntimePhase.NOT_STARTED
+            "starting" -> McpRuntimePhase.STARTING
+            "connected", "ready" -> McpRuntimePhase.CONNECTED
+            "authenticationrequired", "authentication_required" -> McpRuntimePhase.AUTHENTICATION_REQUIRED
+            "failed" -> McpRuntimePhase.FAILED
+            "cancelled" -> McpRuntimePhase.CANCELLED
+            "disabled" -> McpRuntimePhase.DISABLED
+            else -> McpRuntimePhase.UNKNOWN
         }
 
         /** Parse both the current model/list shape and older catalog aliases. */

@@ -196,7 +196,18 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         setupJob = task {
             mutable.update { it.copy(isPreparingRuntime = true, errorMessage = null) }
             try {
-                graph.runtime.prepare(); graph.engine.connect(); graph.githubConnector.synchronize()
+                graph.runtime.prepare()
+                // Hydrate connector credentials before the app-server captures
+                // its process environment. Connector/MCP failures are optional
+                // at startup and must not block account, model, or skills load.
+                try {
+                    graph.githubConnector.synchronize()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    // GitHub is an optional connector; Codex startup continues.
+                }
+                graph.engine.connect()
                 val account = graph.engine.account()
                 mutable.update { it.copy(accountStatus = account) }
                 loadModels()

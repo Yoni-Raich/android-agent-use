@@ -71,4 +71,36 @@ class AndroidRuntimeHostConfigTest {
             directory.deleteRecursively()
         }
     }
+
+    @Test
+    fun `connector environment overlay rejects reserved keys and skips blanks`() {
+        val base = linkedMapOf("HOME" to "/private/home", "PATH" to "/system/bin")
+
+        val merged = AndroidRuntimeHost.mergeEnvironmentOverlay(
+            base,
+            mapOf("GITHUB_PERSONAL_ACCESS_TOKEN" to "token", "EMPTY_VALUE" to " "),
+        )
+
+        assertEquals("token", merged["GITHUB_PERSONAL_ACCESS_TOKEN"])
+        assertFalse(merged.containsKey("EMPTY_VALUE"))
+        assertEquals("/private/home", merged["HOME"])
+
+        try {
+            AndroidRuntimeHost.mergeEnvironmentOverlay(base, mapOf("PATH" to "evil"))
+            throw AssertionError("reserved environment key should be rejected")
+        } catch (_: IllegalArgumentException) {
+            // expected
+        }
+    }
+
+    @Test
+    fun `connector hosts are normalized before proxy allowlist merge`() {
+        assertEquals(
+            setOf("api.github.com", "api.githubcopilot.com"),
+            AndroidRuntimeHost.mergeAllowedHosts(
+                setOf("api.github.com"),
+                setOf(" API.GITHUBCOPILOT.COM. ", ""),
+            ),
+        )
+    }
 }

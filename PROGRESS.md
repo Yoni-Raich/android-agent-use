@@ -38,6 +38,12 @@ not production-ready.
   Keystore-vault, state-store, token-redaction, and tool-fingerprint unit
   tests pass. The app debug Kotlin compile also passes with the Connections
   screen and runtime/app-server wiring.
+- PR #41 review follow-up is implemented: least-privilege GitHub scopes,
+  strict approval mapping, pre-engine token hydration and refresh restart,
+  connected-state egress gating, bounded OAuth responses/polling, URI
+  validation, state/credential corruption handling, MCP event/status parsing,
+  runtime connector composition, and redacted connector failures. Focused
+  JVM tests cover the new policy, parser, registry, overlay, and OAuth paths.
 
 ### Not proven yet
 

@@ -8,6 +8,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.ByteArrayInputStream
 
 class GitHubDeviceFlowClientTest {
     @Test
@@ -31,6 +32,18 @@ class GitHubDeviceFlowClientTest {
         assertFalse(http.requests.single().body!!.contains("client_secret"))
         assertEquals("ABCD-EFGH", authorization.userCode)
         assertEquals(1_900L, authorization.expiresAtEpochSeconds)
+    }
+
+    @Test
+    fun `default device request is least privilege and includes refresh opt in`() = runBlocking {
+        val http = FakeHttp(response(200, deviceJson()))
+
+        GitHubOAuthDeviceFlowClient("public-client", http).requestDeviceAuthorization()
+
+        val body = http.requests.single().body.orEmpty()
+        assertTrue(body.contains("scope=offline_access+repo"))
+        assertFalse(body.contains("admin%3A"))
+        assertFalse(body.contains("delete_repo"))
     }
 
     @Test
@@ -67,6 +80,57 @@ class GitHubDeviceFlowClientTest {
         assertEquals("ghr_refresh", credentials.refreshToken)
         assertEquals(29_800L, credentials.accessTokenExpiresAtEpochSeconds)
         assertEquals(15_898_600L, credentials.refreshTokenExpiresAtEpochSeconds)
+    }
+
+    @Test
+    fun `missing token scope is not mistaken for the requested scope`() = runBlocking {
+        val http = FakeHttp(
+            response(200, deviceJson()),
+            response(200, """{"access_token":"gho_access","token_type":"bearer"}"""),
+        )
+        val client = GitHubOAuthDeviceFlowClient(
+            clientId = "public-client",
+            http = http,
+            clock = MutableClock(1_000L),
+            delayController = ConnectorDelay { },
+        )
+
+        val credentials = client.authenticate(scopes = setOf(GitHubOAuthScopes.REPO))
+
+        assertTrue(credentials.grantedScopes.isEmpty())
+    }
+
+    @Test
+    fun `poll interval is capped before converting to milliseconds`() = runBlocking {
+        val http = FakeHttp(
+            response(200, deviceJson(interval = Long.MAX_VALUE)),
+            response(200, """{"access_token":"gho_access"}"""),
+        )
+        val waits = mutableListOf<Long>()
+        val client = GitHubOAuthDeviceFlowClient(
+            clientId = "public-client",
+            http = http,
+            clock = MutableClock(1_000L),
+            delayController = ConnectorDelay { waits += it },
+        )
+
+        client.authenticate()
+
+        assertEquals(listOf(60_000L), waits)
+    }
+
+    @Test
+    fun `expiry arithmetic rejects a response that would overflow`() = runBlocking {
+        val http = FakeHttp(response(200, deviceJson(expiresIn = Long.MAX_VALUE)))
+
+        val failure = try {
+            client(http).requestDeviceAuthorization()
+            throw AssertionError("expected overflow to be rejected")
+        } catch (expected: GitHubOAuthException) {
+            expected
+        }
+
+        assertEquals("invalid_response", failure.errorCode)
     }
 
     @Test
@@ -158,6 +222,41 @@ class GitHubDeviceFlowClientTest {
         assertSuspendThrows(IllegalArgumentException::class.java) {
             client.requestDeviceAuthorization()
         }
+    }
+
+    @Test
+    fun `lookalike verification complete uri is ignored`() = runBlocking {
+        val http = FakeHttp(
+            response(
+                200,
+                deviceJson().replace(
+                    "}"
+                    , ",\"verification_uri_complete\":\"https://github.com.evil/login/device?user_code=ABCD-EFGH\"}"
+                ),
+            ),
+        )
+
+        val authorization = GitHubOAuthDeviceFlowClient("public-client", http)
+            .requestDeviceAuthorization()
+
+        assertEquals(null, authorization.verificationUriComplete)
+    }
+
+    @Test
+    fun `oauth response body has a hard size limit`() {
+        val failure = assertThrows(GitHubOAuthException::class.java) {
+            readConnectorResponseBody(ByteArrayInputStream("12345".toByteArray()), maxBytes = 4)
+        }
+
+        assertEquals("response_too_large", failure.errorCode)
+    }
+
+    @Test
+    fun `oauth exception messages redact tokens before reaching callers`() {
+        val failure = GitHubOAuthException("oauth_failed", message = "token=gho_secret123")
+
+        assertFalse(failure.message.orEmpty().contains("gho_secret123"))
+        assertTrue(failure.message.orEmpty().contains("[REDACTED]"))
     }
 
     private fun client(http: FakeHttp): GitHubOAuthDeviceFlowClient = GitHubOAuthDeviceFlowClient(

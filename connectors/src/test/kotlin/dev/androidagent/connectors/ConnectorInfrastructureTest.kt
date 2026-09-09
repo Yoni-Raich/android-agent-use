@@ -19,6 +19,7 @@ class ConnectorInfrastructureTest {
         assertEquals(AuthStrategy.GITHUB_OAUTH_APP_DEVICE_FLOW, definition.authStrategy)
         assertTrue(GitHubOAuthScopes.supported.size >= 30)
         assertTrue(definition.defaultScopes.all { it in definition.supportedScopes })
+        assertEquals(setOf(GitHubOAuthScopes.REPO, GitHubOAuthScopes.OFFLINE_ACCESS), definition.defaultScopes)
         assertEquals("https://api.githubcopilot.com/mcp/x/all", GitHubEndpoints.REMOTE_MCP)
         assertEquals("GITHUB_PERSONAL_ACCESS_TOKEN", GitHubEndpoints.REMOTE_MCP_TOKEN_ENVIRONMENT)
     }
@@ -81,6 +82,10 @@ class ConnectorInfrastructureTest {
         assertEquals(
             ToolSchemaFingerprint.forTools("github", "v1", listOf(first, second)),
             ToolSchemaFingerprint.forTools("github", "v1", listOf(second, first)),
+        )
+        assertEquals(
+            ToolSchemaFingerprint.forTools("github", "v1", listOf(first)),
+            ToolSchemaFingerprint.forTools("github", "v1", listOf(first.copy(description = "wording changed"))),
         )
     }
 

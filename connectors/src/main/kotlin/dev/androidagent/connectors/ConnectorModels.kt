@@ -97,6 +97,16 @@ interface CredentialVault {
     fun clear(key: String)
 }
 
+class ConnectorStateCorruptException(
+    val connectorId: String,
+    cause: Throwable? = null,
+) : IllegalStateException("Stored connector state is corrupt", cause)
+
+class CredentialStoreCorruptException(
+    val credentialKey: String,
+    cause: Throwable? = null,
+) : IllegalStateException("Stored connector credential could not be decrypted", cause)
+
 /** In-memory state store for unit tests and short-lived connector sessions. */
 class InMemoryConnectorStateStore : ConnectorStateStore {
     private val values = linkedMapOf<String, ConnectorSnapshot>()

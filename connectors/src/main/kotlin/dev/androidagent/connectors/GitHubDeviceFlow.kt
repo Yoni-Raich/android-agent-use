@@ -15,8 +15,11 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import java.net.HttpURLConnection
+import java.net.URI
 import java.net.URL
 import java.net.URLEncoder
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 
 data class ConnectorHttpRequest(
     val method: String,
@@ -88,7 +91,7 @@ class UrlConnectionHttpClient(
             }
             val status = connection.responseCode
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-            val body = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+            val body = readConnectorResponseBody(stream)
             val headers = connection.headerFields
                 .filterKeys { it != null }
                 .mapKeys { it.key!! }
@@ -98,6 +101,35 @@ class UrlConnectionHttpClient(
             connection.disconnect()
         }
     }
+}
+
+private const val MAX_CONNECTOR_RESPONSE_BYTES = 256 * 1024
+
+/** Read a bounded response body so an unexpected endpoint cannot exhaust memory. */
+internal fun readConnectorResponseBody(
+    input: InputStream?,
+    maxBytes: Int = MAX_CONNECTOR_RESPONSE_BYTES,
+): String {
+    require(maxBytes > 0) { "maxBytes must be positive" }
+    if (input == null) return ""
+    val output = ByteArrayOutputStream(minOf(maxBytes, 8 * 1024))
+    val buffer = ByteArray(8 * 1024)
+    var total = 0
+    input.use { stream ->
+        while (true) {
+            val count = stream.read(buffer)
+            if (count < 0) break
+            if (total > maxBytes - count) {
+                throw GitHubOAuthException(
+                    errorCode = "response_too_large",
+                    message = "GitHub response exceeded the connector limit",
+                )
+            }
+            output.write(buffer, 0, count)
+            total += count
+        }
+    }
+    return output.toString(Charsets.UTF_8.name())
 }
 
 data class DeviceAuthorization(
@@ -119,8 +151,8 @@ data class GitHubDeviceFlowStatus(
 open class GitHubOAuthException(
     val errorCode: String,
     val httpStatus: Int? = null,
-    override val message: String,
-) : Exception(message)
+    message: String,
+) : Exception(TokenRedactor.redact(message) ?: "GitHub OAuth request failed")
 
 class DeviceFlowExpiredException : GitHubOAuthException(
     errorCode = "expired_token",
@@ -181,15 +213,21 @@ class GitHubOAuthDeviceFlowClient(
             "GitHub returned an unexpected verification URI"
         }
         val expiresIn = payload.requiredPositiveLong("expires_in")
-        val interval = payload.optionalPositiveLong("interval") ?: DEFAULT_POLL_INTERVAL_SECONDS
+        val interval = (payload.optionalPositiveLong("interval") ?: DEFAULT_POLL_INTERVAL_SECONDS)
+            .coerceIn(1L, MAX_POLL_INTERVAL_SECONDS)
         val issuedAt = clock.nowEpochSeconds()
+        val expiresAt = try {
+            Math.addExact(issuedAt, expiresIn)
+        } catch (_: ArithmeticException) {
+            throw GitHubOAuthException("invalid_response", message = "GitHub response has invalid expires_in")
+        }
         return DeviceAuthorization(
             deviceCode = deviceCode,
             userCode = userCode,
             verificationUri = verificationUri,
-            verificationUriComplete = payload.optionalString("verification_uri_complete")
-                ?.takeIf { it.startsWith("https://github.com/login/device") },
-            expiresAtEpochSeconds = issuedAt + expiresIn,
+                verificationUriComplete = payload.optionalString("verification_uri_complete")
+                ?.takeIf(::isSafeVerificationUri),
+            expiresAtEpochSeconds = expiresAt,
             pollIntervalSeconds = interval,
             requestedScopes = scopes,
         )
@@ -209,7 +247,7 @@ class GitHubOAuthDeviceFlowClient(
         authorization: DeviceAuthorization,
         onStatus: suspend (GitHubDeviceFlowStatus) -> Unit = {},
     ): GitHubOAuthCredentials {
-        var intervalSeconds = authorization.pollIntervalSeconds.coerceAtLeast(1L)
+        var intervalSeconds = authorization.pollIntervalSeconds.coerceIn(1L, MAX_POLL_INTERVAL_SECONDS)
         while (true) {
             currentCoroutineContext().ensureActive()
             if (clock.nowEpochSeconds() >= authorization.expiresAtEpochSeconds) {
@@ -234,7 +272,9 @@ class GitHubOAuthDeviceFlowClient(
             val response = http.execute(request)
             val payload = parsePayload(response)
             if (response.statusCode in 200..299 && payload.optionalString("access_token") != null) {
-                return credentialsFrom(payload, authorization.requestedScopes)
+                // The requested set is not proof of what GitHub granted. A missing
+                // scope response is represented as an empty set for first login.
+                return credentialsFrom(payload, emptySet())
             }
 
             val errorCode = payload.optionalString("error")
@@ -254,7 +294,7 @@ class GitHubOAuthDeviceFlowClient(
                     intervalSeconds = maxOf(
                         intervalSeconds + SLOW_DOWN_INCREMENT_SECONDS,
                         payload.optionalPositiveLong("interval") ?: 0L,
-                    )
+                    ).coerceAtMost(MAX_POLL_INTERVAL_SECONDS)
                     onStatus(
                         GitHubDeviceFlowStatus(
                             authorization = authorization,
@@ -357,6 +397,16 @@ class GitHubOAuthDeviceFlowClient(
         return if (parsed.isEmpty()) fallback else parsed
     }
 
+    private fun isSafeVerificationUri(value: String): Boolean = runCatching {
+        val uri = URI(value)
+        uri.scheme.equals("https", ignoreCase = true) &&
+            uri.host.equals("github.com", ignoreCase = true) &&
+            (uri.port == -1 || uri.port == 443) &&
+            uri.userInfo == null &&
+            (uri.path == GitHubEndpoints.DEVICE_VERIFICATION.removePrefix("https://github.com") ||
+                uri.path.startsWith("${GitHubEndpoints.DEVICE_VERIFICATION.removePrefix("https://github.com")}/"))
+    }.getOrDefault(false)
+
     private fun JsonObject.requiredString(key: String): String =
         optionalString(key) ?: throw GitHubOAuthException("invalid_response", message = "GitHub response missing $key")
 
@@ -371,6 +421,7 @@ class GitHubOAuthDeviceFlowClient(
     private companion object {
         const val DEFAULT_POLL_INTERVAL_SECONDS = 5L
         const val SLOW_DOWN_INCREMENT_SECONDS = 5L
+        const val MAX_POLL_INTERVAL_SECONDS = 60L
         const val DEVICE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
         const val REFRESH_GRANT_TYPE = "refresh_token"
     }

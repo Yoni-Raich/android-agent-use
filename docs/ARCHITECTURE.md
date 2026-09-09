@@ -548,15 +548,22 @@ backend currently serves that tool.
 The `connectors` module is the provider-neutral store boundary. Each provider
 contributes a definition, auth strategy, endpoint allowlist, permission modes,
 non-secret state, and a secure credential adapter. The first catalog entry is
-GitHub. It uses GitHub's public OAuth App Device Flow, so the APK carries only
-the public client ID and never a client secret.
+GitHub. Its runtime contribution is registered through the composite connector
+registry, so the runtime host and proxy do not need provider-specific changes
+when another connector is added. Colliding environment keys are rejected.
+GitHub uses the public OAuth App Device Flow, so the APK carries only the
+public client ID and never a client secret. The initial Issue flow requests
+only `repo` plus GitHub's `offline_access` refresh-token opt-in.
 
 After the user finishes the official GitHub device page, the app verifies
 `GET /user`, stores the token only in an AES-GCM blob protected by Android
 Keystore, and starts the Codex app-server with the token in an in-memory
-environment overlay. The token is not written to `config.toml`, preferences,
-RPC logs, proxy diagnostics, or UI state. The runtime CONNECT proxy adds only
-`api.githubcopilot.com` while the connector is enabled.
+environment overlay. Credential and connector-state reads happen on the IO
+dispatcher. Only a `CONNECTED` snapshot exposes the cached token or egress
+host; expiry, reauthentication, disconnect, and configuration failure clear
+that runtime contribution. The token is not written to `config.toml`,
+preferences, RPC logs, proxy diagnostics, or UI state. The runtime CONNECT
+proxy adds only `api.githubcopilot.com` while the connector is enabled.
 
 The app writes the official remote MCP server at
 `https://api.githubcopilot.com/mcp/x/all`, then reloads and reads its tool
@@ -566,11 +573,13 @@ default, using Codex's `writes` approval mode), and full control (Codex's
 `approve` mode). The GitHub token itself still cannot exceed the account and
 organization permissions granted by GitHub.
 
-The connector records a canonical SHA-256 tool-schema fingerprint. If a user
-selected full control and the remote schema changes, the app automatically
-downgrades to ask-before-writes before exposing the changed tools. Disconnect
-removes the app-server entry, stops the supervised process, and clears the
-Keystore-backed credential.
+The connector records a canonical SHA-256 tool-schema fingerprint based on tool
+names, read-only annotations, and input schemas. If a user selected full
+control and the remote schema changes, the app automatically downgrades to
+ask-before-writes before exposing the changed tools; the warning is kept after
+the second status read. Disconnect removes and reloads the app-server entry,
+closing the supervised process only if that cleanup cannot be confirmed, and
+clears the Keystore-backed credential.
 
 The older `.codex-work/runtime/probe_apps.py` probe remains useful for checking
 whether an app-server exposes the generic control surface, but it is not the

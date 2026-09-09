@@ -25,7 +25,12 @@ class SharedPreferencesConnectorStateStore(
 
     override fun get(connectorId: String): ConnectorSnapshot? {
         val encoded = preferences.getString(storageKey(connectorId), null) ?: return null
-        return runCatching { json.decodeFromString<ConnectorSnapshot>(encoded) }.getOrNull()
+        return try {
+            json.decodeFromString<ConnectorSnapshot>(encoded)
+        } catch (failure: Exception) {
+            preferences.edit().remove(storageKey(connectorId)).apply()
+            throw ConnectorStateCorruptException(connectorId, failure)
+        }
     }
 
     override fun put(snapshot: ConnectorSnapshot) {
@@ -70,7 +75,7 @@ class AndroidKeystoreCredentialVault(
     @Synchronized
     override fun read(key: String): CredentialBundle? {
         val encoded = preferences.getString(storageKey(key), null) ?: return null
-        return runCatching {
+        return try {
             val packed = Base64.decode(encoded, Base64.NO_WRAP)
             require(packed.size > IV_SIZE) { "Credential ciphertext is truncated" }
             val iv = packed.copyOfRange(0, IV_SIZE)
@@ -80,7 +85,9 @@ class AndroidKeystoreCredentialVault(
             json.decodeFromString<CredentialBundle>(
                 cipher.doFinal(ciphertext).toString(Charsets.UTF_8),
             )
-        }.getOrNull()
+        } catch (failure: Exception) {
+            throw CredentialStoreCorruptException(key, failure)
+        }
     }
 
     @Synchronized
