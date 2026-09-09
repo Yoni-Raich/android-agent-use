@@ -14,8 +14,10 @@ import kotlinx.coroutines.flow.combine
 class AgentService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val graph get() = (application as AgentApplication).graph
+    private lateinit var keepAwake: ConversationKeepAwakeController
     override fun onCreate() {
         super.onCreate()
+        keepAwake = ConversationKeepAwakeController(AndroidScreenWakeLock(this))
         getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(CHANNEL, "Agent activity", NotificationManager.IMPORTANCE_LOW))
         startForeground(
             101,
@@ -25,7 +27,10 @@ class AgentService : Service() {
         graph.adb.startAutoReconnect(scope)
         scope.launch {
             combine(graph.coordinator.state, graph.voice.state) { run, voice -> run to voice }
-                .collect { (run, voice) -> updateForeground(run, voice) }
+                .collect { (run, voice) ->
+                    keepAwake.update(run, voice)
+                    updateForeground(run, voice)
+                }
         }
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -44,6 +49,7 @@ class AgentService : Service() {
         }
         graph.overlay.hide()
         scope.cancel()
+        keepAwake.release()
         super.onDestroy()
     }
     private fun stopAll() {

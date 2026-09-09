@@ -857,3 +857,34 @@ session.
 - Artifact: `artifacts/android-agent-0.6.0.apk`.
 - SHA-256: `870E40E2A617FD3DF2484D60F83FFD8361AD4D15BB658C7D668359D53D274BD3`.
 - No physical-device install/E2E: approved Nothing A059 serial `00152154B002517` was not connected.
+
+## Active conversation screen awake - 2026-09-09
+
+- Muse implemented the first scoped version with `KeepAwakePolicy`, an
+  activity `FLAG_KEEP_SCREEN_ON`, and the same flag on the overlay.
+- Sol medium review found two confirmed gaps: background typed/voice turns
+  were not held awake until the overlay appeared, and the overlay flag was
+  outside Android's documented activity-only contract.
+- Fixed the gaps by removing the overlay flag and making the foreground
+  `AgentService` own an idempotent `SCREEN_BRIGHT_WAKE_LOCK` while
+  `RunState.active || VoiceState.active`. Added the normal `WAKE_LOCK`
+  manifest permission. The lock releases at `IDLE`/`ERROR` and on service
+  destruction; no display-timeout or system setting is changed.
+- Added 7 `KeepAwakePolicyTest` cases and 4
+  `ConversationKeepAwakeControllerTest` cases covering idle, typed, voice,
+  STOPPING, terminal release, one-time acquisition and idempotent cleanup.
+- PASS: `./gradlew.bat :core:test :app:testDevDebugUnitTest
+  :overlay:testDebugUnitTest :app:assembleDevDebug --no-daemon`.
+- PASS: `git diff --check`. The dev debug APK was rebuilt successfully at
+  `app/build/outputs/apk/dev/debug/app-dev-debug.apk`.
+- Sol follow-up review: `DECISION: APPROVE`; no confirmed blocking findings.
+- PASS ON HARDWARE (2026-09-09): installed the dev debug APK with `adb install
+  -r` on `Q8G64TD6ZTB6H6ZL` (`2201116TG`, Android 13). With the display timeout
+  temporarily set to 10 seconds, a real typed turn acquired
+  `SCREEN_BRIGHT_WAKE_LOCK` as `dev.androidagent.app.dev:Conversation`; while
+  the app was sent to Home, `mWakefulness=Awake` and the display state stayed
+  `ON` until the response completed. The lock then released and
+  `Wake Locks: size=0` was observed. The original timeout value
+  `2147483647` was restored.
+- NOT TESTED ON HARDWARE: realtime voice, rotation, power-button interaction,
+  and voice-specific terminal behavior remain physical-device checks.
