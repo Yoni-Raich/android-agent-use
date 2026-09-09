@@ -40,7 +40,9 @@ class AdbServiceDiscovery(context: Context) {
         const val SERVICE_TYPE_CONNECT = "_adb-tls-connect._tcp."
         const val SERVICE_TYPE_PAIRING = "_adb-tls-pairing._tcp."
         private const val LOOPBACK = "127.0.0.1"
-        private const val DEFAULT_TIMEOUT_MS = 3_000L
+        // Also read by AdbAutoConnectPlan's budget test, which has to know what one
+        // discovery pass costs.
+        internal const val DEFAULT_TIMEOUT_MS = 3_000L
         private val DIRECT_EXECUTOR = Executor { it.run() }
 
         fun isValidAdbPort(port: Int): Boolean = port in 1024..65535
