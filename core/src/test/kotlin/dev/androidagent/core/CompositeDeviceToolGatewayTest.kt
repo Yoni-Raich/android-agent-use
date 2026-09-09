@@ -160,9 +160,72 @@ class CompositeDeviceToolGatewayTest {
 
     private fun empty(): JsonObject = buildJsonObject { }
 
+    // ---- per-operation availability (issue #44) ----
+
+    @Test fun aToolStaysReadyWhenAnyBackendInItsChainIsLive() {
+        // The whole point of the fallback chain: a dead first choice does not
+        // make a name unavailable when a later backend can still serve it.
+        val a11y = FakeGateway("a11y", tools = listOf("read_ui", "tap", "open_intent"))
+        val adb = FakeGateway("adb", tools = listOf("read_ui", "tap", "shell"), ready = emptySet())
+        val composite = CompositeDeviceToolGateway(listOf(a11y, adb))
+
+        assertEquals(setOf("read_ui", "tap", "open_intent"), composite.readyTools())
+    }
+
+    @Test fun capabilitiesSplitTheAdvertisedSurfaceIntoLiveAndBlocked() {
+        val a11y = FakeGateway("a11y", tools = listOf("read_ui", "tap", "open_intent"))
+        val adb = FakeGateway("adb", tools = listOf("read_ui", "shell", "install_apk"), ready = emptySet())
+        val composite = CompositeDeviceToolGateway(listOf(a11y, adb))
+
+        val capabilities = DeviceCapabilities.of(
+            composite,
+            AdbStatus(ConnectionPhase.DISCONNECTED, "Not connected"),
+        )
+
+        assertTrue(capabilities.anyReady)
+        assertEquals(setOf("read_ui", "tap", "open_intent"), capabilities.ready)
+        // ADB-only names, and only those.
+        assertEquals(setOf("shell", "install_apk"), capabilities.blocked)
+        assertEquals(ConnectionPhase.DISCONNECTED, capabilities.adbStatus.phase)
+    }
+
+    @Test fun everyBackendDownLeavesNothingReadyButStillAdvertisesTheSurface() {
+        val a11y = FakeGateway("a11y", tools = listOf("read_ui", "tap"), ready = emptySet())
+        val adb = FakeGateway("adb", tools = listOf("shell"), ready = emptySet())
+        val composite = CompositeDeviceToolGateway(listOf(a11y, adb))
+
+        val capabilities = DeviceCapabilities.of(composite, AdbStatus())
+
+        assertFalse(capabilities.anyReady)
+        assertEquals(setOf("read_ui", "tap", "shell"), capabilities.blocked)
+        // The advertised list never shrinks; only the snapshot changes.
+        assertEquals(listOf("read_ui", "tap", "shell"), composite.definitions.map { it.name })
+    }
+
+    @Test fun aBackendThatThrowsWhileReportingReadinessDoesNotBreakTheSnapshot() {
+        val throwing = object : DeviceToolGateway {
+            override val definitions = listOf(ToolDefinition("shell", "shell", buildJsonObject { }))
+            override fun beginRun(runId: String, workspace: File) = Unit
+            override fun revoke() = Unit
+            override fun needsControl(name: String) = true
+            override suspend fun invoke(name: String, arguments: JsonObject) = ToolResult("x")
+            override suspend fun cancel() = Unit
+            override fun readyTools(): Set<String> = error("backend is confused")
+        }
+        val composite = CompositeDeviceToolGateway(
+            listOf(FakeGateway("a11y", tools = listOf("read_ui")), throwing),
+        )
+
+        // A snapshot is never worth failing a turn over.
+        assertEquals(setOf("read_ui"), composite.readyTools())
+        assertEquals(setOf("shell"), DeviceCapabilities.of(composite, AdbStatus()).blocked)
+    }
+
     private class FakeGateway(
         private val id: String,
         tools: List<String>,
+        /** Null means "ready for everything it declares", the interface default. */
+        private val ready: Set<String>? = null,
         val absent: MutableSet<String> = mutableSetOf(),
         private val broken: MutableSet<String> = mutableSetOf(),
         private val control: Set<String> = emptySet(),
@@ -187,6 +250,8 @@ class CompositeDeviceToolGatewayTest {
             revokes++
             if (failRevoke) error("$id cannot revoke")
         }
+
+        override fun readyTools(): Set<String> = ready ?: super.readyTools()
 
         override fun needsControl(name: String) = name in control
 

@@ -248,6 +248,38 @@ fingerprints exactly as it did before. The character-budget fit is a binary
 search over the node count rather than the previous shrink-by-an-eighth loop,
 because paging makes an oversized screen the normal case.
 
+## Per-operation device capability
+
+The advertised tool list is static, because Codex binds it at `thread/start`
+and never re-sends it on resume. Availability is therefore a **per-turn
+snapshot**, not a smaller tool list.
+
+`DeviceToolGateway.readyTools()` reports what one backend can serve right now:
+the ADB gateway answers nothing unless the transport is `CONNECTED`, the
+accessibility gateway answers nothing unless its service is bound, and a purely
+local gateway (workflows, knowledge) answers everything it declares.
+`CompositeDeviceToolGateway` takes the union over live members, so a name whose
+first choice is dead but whose fallback is live is still ready — which is what
+the fallback chain is for. `DeviceCapabilities.of` splits the advertised surface
+into `ready` and `blocked` and never throws: a snapshot is not worth failing a
+turn over.
+
+`AgentCoordinator` builds that snapshot per turn and `CodexEngine` renders it as
+the trusted runtime context, listing both sets by name.
+
+This replaces a single `Device tools available: yes/no` derived from the ADB
+phase alone, which also emitted "Do not call device tools" whenever the
+transport was down. That was too coarse and factually wrong: it disabled the
+entire accessibility surface — `read_ui`, `tap`, `type_text`, `open_intent` —
+for a reason that had nothing to do with any of them, and it blocked a WhatsApp
+deep link that never needed ADB (issue #44). The on-device `AGENTS.md` carried
+the same legacy framing ("you operate the device ... over local Wireless ADB")
+and is corrected with it.
+
+The setup hub already separates the two as their own checklist rows,
+`SetupItem.SCREEN_CONTROL` and `SetupItem.WIRELESS_ADB`, each with its own state
+and remedy, so the UI half of the distinction needed no change.
+
 ## Session queue and exclusive device ownership
 
 The MVP still allows one active run per phone, because one phone screen cannot

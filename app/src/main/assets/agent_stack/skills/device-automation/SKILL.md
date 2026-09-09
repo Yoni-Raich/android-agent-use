@@ -1,6 +1,6 @@
 ---
 name: device-automation
-description: Master skill for precise Android device control via ADB. Covers semantic UI hierarchy parsing, bounds calculation, gestures, Unicode text input, key events, and verification.
+description: Master skill for precise Android device control through the accessibility service or ADB. Covers semantic UI hierarchy parsing, bounds calculation, gestures, Unicode text input, key events, intents, and verification.
 ---
 
 # Android Device Automation Skill
@@ -10,6 +10,8 @@ This skill defines the exact mechanisms for interacting with the Android OS and 
 Two backends serve the same tool names. An on-device accessibility service handles observation and touch without any ADB connection; wireless ADB handles shell, file transfer, installs and anything the accessibility API cannot reach, and covers for the accessibility service when it is switched off. The application routes each call — you never pick. The `source` field in an observation says which backend answered (`accessibility` or `uiautomator`), and `stable:false` means the screen had not settled when it was read.
 
 A failure with `errorType` `backend_unavailable`, `a11y_unavailable`, `key_unsupported` or `no_text_focus` means **nothing happened on the device**. Read the `remedy` field and act on it instead of repeating the call.
+
+Availability is **per operation**, never one global switch. The turn's runtime snapshot lists the tools you can call now and the tools with no live backend. Only the ADB-served operations — `shell`, `push_file`, `pull_file`, `install_apk` — need Wireless Debugging. `read_ui`, `screenshot`, `tap`, `tap_node`, `swipe`, `scroll_node`, `key`, `type_text`, `set_text`, `open_app`, `wait_for_change`, `resolve_intent` and `open_intent` are all served by the accessibility service with no ADB connection at all. A disconnected ADB is never a reason to refuse one of them, and an ordinary deep link is not an ADB operation.
 
 ---
 

@@ -4,6 +4,7 @@ import dev.androidagent.core.AgentModel
 import dev.androidagent.core.AgentSkill
 import dev.androidagent.core.AdbStatus
 import dev.androidagent.core.ConnectionPhase
+import dev.androidagent.core.DeviceCapabilities
 import dev.androidagent.core.RealtimeAudioChunk
 import dev.androidagent.core.ReasoningEffortOption
 import kotlinx.coroutines.*
@@ -174,30 +175,81 @@ class CodexEngineTest {
         assertEquals(skill.path, input[1].jsonObject["path"]?.jsonPrimitive?.content)
     }
 
-    @Test fun turnParamsPutTrustedConnectedAdbContextBeforeUserText() {
+    @Test fun turnParamsPutTheTrustedDeviceContextBeforeUserText() {
         val params = CodexEngine.turnStartParams(
             "thread",
             "Open Settings",
             emptyList(),
             null,
-            adbStatus = AdbStatus(ConnectionPhase.CONNECTED, "Connected", 37123),
+            capabilities = DeviceCapabilities(
+                adbStatus = AdbStatus(ConnectionPhase.CONNECTED, "Connected", 37123),
+                ready = setOf("read_ui", "tap", "shell"),
+                backendStatus = "Accessibility: connected | ADB: phase=CONNECTED",
+            ),
         )
 
         val input = params["input"]!!.jsonArray
         val context = input[0].jsonObject["text"]!!.jsonPrimitive.content
         assertTrue(context.contains("Wireless ADB phase: connected"))
-        assertTrue(context.contains("Device tools available: yes"))
         assertTrue(context.contains("Local ADB port: 37123"))
+        assertTrue(context.contains("Device tools you can call now: read_ui, shell, tap"))
+        assertTrue(context.contains("Use the supplied device tools"))
         assertEquals("Open Settings", input[1].jsonObject["text"]?.jsonPrimitive?.content)
     }
 
-    @Test fun disconnectedAdbContextStopsBlindDeviceToolCalls() {
-        val context = CodexEngine.adbRuntimeContext(AdbStatus(ConnectionPhase.DISCONNECTED, "Not connected"))
+    @Test fun aDisconnectedAdbNeverBlocksTheToolsAccessibilityCanStillServe() {
+        // Issue #44: the old snapshot derived one availability flag from the
+        // ADB phase and said "Do not call device tools", which stopped
+        // open_intent on a deep link that never needed ADB.
+        val context = CodexEngine.deviceRuntimeContext(
+            DeviceCapabilities(
+                adbStatus = AdbStatus(ConnectionPhase.DISCONNECTED, "Not connected"),
+                ready = setOf("read_ui", "open_intent", "tap", "type_text"),
+                blocked = setOf("shell", "install_apk", "push_file", "pull_file"),
+                backendStatus = "Accessibility: connected | ADB: phase=DISCONNECTED",
+            )
+        )
 
-        assertTrue(context.contains("Device tools available: no"))
-        assertTrue(context.contains("Do not call device tools"))
-        assertTrue(context.contains("enable Wireless Debugging"))
+        assertTrue(context.contains("Device tools you can call now: open_intent, read_ui, tap, type_text"))
+        assertTrue(context.contains("Device tools with no live backend: install_apk, pull_file, push_file, shell"))
+        assertTrue(context.contains("Call anything in the first list normally"))
+        // The blanket block is exactly what must not come back.
+        assertFalse(context.contains("Do not call device tools"))
+        assertFalse(context.contains("Device tools available: no"))
         assertFalse(context.contains("Local ADB port"))
+    }
+
+    @Test fun noLiveBackendNamesBothWaysBackInsteadOfOnlyWirelessDebugging() {
+        val context = CodexEngine.deviceRuntimeContext(
+            DeviceCapabilities(
+                adbStatus = AdbStatus(ConnectionPhase.DISCONNECTED, "Not connected"),
+                blocked = setOf("read_ui", "shell"),
+            )
+        )
+
+        assertTrue(context.contains("Device tools you can call now: none"))
+        assertTrue(context.contains("accessibility service"))
+        assertTrue(context.contains("Wireless Debugging"))
+    }
+
+    @Test fun adbSetupInProgressAsksTheUserToWaitRatherThanToStartOver() {
+        val context = CodexEngine.deviceRuntimeContext(
+            DeviceCapabilities(adbStatus = AdbStatus(ConnectionPhase.CONNECTING, "Connecting"))
+        )
+
+        assertTrue(context.contains("setup is in progress"))
+        assertTrue(context.contains("Ask the user to wait"))
+    }
+
+    @Test fun theAdbOnlyOverloadStillProducesASnapshot() {
+        // Older callers hand over an AdbStatus and nothing else. That path must
+        // keep working, it just cannot name the accessibility tools.
+        val context = CodexEngine.deviceRuntimeContext(
+            DeviceCapabilities(adbStatus = AdbStatus(ConnectionPhase.CONNECTED, "Connected", 37123))
+        )
+
+        assertTrue(context.contains("Wireless ADB phase: connected"))
+        assertTrue(context.contains("Local ADB port: 37123"))
     }
 
     @Test fun realtimeStartUsesWebSocketV2ByDefault() {

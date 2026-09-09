@@ -171,8 +171,20 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
         reasoningEffort: String?,
         skill: AgentSkill?,
         adbStatus: AdbStatus,
+    ): String = startTurn(
+        threadId, prompt, images, reasoningEffort, skill,
+        DeviceCapabilities(adbStatus = adbStatus),
+    )
+
+    override suspend fun startTurn(
+        threadId: String,
+        prompt: String,
+        images: List<File>,
+        reasoningEffort: String?,
+        skill: AgentSkill?,
+        capabilities: DeviceCapabilities,
     ): String {
-        val result = request("turn/start", turnStartParams(threadId, prompt, images, reasoningEffort, skill, adbStatus))
+        val result = request("turn/start", turnStartParams(threadId, prompt, images, reasoningEffort, skill, capabilities))
         return result["turn"]?.jsonObject?.string("id")?.takeIf { it.isNotBlank() } ?: error("Codex returned no turn ID")
     }
 
@@ -576,14 +588,14 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
             images: List<File>,
             reasoningEffort: String?,
             skill: AgentSkill? = null,
-            adbStatus: AdbStatus? = null,
+            capabilities: DeviceCapabilities? = null,
         ): JsonObject = buildJsonObject {
             put("threadId", threadId)
             put("input", buildJsonArray {
-                adbStatus?.let { status ->
+                capabilities?.let { snapshot ->
                     add(buildJsonObject {
                         put("type", "text")
-                        put("text", adbRuntimeContext(status))
+                        put("text", deviceRuntimeContext(snapshot))
                     })
                 }
                 add(buildJsonObject { put("type", "text"); put("text", prompt) })
@@ -598,23 +610,66 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
             if (!reasoningEffort.isNullOrBlank()) put("effort", reasoningEffort)
         }
 
-        internal fun adbRuntimeContext(status: AdbStatus): String = buildString {
-            val available = status.phase == ConnectionPhase.CONNECTED
+        /**
+         * The per-turn device snapshot.
+         *
+         * Availability is reported **per operation**. The previous version
+         * derived one `Device tools available: yes/no` from the ADB phase
+         * alone and told the model "Do not call device tools" whenever the
+         * transport was down, which blocked the whole accessibility surface —
+         * `open_intent` on an ordinary deep link included — for a reason that
+         * had nothing to do with it (issue #44).
+         */
+        internal fun deviceRuntimeContext(capabilities: DeviceCapabilities): String = buildString {
+            val status = capabilities.adbStatus
             appendLine("[Trusted Android Agent runtime context]")
-            appendLine("This snapshot replaces older ADB snapshots in the thread.")
+            appendLine("This snapshot replaces older device snapshots in the thread.")
             appendLine("Wireless ADB phase: ${status.phase.name.lowercase()}")
-            appendLine("Device tools available: ${if (available) "yes" else "no"}")
+            capabilities.backendStatus?.let { appendLine("Backends: $it") }
             status.port?.let { appendLine("Local ADB port: $it") }
-            when (status.phase) {
-                ConnectionPhase.CONNECTED -> append("Use the supplied device tools when the task needs device access.")
-                ConnectionPhase.DISCOVERING, ConnectionPhase.PAIRING, ConnectionPhase.CONNECTING ->
-                    append("Connection setup is in progress. Do not call device tools yet; ask the user to wait or open Wireless Debugging if it does not connect.")
-                ConnectionPhase.DISCONNECTED ->
-                    append("Do not call device tools. Ask the user to enable Wireless Debugging and reconnect from Android Agent.")
-                ConnectionPhase.ERROR ->
-                    append("Do not call device tools. Tell the user ADB is unavailable and ask them to open Wireless Debugging in Android settings.")
+            appendLine(
+                if (capabilities.anyReady) {
+                    "Device tools you can call now: ${capabilities.ready.sorted().joinToString(", ")}"
+                } else {
+                    "Device tools you can call now: none"
+                }
+            )
+            if (capabilities.blocked.isNotEmpty()) {
+                appendLine(
+                    "Device tools with no live backend: " +
+                        capabilities.blocked.sorted().joinToString(", "),
+                )
             }
+            append(
+                when {
+                    capabilities.anyReady && capabilities.blocked.isEmpty() ->
+                        "Use the supplied device tools when the task needs device access."
+                    capabilities.anyReady ->
+                        "Call anything in the first list normally. A tool in the second list has no " +
+                            "live backend right now; if the task needs one, name that exact tool and " +
+                            "say what it requires — most of them need Wireless Debugging. Do not treat " +
+                            "the whole device surface as unavailable, and do not refuse an operation " +
+                            "the first list covers."
+                    status.phase in SETUP_PHASES ->
+                        "No backend is live yet and ADB setup is in progress. Ask the user to wait, " +
+                            "or to open Wireless Debugging if it does not connect. Enabling the " +
+                            "Android Agent accessibility service in Settings > Accessibility also " +
+                            "restores observation, touch, text and intents without ADB."
+                    else ->
+                        "No device backend is live. Ask the user to enable the Android Agent " +
+                            "accessibility service in Settings > Accessibility, which restores " +
+                            "observation, touch, text and intents without ADB, or to connect " +
+                            "Wireless Debugging for shell, file transfer and installs."
+                }
+            )
         }
+
+        /** ADB phases that mean "wait", not "ask the user to start over". */
+        private val SETUP_PHASES = setOf(
+            ConnectionPhase.DISCOVERING,
+            ConnectionPhase.PAIRING,
+            ConnectionPhase.CONNECTING,
+        )
 
         /** Build the v0.153.4 thread/realtime/start request. */
         internal fun realtimeStartParams(threadId: String, model: String?): JsonObject =

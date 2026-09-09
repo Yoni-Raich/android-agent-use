@@ -136,6 +136,21 @@ interface AgentEngine {
         skill: AgentSkill?,
         adbStatus: AdbStatus,
     ): String = startTurn(threadId, prompt, images, reasoningEffort, skill)
+    /**
+     * Start a turn with a point-in-time snapshot of what device control can do.
+     *
+     * Preferred over the [AdbStatus] overload: ADB is one backend of several,
+     * and a turn that only knows the ADB phase cannot tell the model that
+     * accessibility operations are still live.
+     */
+    suspend fun startTurn(
+        threadId: String,
+        prompt: String,
+        images: List<File> = emptyList(),
+        reasoningEffort: String?,
+        skill: AgentSkill?,
+        capabilities: DeviceCapabilities,
+    ): String = startTurn(threadId, prompt, images, reasoningEffort, skill, capabilities.adbStatus)
     suspend fun steer(threadId: String, turnId: String, prompt: String)
     suspend fun interrupt(threadId: String, turnId: String)
     suspend fun answerTool(requestId: String, result: ToolResult)
@@ -248,6 +263,54 @@ interface DeviceToolGateway {
 
     /** One human line for `device_status`. Null when the gateway has nothing to report. */
     fun statusLine(): String? = null
+
+    /**
+     * Tool names this gateway can serve **right now**.
+     *
+     * Advisory only. It never changes [definitions], which stays static because
+     * Codex binds the tool list once per thread; it exists so a per-turn
+     * snapshot can say which operations are live instead of collapsing every
+     * backend into one availability flag. A gateway that needs no transport
+     * says all of them, which is the right answer for a purely local backend.
+     */
+    fun readyTools(): Set<String> = definitions.map { it.name }.toSet()
+}
+
+/**
+ * A per-turn snapshot of what device control can actually do.
+ *
+ * Availability is per operation, not one global ADB flag. The accessibility
+ * backend serves observation, touch, text and intents with no ADB at all, so an
+ * ADB transport that is down must never read as "no device tools" — that is the
+ * blanket block issue #44 reported, which stopped `open_intent` on a deep link
+ * that never needed ADB in the first place.
+ */
+data class DeviceCapabilities(
+    val adbStatus: AdbStatus = AdbStatus(),
+    /** Advertised names at least one live backend can serve. */
+    val ready: Set<String> = emptySet(),
+    /** Advertised names with no live backend right now. */
+    val blocked: Set<String> = emptySet(),
+    /** Human backend lines, e.g. `Accessibility: connected | ADB: phase=...`. */
+    val backendStatus: String? = null,
+) {
+    /** True when at least one operation can be dispatched. */
+    val anyReady: Boolean get() = ready.isNotEmpty()
+
+    companion object {
+        /** Read the live picture off a gateway. Never throws: a snapshot is not worth a failed turn. */
+        fun of(tools: DeviceToolGateway, adbStatus: AdbStatus): DeviceCapabilities {
+            val ready = runCatching { tools.readyTools() }.getOrDefault(emptySet())
+            val advertised = runCatching { tools.definitions.map { it.name }.toSet() }
+                .getOrDefault(emptySet())
+            return DeviceCapabilities(
+                adbStatus = adbStatus,
+                ready = advertised intersect ready,
+                blocked = advertised - ready,
+                backendStatus = runCatching { tools.statusLine() }.getOrNull(),
+            )
+        }
+    }
 }
 
 /**

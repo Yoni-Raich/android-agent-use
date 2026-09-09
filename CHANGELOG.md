@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Device control is no longer reported as one global ADB-dependent switch. Each
+  turn now carries a snapshot naming the tools that can be called right now and
+  the tools whose backend is down, so a disconnected Wireless ADB no longer
+  blocks `read_ui`, `tap`, `type_text`, `open_app` or `open_intent` — all of
+  which the accessibility service serves with no ADB at all. The legacy "Do not
+  call device tools" instruction and the ADB-only framing in the on-device
+  `AGENTS.md` are gone. Fixes #44.
 - `read_ui` can now be asked a focused question instead of returning the whole
   screen and silently dropping the tail. It takes `text`, `resourceId`, `class`,
   `package`, `rootNodeId`, `clickableOnly` and `scrollableOnly` filters plus

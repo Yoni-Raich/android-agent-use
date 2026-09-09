@@ -125,6 +125,15 @@ class A11yDeviceTools(
         }
     }
 
+    /**
+     * Everything this backend does needs a bound service, and none of it needs
+     * ADB. That asymmetry is the point of issue #44: with the service on and
+     * Wireless Debugging off, observation, touch, text and intents are all
+     * still live and must not be reported as unavailable.
+     */
+    override fun readyTools(): Set<String> =
+        if (A11yServiceHandle.connected) definitions.map { it.name }.toSet() else emptySet()
+
     override suspend fun cancel() {
         // Nothing to tear down: every wait here is bounded by withTimeoutOrNull
         // and unwinds with the cancelled coroutine.
