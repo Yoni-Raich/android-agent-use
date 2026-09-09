@@ -59,7 +59,19 @@ class GitHubConnectorController(
     }
 
     suspend fun synchronize() {
-        if (vault.read(CREDENTIAL_KEY) != null) configureAndInspect(restart = false)
+        val credentials = vault.read(CREDENTIAL_KEY) ?: return
+        val refreshed = refreshIfNeeded(credentials)
+        if (refreshed == null) {
+            mutable.value = mutable.value.copy(
+                connected = false,
+                status = "GitHub sign-in expired. Connect again.",
+            )
+            stateStore.get(GitHubConnectorCatalog.ID)?.let {
+                stateStore.put(it.copy(state = ConnectorState.REAUTH_REQUIRED, lastErrorCode = "token_expired"))
+            }
+            return
+        }
+        configureAndInspect(restart = false)
     }
 
     suspend fun connect() {
@@ -194,13 +206,43 @@ class GitHubConnectorController(
             configureAndInspect(restart = false)
             return
         }
-        if (saved != null) stateStore.put(saved.copy(toolSchemaFingerprint = fingerprint ?: saved.toolSchemaFingerprint))
+        val needsAuth = server?.phase == dev.androidagent.core.McpRuntimePhase.AUTHENTICATION_REQUIRED ||
+            server?.authStatus?.lowercase() in setOf("expired", "unauthenticated", "authentication_required")
+        if (saved != null) {
+            stateStore.put(
+                saved.copy(
+                    state = if (needsAuth) ConnectorState.REAUTH_REQUIRED else ConnectorState.CONNECTED,
+                    lastErrorCode = if (needsAuth) "authentication_required" else null,
+                    toolSchemaFingerprint = fingerprint ?: saved.toolSchemaFingerprint,
+                    lastUpdatedAtEpochSeconds = nowSeconds(),
+                ),
+            )
+        }
         mutable.value = mutable.value.copy(
-            connected = true,
+            connected = !needsAuth,
             connecting = false,
             toolCount = server?.tools?.size ?: 0,
-            status = server?.error ?: if (server == null) "Connected; tool status is pending" else "Connected · ${server.tools.size} tools",
+            status = when {
+                needsAuth -> "GitHub sign-in expired. Connect again."
+                server?.error != null -> server.error ?: "GitHub MCP reported an error"
+                server == null -> "Connected; tool status is pending"
+                else -> "Connected · ${server.tools.size} tools"
+            },
         )
+    }
+
+    private suspend fun refreshIfNeeded(
+        credentials: dev.androidagent.connectors.CredentialBundle,
+    ): dev.androidagent.connectors.CredentialBundle? {
+        val expiresAt = credentials.accessTokenExpiresAtEpochSeconds ?: return credentials
+        if (expiresAt > nowSeconds() + TOKEN_REFRESH_LEEWAY_SECONDS) return credentials
+        val refreshToken = credentials.refreshToken ?: return null
+        if (clientId.isBlank()) return null
+        return runCatching {
+            GitHubOAuthDeviceFlowClient(clientId, http).refresh(refreshToken, credentials.grantedScopes).also {
+                vault.write(CREDENTIAL_KEY, it)
+            }
+        }.getOrNull()
     }
 
     private suspend fun loadIdentity(token: String): Pair<String, Long?> {
@@ -248,5 +290,6 @@ class GitHubConnectorController(
         const val SERVER_NAME = "github"
         const val CREDENTIAL_KEY = "github.oauth"
         const val PERMISSION_KEY = "github.permission"
+        const val TOKEN_REFRESH_LEEWAY_SECONDS = 60L
     }
 }
