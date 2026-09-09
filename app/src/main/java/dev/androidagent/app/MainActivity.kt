@@ -24,9 +24,11 @@ import dev.androidagent.core.KeepAwakePolicy
 
 class MainActivity : ComponentActivity() {
     private val model: AgentViewModel by viewModels()
+    private var askedForNotifications = false
     private val filePicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(model::addAttachment) }
-    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { model.refreshPermissions() }
     private val microphonePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        model.refreshPermissions()
         if (granted) { ensureService(); model.toggleVoice() }
         else model.error("Microphone permission is required for voice.")
     }
@@ -51,7 +53,10 @@ class MainActivity : ComponentActivity() {
         }
         ensureService()
         model.prepare()
-        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            askedForNotifications = true
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
     override fun onStart() {
         super.onStart()
@@ -63,7 +68,9 @@ class MainActivity : ComponentActivity() {
         model.graph.overlay.setAppForeground(false)
         super.onStop()
     }
-    override fun onResume() { super.onResume(); model.refreshAccount() }
+    // Every grant the checklist tracks is flipped in a system Settings screen,
+    // so the app is always stopped and resumed around the change.
+    override fun onResume() { super.onResume(); model.refreshAccount(); model.refreshPermissions() }
     private fun ensureService() { runCatching { ContextCompat.startForegroundService(this, Intent(this, AgentService::class.java)) }.onFailure { model.error("Could not start the agent service: ${it.message}") } }
     private fun actions() = AgentUiActions(
         onDrawerChanged = { open -> model.editUi { it.copy(isDrawerOpen = open) } },
@@ -83,10 +90,10 @@ class MainActivity : ComponentActivity() {
         onLogin = { ensureService(); model.login() },
         onLogout = { model.logout() },
         onRefreshAccount = { model.refreshAccount() },
-        onOpenWirelessSettings = { startActivity(Intent("android.settings.WIRELESS_DEBUGGING_SETTINGS")) },
-        onOpenAccessibilitySettings = { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
-        onOpenAppInfo = { startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) },
-        onOpenOverlayPermission = { startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))) },
+        onOpenWirelessSettings = ::openWirelessDebugging,
+        onOpenAccessibilitySettings = { openSettings(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
+        onOpenAppInfo = { openSettings(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) },
+        onOpenOverlayPermission = { openSettings(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))) },
         onDisconnect = { model.disconnect() },
         onForgetPairing = { model.forgetPairing() },
         onPair = { code, port -> model.pair(code, port) },
@@ -106,7 +113,67 @@ class MainActivity : ComponentActivity() {
         onInstallUpdate = { model.installUpdate() },
         onDismissUpdateBanner = { model.dismissUpdateBanner() },
         onOpenInstallPermission = { model.openInstallPermission() },
+        onOpenNotificationSettings = ::requestNotifications,
+        // Arm the reader before the dialog can appear, then hand the user over.
+        onCapturePairing = {
+            model.capturePairing()
+            openWirelessDebugging()
+        },
+        onDismissInfo = { model.editUi { it.copy(infoMessage = null) } },
     )
+
+    /**
+     * Wireless debugging is not reachable by its own action on every build -
+     * HyperOS does not resolve it at all - so this walks down to developer
+     * options and then to the settings root rather than throwing.
+     */
+    private fun openWirelessDebugging() {
+        val candidates = listOf(
+            Intent("android.settings.WIRELESS_DEBUGGING_SETTINGS"),
+            Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS),
+            Intent(Settings.ACTION_SETTINGS),
+        )
+        if (candidates.none { openSettings(it, report = false) }) {
+            model.error("This phone has no Wireless debugging screen to open. Turn it on from Developer options.")
+        }
+    }
+
+    /** Returns false when nothing on the phone can handle the intent. */
+    private fun openSettings(intent: Intent, report: Boolean = true): Boolean {
+        val started = runCatching { startActivity(intent); true }.getOrDefault(false)
+        if (!started && report) model.error("This phone has no settings screen for that.")
+        return started
+    }
+
+    /**
+     * Ask for notifications, or send the user to the app's notification screen
+     * once Android stops showing the dialog — a launch after a permanent denial
+     * is a silent no-op.
+     */
+    private fun requestNotifications() {
+        if (Build.VERSION.SDK_INT < 33) {
+            openNotificationSettings()
+            return
+        }
+        val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        if (!granted && shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else if (!granted && !askedForNotifications) {
+            askedForNotifications = true
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            openNotificationSettings()
+        }
+    }
+
+    private fun openNotificationSettings() {
+        runCatching {
+            startActivity(
+                Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(Settings.EXTRA_APP_PACKAGE, packageName),
+            )
+        }.onFailure { startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) }
+    }
     private fun toggleVoice() {
         if (model.graph.voice.state.value.active) {
             model.toggleVoice()
