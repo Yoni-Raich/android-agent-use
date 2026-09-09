@@ -5,6 +5,8 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import java.io.File
 import java.util.ArrayDeque
@@ -638,6 +640,15 @@ class AgentCoordinator(
                         val visible = tools.needsControl(event.name)
                         val capture = tools.hidesOverlayDuringCapture(event.name)
                         val status = event.name.replace('_', ' ')
+                        // act_and_observe wraps the real action, so report that
+                        // instead: callers care that a tap is happening, not
+                        // which envelope carried it.
+                        val toolName = if (event.name == "act_and_observe") {
+                            runCatching { event.arguments["action"]?.jsonPrimitive?.contentOrNull }.getOrNull()
+                                ?.takeIf { it.isNotBlank() } ?: event.name
+                        } else {
+                            event.name
+                        }
                         val overlayState = if (visible) {
                             OverlayState(OverlayPhase.CONTROLLING, status)
                         } else {
@@ -664,7 +675,7 @@ class AgentCoordinator(
                             }
                             ensureCurrentTurn(token, event.threadId.orEmpty(), event.turnId.orEmpty())
                             synchronized(lifecycleLock) {
-                                mutableState.value = state.value.copy(phase = if (visible) RunPhase.CONTROLLING else RunPhase.TOOL, controlling = visible, status = status)
+                                mutableState.value = state.value.copy(phase = if (visible) RunPhase.CONTROLLING else RunPhase.TOOL, controlling = visible, status = status, toolName = toolName)
                             }
                             val toolStart = System.nanoTime()
                             toolCalls++
