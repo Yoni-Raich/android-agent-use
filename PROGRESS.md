@@ -18,6 +18,15 @@ not production-ready.
 - The current screen-awake change passed focused JVM tests and a dev debug
   build on 2026-09-09. A designated Android 13 test phone kept its screen on
   during a typed run and released the wake lock when the run ended.
+- Focused `read_ui` queries and paging (issue #45) passed JVM tests and a dev
+  debug build on 2026-09-10: `./gradlew.bat test :app:assembleDevDebug`, with
+  31 tests in `UiObservationSerializerTest`, 21 in `NodeTraversalTest` and 33 in
+  `AndroidDeviceToolsTest`, all passing. One test pages a synthetic 3 000-node
+  screen through `nextOffset` and asserts every node comes back exactly once and
+  in order, which is the behavior the issue reported as unreachable. This proves
+  the serializer, both parsers and the ADB gateway wiring only; it was **not**
+  run against WhatsApp or any physical phone, so the original reproduction is
+  still unverified on hardware.
 - The app has Compose chat, per-session workspace storage, Codex app-server
   integration, Wireless ADB support, an accessibility device backend, visible
   control state, local Stop, skills, workflows, and experimental realtime voice

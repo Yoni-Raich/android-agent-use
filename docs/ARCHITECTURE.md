@@ -210,6 +210,44 @@ Each result includes monotonic elapsed time and an observation revision. This
 removes raw XML token cost and caps the observed 22-second idle-wait tail, but
 it does not prove a faster real WhatsApp workflow until measured on Q8.
 
+### Focused queries and paging
+
+A reply is capped at 20 000 characters, which a busy screen exceeds. Truncation
+on its own was a dead end: the reply said `"truncated":true` and the omitted
+nodes — typically the lower part of the screen, including contacts and controls
+the task needed — had no way back (issue #45). `read_ui` now takes a `UiQuery`,
+parsed in `:core` and applied by both backends through the same
+`UiObservationSerializer.render`:
+
+- `text`, `resourceId`, `class` and `package` are case-insensitive substring
+  filters, combined with AND. A password node is matched on its description
+  only, never on the text it never emits, so the filter cannot be used to read
+  a masked field one probe at a time.
+- `rootNodeId` returns one node and its descendants. `UiNode.parentId` carries
+  the nearest ancestor that was **itself emitted**, so a subtree resolves from
+  the flat node list in one forward pass over the pre-order traversal; it is
+  never serialized, so it costs the character budget nothing. A `rootNodeId`
+  that is not on screen is a typed `ui_unknown_node` failure, because an empty
+  node list would read as "that part of the screen is empty".
+- `offset` is the cursor. Every reply reports `totalNodes`, `returnedNodes`,
+  and — when filtered — `matchedNodes` and the query it was given; a reply that
+  left something out carries `nextOffset` and a hint naming it. Paging over a
+  screen therefore terminates and covers every node exactly once.
+- `maxNodes` and `maxChars` only ever lower the caps.
+
+A filter narrows what is *emitted*, never what is read. The dump and the
+traversal are unchanged, node ids stay stable, and the accessibility backend
+keeps handles for the whole traversal, so `tap_node`, `set_text` and
+`scroll_node` still reach a node a query did not list.
+
+The query is part of the unchanged-suppression digest. The same screen answers
+two different queries differently, so suppressing the second as "unchanged"
+would point the model at a node list that answers the wrong question; an empty
+query contributes nothing to the digest, so every unfiltered observation
+fingerprints exactly as it did before. The character-budget fit is a binary
+search over the node count rather than the previous shrink-by-an-eighth loop,
+because paging makes an oversized screen the normal case.
+
 ## Session queue and exclusive device ownership
 
 The MVP still allows one active run per phone, because one phone screen cannot

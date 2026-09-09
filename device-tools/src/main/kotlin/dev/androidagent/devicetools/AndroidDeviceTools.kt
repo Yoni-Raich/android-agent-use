@@ -4,6 +4,7 @@ import dev.androidagent.adb.AdbFileTransport
 import dev.androidagent.core.AdbTransport
 import dev.androidagent.core.CommandResult
 import dev.androidagent.core.DeviceToolGateway
+import dev.androidagent.core.READ_UI_DESCRIPTION
 import dev.androidagent.core.ObservationFingerprint
 import dev.androidagent.core.ObservationState
 import dev.androidagent.core.ToolDefinition
@@ -11,6 +12,7 @@ import dev.androidagent.core.ToolResult
 import dev.androidagent.core.UiNode
 import dev.androidagent.core.UiObservation
 import dev.androidagent.core.UiObservationSerializer
+import dev.androidagent.core.UiQuery
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.CancellationException
@@ -165,13 +167,14 @@ class AndroidDeviceTools(
         val timeout = arguments.timeoutMsOrDefault(READ_UI_DEFAULT_TIMEOUT_MS)
         val raw = arguments["raw"]?.jsonPrimitive?.booleanOrNull ?: false
         val force = arguments["force"]?.jsonPrimitive?.booleanOrNull ?: false
+        val query = UiQuery.from(arguments)
         val revision = observations.nextRevision()
         val observationId = "ui-$revision"
         val startedAt = System.nanoTime()
 
         return try {
             val result = withTimeout(timeout) {
-                readUiWithinBudget(raw, force, revision, observationId, startedAt, timeout)
+                readUiWithinBudget(raw, force, query, revision, observationId, startedAt, timeout)
             }
             // A failed observation means the screen is unknown, so the next
             // successful one must carry a full payload rather than a diff.
@@ -204,6 +207,7 @@ class AndroidDeviceTools(
     private suspend fun readUiWithinBudget(
         raw: Boolean,
         force: Boolean,
+        query: UiQuery,
         revision: Long,
         observationId: String,
         startedAt: Long,
@@ -246,7 +250,7 @@ class AndroidDeviceTools(
             )
         }
         return completeUiObservation(
-            xml, "file", raw, force, observationId, revision, startedAt,
+            xml, "file", raw, force, query, observationId, revision, startedAt,
         )
     }
 
@@ -268,6 +272,7 @@ class AndroidDeviceTools(
         source: String,
         raw: Boolean,
         force: Boolean,
+        query: UiQuery,
         observationId: String,
         revision: Long,
         startedAt: Long,
@@ -289,9 +294,10 @@ class AndroidDeviceTools(
                 force = force,
                 // uiautomator only answers once the window is already idle.
                 stable = true,
+                query = query,
             )
             rendered.fingerprint?.let { observations.record(it) }
-            ToolResult(bound(rendered.text))
+            ToolResult(bound(rendered.text), success = rendered.ok)
         } catch (error: Exception) {
             uiFailure(
                 observationId, revision, startedAt, "ui_parse_failure",
@@ -341,6 +347,9 @@ class AndroidDeviceTools(
                             packageName = parser.attribute("package").compactUiText(),
                             password = parser.attribute("password")?.toBooleanStrictOrNull() ?: false,
                             clickableAncestor = ancestors.lastOrNull { it.clickable }?.asClickTarget(),
+                            // The nearest ancestor that will itself be emitted:
+                            // a subtree query has to resolve from the flat list.
+                            parentId = ancestors.lastOrNull { it.isMeaningful() }?.nodeId,
                         )
                         node.packageName?.let { packages[it] = (packages[it] ?: 0) + 1 }
                         if (node.isMeaningful()) meaningful += node
@@ -1005,8 +1014,14 @@ class AndroidDeviceTools(
             tool("device_status", "Read ADB connection state. Read-only.", emptyMap(), emptyList()),
             tool(
                 "read_ui",
-                "Read a bounded compact semantic UI observation. Returns labeled/actionable nodes by default; use raw=true only for debug XML. When the screen is identical to the previous observation the reply is \"unchanged\":true with \"unchangedSinceRevision\" instead of the node list — reuse the nodes from that revision, or pass force=true to resend them. Timeout or idle failures are typed and do not trigger a second dump.",
-                mapOf("timeoutMs" to "integer", "raw" to "boolean", "force" to "boolean"),
+                READ_UI_DESCRIPTION,
+                mapOf(
+                    "timeoutMs" to "integer", "raw" to "boolean", "force" to "boolean",
+                    "text" to "string", "resourceId" to "string", "class" to "string",
+                    "package" to "string", "rootNodeId" to "string",
+                    "clickableOnly" to "boolean", "scrollableOnly" to "boolean",
+                    "offset" to "integer", "maxNodes" to "integer", "maxChars" to "integer",
+                ),
                 emptyList(),
             ),
             tool("screenshot", "Capture a PNG screenshot. Returns imageBase64. Read-only.", emptyMap(), emptyList()),
