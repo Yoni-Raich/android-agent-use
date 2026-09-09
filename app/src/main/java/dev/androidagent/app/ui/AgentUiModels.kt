@@ -43,11 +43,42 @@ data class PendingAttachment(
     val sizeBytes: Long? = null,
 )
 
+/**
+ * Which durable root a listed file came from.
+ *
+ * The browser used to show only the session workspace, which is the one root
+ * whose contents do not survive the chat. What the agent actually remembers
+ * lives in the other two, and a user with no way to see them has no way to
+ * check, correct or delete what has been recorded about them.
+ */
+enum class WorkspaceFileRoot(val label: String) {
+    SESSION("This chat"),
+    MEMORY("Shared memory"),
+    SKILLS("Skills"),
+}
+
 data class WorkspaceFileItem(
     val path: String,
     val sizeBytes: Long? = null,
     val modifiedAt: Long? = null,
     val isDirectory: Boolean = false,
+    val root: WorkspaceFileRoot = WorkspaceFileRoot.SESSION,
+)
+
+/**
+ * One file opened in the in-app viewer.
+ *
+ * @param text the content, or null when it is not something this app should
+ *   render. Everything the agent writes is Markdown or JSON, and handing those
+ *   to an external viewer through a chooser is what made the browser look
+ *   broken: most phones have nothing registered for `text/markdown`, so the
+ *   chooser came up empty and the tap appeared to do nothing.
+ * @param truncated true when the file was longer than the viewer shows.
+ */
+data class WorkspaceFilePreview(
+    val item: WorkspaceFileItem,
+    val text: String? = null,
+    val truncated: Boolean = false,
 )
 
 enum class AgentCardState { ACTIVE, COMPLETE, ERROR, BLOCKED }
@@ -91,6 +122,8 @@ data class AgentUiState(
     val statusCards: List<AgentStatusCard> = emptyList(),
     val attachments: List<PendingAttachment> = emptyList(),
     val workspaceFiles: List<WorkspaceFileItem> = emptyList(),
+    val isFileBrowserOpen: Boolean = false,
+    val filePreview: WorkspaceFilePreview? = null,
     val discoveredEndpoints: List<AdbEndpoint> = emptyList(),
     val runState: RunState = RunState(),
     val queuedTurns: List<dev.androidagent.core.QueuedTurn> = emptyList(),
@@ -174,7 +207,12 @@ data class AgentUiActions(
     val onRetry: () -> Unit = {},
     val onDismissError: () -> Unit = {},
     val onOpenWorkspaceFiles: () -> Unit = {},
+    val onCloseWorkspaceFiles: () -> Unit = {},
+    /** Show the file in the app. Only a viewer, never an editor. */
     val onOpenWorkspaceFile: (WorkspaceFileItem) -> Unit = {},
+    val onCloseFilePreview: () -> Unit = {},
+    /** Hand the file to another app, for the types this one cannot render. */
+    val onOpenFileExternally: (WorkspaceFileItem) -> Unit = {},
     val onApproval: (requestId: String, allow: Boolean) -> Unit = { _, _ -> },
     val onCheckForUpdates: () -> Unit = {},
     val onDownloadUpdate: () -> Unit = {},

@@ -46,7 +46,9 @@ import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PictureInPictureAlt
@@ -68,6 +70,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationDrawerItem
@@ -115,6 +119,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.rememberDrawerState
+import androidx.compose.material3.rememberModalBottomSheetState
 import dev.androidagent.core.ChatMessage
 import dev.androidagent.core.ConnectionPhase
 import dev.androidagent.core.EngineEvent
@@ -252,6 +257,18 @@ fun AndroidAgentScreen(
 
         if (state.isSettingsOpen) {
             AgentSettingsSheet(state = state, actions = actions)
+        }
+
+        if (state.isFileBrowserOpen) {
+            WorkspaceFilesSheet(state = state, actions = actions)
+        }
+
+        state.filePreview?.let { preview ->
+            FilePreviewDialog(
+                preview = preview,
+                onClose = actions.onCloseFilePreview,
+                onOpenExternally = { actions.onOpenFileExternally(preview.item) },
+            )
         }
     }
 }
@@ -730,15 +747,6 @@ private fun AgentChatContent(
             items(state.messages, key = { it.id }) { message -> MessageBubble(message) }
         }
 
-        if (state.workspaceFiles.isNotEmpty()) {
-            item(key = "workspace-files") {
-                WorkspaceFilesCard(
-                    files = state.workspaceFiles,
-                    onOpenFiles = actions.onOpenWorkspaceFiles,
-                    onOpenFile = actions.onOpenWorkspaceFile,
-                )
-            }
-        }
     }
 }
 
@@ -990,51 +998,196 @@ private fun StatusCard(card: AgentStatusCard) {
 }
 
 
+/**
+ * The file browser.
+ *
+ * It replaces a card that was appended to the chat and then stayed there: it
+ * had no dismiss control, nothing ever cleared the list, and it showed only the
+ * first five entries. A sheet closes by swipe, by back gesture and by its own
+ * button, and it can hold the whole listing.
+ *
+ * Sections rather than one flat list, because the three roots answer different
+ * questions. "This chat" is scratch space, rebuilt from templates on every
+ * open. "Shared memory" and "Skills" are what the agent will still know
+ * tomorrow, and they are the reason this screen is worth opening at all — a
+ * user with no way to see them has no way to check or correct what has been
+ * recorded about them.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun WorkspaceFilesCard(
-    files: List<WorkspaceFileItem>,
-    onOpenFiles: () -> Unit,
-    onOpenFile: (WorkspaceFileItem) -> Unit,
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.52f)),
+private fun WorkspaceFilesSheet(state: AgentUiState, actions: AgentUiActions) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var selectedRoot by rememberSaveable { mutableStateOf(WorkspaceFileRoot.MEMORY) }
+    val byRoot = remember(state.workspaceFiles) { state.workspaceFiles.groupBy { it.root } }
+    val shown = byRoot[selectedRoot].orEmpty().filterNot { it.isDirectory }
+
+    ModalBottomSheet(
+        onDismissRequest = actions.onCloseWorkspaceFiles,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
     ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 560.dp)
+                .padding(horizontal = 20.dp)
+                .navigationBarsPadding(),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Outlined.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.width(8.dp))
-                Text("Workspace files", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "Files",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                )
                 Spacer(Modifier.weight(1f))
-                TextButton(onClick = onOpenFiles) { Text("Open") }
+                IconButton(onClick = actions.onCloseWorkspaceFiles) {
+                    Icon(Icons.Outlined.Close, contentDescription = "Close files")
+                }
             }
-            files.take(5).forEach { file ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .clickable { onOpenFile(file) }
-                        .padding(vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        file.path,
-                        modifier = Modifier.weight(1f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.bodySmall,
+
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(WorkspaceFileRoot.entries.toList(), key = { it.name }) { root ->
+                    val count = byRoot[root].orEmpty().count { !it.isDirectory }
+                    FilterChip(
+                        selected = root == selectedRoot,
+                        onClick = { selectedRoot = root },
+                        label = { Text(root.label + " (" + count + ")") },
                     )
-                    file.sizeBytes?.let {
-                        Text(formatBytes(it), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+
+            when {
+                state.isLoadingWorkspace -> Text(
+                    "Loading…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                state.workspaceError != null -> Text(
+                    state.workspaceError,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                shown.isEmpty() -> Text(
+                    emptyRootMessage(selectedRoot),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    items(shown, key = { it.root.name + "-" + it.path }) { file ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { actions.onOpenWorkspaceFile(file) }
+                                .padding(horizontal = 8.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Icon(
+                                Icons.Outlined.Description,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Text(
+                                file.path,
+                                modifier = Modifier.weight(1f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            file.sizeBytes?.let {
+                                Text(
+                                    formatBytes(it),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
                     }
                 }
             }
-            if (files.size > 5) {
-                Text("${files.size - 5} more files", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+            Spacer(Modifier.height(8.dp))
         }
     }
+}
+
+private fun emptyRootMessage(root: WorkspaceFileRoot): String = when (root) {
+    WorkspaceFileRoot.SESSION -> "No files in this chat yet."
+    WorkspaceFileRoot.MEMORY ->
+        "Nothing written down yet. What the agent learns about you and this phone appears here."
+    WorkspaceFileRoot.SKILLS -> "No skills installed yet."
+}
+
+/**
+ * Shows a file instead of handing it to a chooser.
+ *
+ * Notes, preferences and skills are Markdown and JSON, and most phones have no
+ * app registered for either — so the chooser came up empty and tapping a file
+ * looked like it did nothing. Rendered as monospaced plain text on purpose:
+ * this is a viewer for checking what the agent recorded, and prettified
+ * Markdown is harder to compare against the file on disk.
+ */
+@Composable
+private fun FilePreviewDialog(
+    preview: WorkspaceFilePreview,
+    onClose: () -> Unit,
+    onOpenExternally: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = {
+            Text(
+                preview.item.path,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.titleMedium,
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (preview.text == null) {
+                    Text(
+                        "This file is not text. Open it with another app to see it.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                } else {
+                    SelectionContainer {
+                        Text(
+                            preview.text,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                    }
+                    if (preview.truncated) {
+                        Text(
+                            "Shown up to the first 256 KB.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onClose) { Text("Close") } },
+        dismissButton = {
+            TextButton(onClick = onOpenExternally) {
+                Icon(
+                    Icons.Outlined.OpenInNew,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text("Open with…")
+            }
+        },
+    )
 }
 
 @Composable

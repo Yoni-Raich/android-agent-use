@@ -8,13 +8,22 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
 import java.io.BufferedWriter
 import java.io.File
+import java.io.IOException
 import java.util.Base64
 import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
 class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoiceEngine, ConnectorEngineControl {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // A stream pump losing its process is routine shutdown, not a programming
+    // error. Without a handler here an uncaught failure in one of the launched
+    // readers reaches Android's default uncaught-exception handler and takes
+    // the whole app down, so it is recorded as diagnostics instead.
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, error ->
+            recordStderr("codex stream pump failed: ${error.javaClass.simpleName}: ${error.message}")
+        },
+    )
     private val connectLock = Mutex()
     private val writeLock = Mutex()
     private val pending = ConcurrentHashMap<String, CompletableDeferred<JsonObject>>()
@@ -31,6 +40,7 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
     private var process: Process? = null
     private var writer: BufferedWriter? = null
     private var readerJob: Job? = null
+    private var stderrJob: Job? = null
     private var initialized = false
     private val json = Json { ignoreUnknownKeys = true }
     private val stderrLock = Any()
@@ -76,9 +86,19 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
                 }
             }
         }
-        scope.launch {
-            started.errorStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
-                lines.forEach { if (isActive) recordStderr(it) }
+        stderrJob?.cancel()
+        stderrJob = scope.launch {
+            // close() destroys the process, which closes this stream under the
+            // blocked read and raises InterruptedIOException. That is the normal
+            // way this pump ends and must never surface as a fatal exception.
+            try {
+                started.errorStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
+                    lines.forEach { if (isActive) recordStderr(it) }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: IOException) {
+                // The app-server exited; the reader loop reports the outcome.
             }
         }
         request("initialize", buildJsonObject {
@@ -361,6 +381,8 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
         voiceClosedSignal = null
         mutableVoiceState.value = VoiceState(VoicePhase.IDLE, "Closed", closedVoiceThreadId)
         readerJob?.cancel()
+        stderrJob?.cancel()
+        stderrJob = null
         withContext(Dispatchers.IO) { runCatching { writer?.close() }; writer = null }
         runtime.stop()
         process = null
@@ -890,7 +912,7 @@ Addressing Strategy:
 
 When a tool reports errorType "backend_unavailable" or "a11y_unavailable", no device action happened. Read its "remedy" and tell the user what to enable rather than retrying the same call. "no_text_focus" means you must tap the field before typing.
 
-Use the skills catalog supplied by Codex. Read a skill's full SKILL.md when its description matches the task or when the user explicitly invokes it with `${'$'}skill-name`. Consult AGENTS.md and preferences.json in the current workspace for project guidance and durable preferences.
+Use the skills catalog supplied by Codex. Read a skill's full SKILL.md when its description matches the task or when the user explicitly invokes it with `${'$'}skill-name`. Consult AGENTS.md in the current workspace for project guidance, and `~/memory/preferences.json` for durable user preferences. Anything the user asks you to remember belongs in a skill under `~/.agents/skills`, with its data in `~/memory/<skill-name>/`; the `personal-skills` skill has the recipe. The workspace itself is rebuilt on every open, so nothing written there survives the chat.
 
 Golden Rules:
 - Finish every turn with a separate user-facing final answer in the user's language. Say what completed, what failed, and what remains. A tool result or progress update is never the final answer. Do not claim success without evidence.

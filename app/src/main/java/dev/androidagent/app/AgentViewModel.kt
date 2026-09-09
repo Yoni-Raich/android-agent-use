@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import dev.androidagent.app.ui.*
 import dev.androidagent.app.update.*
 import dev.androidagent.core.*
+import dev.androidagent.workspace.WorkspaceSeeder
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import java.io.File
@@ -468,18 +469,83 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun removeAttachment(id: String) { mutable.update { it.copy(attachments = it.attachments.filterNot { item -> item.id == id }) } }
     fun listFiles() = task {
-        mutable.update { it.copy(isLoadingWorkspace = true, workspaceError = null) }
+        mutable.update { it.copy(isFileBrowserOpen = true, isLoadingWorkspace = true, workspaceError = null) }
         try {
-            val root = current.value?.let { graph.sessions.workspace(it) } ?: return@task
-            val files = withContext(Dispatchers.IO) { root.walkTopDown().filter { it != root }.take(500).map { WorkspaceFileItem(it.relativeTo(root).path, it.length(), it.lastModified(), it.isDirectory) }.toList() }
+            val files = withContext(Dispatchers.IO) {
+                WorkspaceFileRoot.entries.flatMap { root -> listRoot(root) }
+            }
             mutable.update { it.copy(workspaceFiles = files) }
         } finally { mutable.update { it.copy(isLoadingWorkspace = false) } }
     }
+    fun closeFiles() = mutable.update { it.copy(isFileBrowserOpen = false, filePreview = null) }
+    fun closeFilePreview() = mutable.update { it.copy(filePreview = null) }
+
+    /**
+     * Read a file into the in-app viewer.
+     *
+     * Everything the agent writes is Markdown or JSON, and most phones have no
+     * app registered for either - so the old chooser-only path opened an empty
+     * chooser and looked like a dead tap. Text is shown here; anything else
+     * still goes out to another app, which is the only thing that can render it.
+     */
+    fun previewFile(item: WorkspaceFileItem) = task {
+        if (item.isDirectory) return@task
+        val file = resolveWorkspaceFile(item)
+        val preview = withContext(Dispatchers.IO) {
+            if (!isReadableText(file)) return@withContext WorkspaceFilePreview(item)
+            val bytes = file.readBytes()
+            val truncated = bytes.size > MAX_PREVIEW_BYTES
+            WorkspaceFilePreview(
+                item = item,
+                text = String(bytes, 0, minOf(bytes.size, MAX_PREVIEW_BYTES), Charsets.UTF_8),
+                truncated = truncated,
+            )
+        }
+        mutable.update { it.copy(filePreview = preview) }
+    }
+
     fun resolveWorkspaceFile(item: WorkspaceFileItem): File {
-        val root = graph.sessions.workspace(current.value ?: kotlin.error("No chat selected")).canonicalFile
+        val root = rootFor(item.root).canonicalFile
         val file = File(root, item.path).canonicalFile
-        require(file.toPath().startsWith(root.toPath())) { "File is outside this session." }
+        require(file.toPath().startsWith(root.toPath())) { "File is outside ${item.root.label}." }
         return file
+    }
+
+    private fun rootFor(root: WorkspaceFileRoot): File = when (root) {
+        WorkspaceFileRoot.SESSION ->
+            graph.sessions.workspace(current.value ?: kotlin.error("No chat selected"))
+        WorkspaceFileRoot.MEMORY -> MemoryStore.directoryIn(graph.runtime.homeDirectory)
+        WorkspaceFileRoot.SKILLS -> WorkspaceSeeder.skillsRoot(graph.runtime.homeDirectory)
+    }
+
+    private fun listRoot(root: WorkspaceFileRoot): List<WorkspaceFileItem> {
+        // A missing chat or an unseeded home is an empty section, not an error:
+        // the other two roots are still worth showing.
+        val base = runCatching { rootFor(root) }.getOrNull() ?: return emptyList()
+        if (!base.isDirectory) return emptyList()
+        return base.walkTopDown()
+            .filter { it != base }
+            .take(MAX_LISTED_FILES)
+            .map {
+                WorkspaceFileItem(
+                    path = it.relativeTo(base).path.replace(File.separatorChar, '/'),
+                    sizeBytes = it.length(),
+                    modifiedAt = it.lastModified(),
+                    isDirectory = it.isDirectory,
+                    root = root,
+                )
+            }
+            .toList()
+    }
+
+    private fun isReadableText(file: File): Boolean {
+        if (!file.isFile) return false
+        if (file.extension.lowercase() in TEXT_EXTENSIONS) return true
+        // No extension is the common case for a config file, so fall back to
+        // sniffing: a NUL byte in the first block means it is not text.
+        if (file.extension.isNotEmpty()) return false
+        val head = runCatching { file.inputStream().use { it.readNBytes(1024) } }.getOrNull() ?: return false
+        return head.isNotEmpty() && head.none { it == 0.toByte() }
     }
     fun error(message: String) { mutable.update { it.copy(errorMessage = message) } }
     fun checkForUpdates(manual: Boolean = true) = task {
@@ -599,6 +665,14 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private companion object {
+        /** Enough for any note or skill the agent writes, short of loading a log. */
+        const val MAX_PREVIEW_BYTES = 256 * 1024
+        const val MAX_LISTED_FILES = 500
+        val TEXT_EXTENSIONS = setOf(
+            "md", "json", "txt", "log", "csv", "tsv", "xml", "yml", "yaml",
+            "toml", "ini", "conf", "properties", "kt", "java", "py", "sh", "html", "css", "js",
+        )
+
         const val GITHUB_REFRESH_CHECK_INTERVAL_MS = 30_000L
     }
 }

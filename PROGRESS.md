@@ -48,6 +48,12 @@ not production-ready.
   rejects immortal OAuth responses, adds near-expiry refresh monitoring, makes
   the prompt-every-tool read-only boundary explicit, and includes descriptions
   in the MCP tool fingerprint.
+- The cross-chat memory (issue #42) compiles and passes focused JVM tests on
+  2026-09-10: `:core:test`, `:workspace:test` and `:app:assembleDevDebug`. The
+  tests cover the preferences merge, the one-time absorption of the old
+  per-session `preferences.json` files including which value wins a conflict,
+  the refusal to write malformed defaults, and that the seeded `AGENTS.md`
+  points the agent at the skill and data roots rather than at the workspace.
 
 ### Not proven yet
 
@@ -61,6 +67,18 @@ not production-ready.
 - Full physical checks for accessibility, voice, overlay visuals, recovery,
   and all device tools.
 - Production signing, production packaging, and production readiness.
+- That the agent actually builds a working skill when asked to remember
+  something. This is the whole feature and none of it is mechanically
+  verifiable: the harness text and the `personal-skills` recipe are shipped,
+  but no run has been observed writing a `SKILL.md`, having the catalog pick it
+  up in the next chat, or running a script it wrote with `sh`.
+- The preferences migration has not run against a real device's session
+  history. It is covered by unit tests over temporary files only, and it
+  deletes each per-session copy after merging it.
+- The Files sheet, its in-app viewer and the "Open with…" fallback have not
+  been opened on a phone. Both defects they fix - a card that could not be
+  dismissed, and a chooser that resolved to nothing for Markdown - were
+  reported from the device, not reproduced here.
 - A live GitHub OAuth login, account verification, remote MCP handshake, and
   real issue creation have not run yet. This checkout has no OAuth client ID
   configured by default; provide the public `githubOAuthClientId` Gradle
