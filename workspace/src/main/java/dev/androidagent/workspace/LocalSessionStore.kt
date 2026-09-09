@@ -19,6 +19,11 @@ import java.util.concurrent.ConcurrentHashMap
 class LocalSessionStore(context: Context) : SessionStore {
     private val appContext = context.applicationContext
     private val base = File(context.filesDir, "sessions").apply { mkdirs() }
+    /**
+     * Where every session's files live. Exposed so an app-start migration can
+     * find per-session files without a second copy of this path.
+     */
+    val sessionsRoot: File get() = base
     private val db = Database(context).writableDatabase
     private val lock = Mutex()
     private val streams = ConcurrentHashMap<String, MutableStateFlow<List<ChatMessage>>>()

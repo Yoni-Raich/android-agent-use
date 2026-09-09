@@ -876,11 +876,11 @@ private fun ColumnScope.WorkspaceSettings(state: AgentUiState, actions: AgentUiA
         Text(state.workspaceError, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
     } else {
         Explanation(
-            if (state.workspaceFiles.isEmpty()) "No workspace files loaded." else "${state.workspaceFiles.size} files loaded.",
+            "The files of this chat, plus the shared memory and skills the agent keeps across every chat.",
         )
     }
     OutlinedButton(onClick = actions.onOpenWorkspaceFiles, modifier = Modifier.fillMaxWidth()) {
-        LoadingButtonContent(loading = false, icon = Icons.Outlined.Folder, label = "Open workspace files")
+        LoadingButtonContent(loading = false, icon = Icons.Outlined.Folder, label = "Browse files")
     }
 }
 

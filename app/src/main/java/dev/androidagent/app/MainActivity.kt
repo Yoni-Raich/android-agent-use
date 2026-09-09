@@ -106,7 +106,10 @@ class MainActivity : ComponentActivity() {
         onRetry = { model.prepare() },
         onDismissError = { model.editUi { it.copy(errorMessage = null) } },
         onOpenWorkspaceFiles = { model.listFiles() },
-        onOpenWorkspaceFile = { item -> openFile(item) },
+        onCloseWorkspaceFiles = { model.closeFiles() },
+        onOpenWorkspaceFile = { item -> model.previewFile(item) },
+        onCloseFilePreview = { model.closeFilePreview() },
+        onOpenFileExternally = { item -> openFile(item) },
         onApproval = { requestId, allow -> model.graph.coordinator.approve(requestId, allow) },
         onCheckForUpdates = { model.checkForUpdates(manual = true) },
         onDownloadUpdate = { model.downloadUpdate() },
@@ -190,13 +193,34 @@ class MainActivity : ComponentActivity() {
             microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
+    /**
+     * Hand a file to another app. The in-app viewer handles text, so this is
+     * the fallback for the types only another app can render.
+     *
+     * `MimeTypeMap` knows nothing about `md`, and a chooser for
+     * `application/octet-stream` comes up empty on most phones - which is what
+     * made tapping a file look like it did nothing at all. Falling back to
+     * `text/plain` gives the chooser something every device can satisfy, and a
+     * chooser that still resolves to nothing is reported rather than swallowed.
+     */
     private fun openFile(item: WorkspaceFileItem) {
         runCatching {
             check(!item.isDirectory) { "Choose a file inside this folder." }
             val file = model.resolveWorkspaceFile(item)
             val uri = FileProvider.getUriForFile(this, "$packageName.files", file)
-            val type = MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase()) ?: "application/octet-stream"
-            startActivity(Intent.createChooser(Intent(Intent.ACTION_VIEW).setDataAndType(uri, type).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), "Open file"))
+            val type = MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase())
+                ?: if (file.extension.lowercase() in TEXT_LIKE_EXTENSIONS) "text/plain" else "application/octet-stream"
+            val view = Intent(Intent.ACTION_VIEW)
+                .setDataAndType(uri, type)
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            check(view.resolveActivity(packageManager) != null) {
+                "No app on this phone can open ${item.path}."
+            }
+            startActivity(Intent.createChooser(view, "Open file"))
         }.onFailure { model.error(it.message ?: "No app can open this file.") }
+    }
+
+    private companion object {
+        val TEXT_LIKE_EXTENSIONS = setOf("md", "log", "conf", "properties", "kt", "toml", "ini")
     }
 }
