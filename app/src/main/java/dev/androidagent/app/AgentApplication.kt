@@ -9,6 +9,7 @@ import dev.androidagent.core.CompositeDeviceToolGateway
 import dev.androidagent.core.CompositeRuntimeConnector
 import dev.androidagent.core.KnowledgeStore
 import dev.androidagent.core.KnowledgeToolGateway
+import dev.androidagent.core.MemoryStore
 import dev.androidagent.core.ObservationState
 import dev.androidagent.core.WorkflowStore
 import dev.androidagent.core.WorkflowToolGateway
@@ -21,6 +22,7 @@ import dev.androidagent.workspace.LocalSessionStore
 import dev.androidagent.workspace.WorkspaceSeeder
 import dev.androidagent.voice.AndroidRealtimeVoiceController
 import kotlinx.coroutines.*
+import java.io.File
 
 class AgentApplication : Application() {
     lateinit var graph: AgentGraph
@@ -87,6 +89,19 @@ class AgentGraph(private val app: Application) {
         queue = SessionRunQueue(scope, coordinator, sessions)
         runCatching {
             WorkspaceSeeder.installDefaultSkills(runtime.homeDirectory, app)
+        }
+        // Preferences were per-session until this release, so every existing
+        // chat holds a copy. Absorb them once, here, rather than per workspace:
+        // the global file is one file, and several open sessions seeding it at
+        // once would race for it.
+        runCatching {
+            WorkspaceSeeder.seedSharedMemory(
+                runtime.homeDirectory,
+                app,
+                legacyPreferences = sessions.sessionsRoot.listFiles()
+                    ?.map { File(it, "workspace/preferences.json") }
+                    .orEmpty(),
+            )
         }
     }
 }

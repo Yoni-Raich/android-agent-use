@@ -1,30 +1,47 @@
 package dev.androidagent.workspace
 
 import android.content.Context
+import dev.androidagent.core.MemoryStore
 import java.io.File
-import java.io.FileOutputStream
 
 /**
- * Seeds the on-device agent harness, app cards, and user preferences into each
- * session workspace. App-managed skills are installed separately in Codex's
- * standard user root: `$HOME/.agents/skills`.
+ * Seeds the on-device agent harness and app cards into each session workspace.
+ * App-managed skills are installed separately in Codex's standard user root:
+ * `$HOME/.agents/skills`.
  *
  * This ensures that when the on-device Codex engine starts with `cwd` set to the
  * session workspace, it immediately discovers:
  * - `AGENTS.md` (root harness entrypoint)
  * - `cards` (whatsapp, chrome, maps, settings, youtube)
  * - `RECOVERY.md` (quick stuck-state guide)
- * - `preferences.json` (durable user preferences, created once and preserved)
+ *
+ * Everything here is rewritten on every access, which is the point: the harness
+ * upgrades with the app. It is also why nothing durable may live here. User
+ * preferences used to, one copy per session, and were therefore lost the moment
+ * the chat ended; they now live in the global [MemoryStore] and are seeded by
+ * [seedSharedMemory] instead.
  */
 object WorkspaceSeeder {
 
     private const val ASSET_PREFIX = "agent_stack"
+    private const val PREFERENCES_ASSET = "preferences.json"
+    private const val SKILLS_PATH = ".agents/skills"
+
+    /**
+     * The skills the app owns and replaces whole on every start. That is what
+     * keeps them upgradeable, and it is why `personal-skills` tells the agent
+     * never to edit one: the change would not survive the next launch.
+     */
     private val DEFAULT_SKILL_NAMES = listOf(
         "device-automation",
         "recovery-and-safety",
         "user-preferences",
         "app-cards",
+        "personal-skills",
     )
+
+    /** Codex's standard user-skill root, where learned skills live too. */
+    fun skillsRoot(homeDir: File): File = File(homeDir, SKILLS_PATH)
 
     fun seed(workspace: File, context: Context? = null) {
         workspace.mkdirs()
@@ -41,12 +58,47 @@ object WorkspaceSeeder {
         // Always guarantee the workspace harness and app cards are seeded.
         seedFromEmbeddedTemplates(workspace)
         removeLegacyWorkspaceSkillCopies(workspace)
+    }
 
-        // Guarantee preferences.json exists without overwriting user data
-        val prefsFile = File(workspace, "preferences.json")
-        if (!prefsFile.exists() || prefsFile.length() == 0L) {
-            prefsFile.writeText(DEFAULT_PREFERENCES, Charsets.UTF_8)
-        }
+    /**
+     * Create the global memory the agent writes to, and move any per-session
+     * preferences written by an earlier release into it.
+     *
+     * Called once at app start rather than per workspace: it is global, and a
+     * per-workspace call would race every other open session for the same file.
+     *
+     * @param legacyPreferences per-session `preferences.json` files from before
+     *   preferences were global. Absorbed newest first and then removed, so the
+     *   user is left with one preferences file instead of one per chat.
+     */
+    fun seedSharedMemory(
+        homeDir: File,
+        context: Context? = null,
+        legacyPreferences: List<File> = emptyList(),
+    ): MemoryStore {
+        val memory = MemoryStore(MemoryStore.directoryIn(homeDir))
+        memory.ensureLayout()
+        // Absorb before defaulting. The other order writes the app's defaults
+        // first, and the merge that follows keeps what is already there - so a
+        // preference the user actually chose would lose to the default it was
+        // set to override.
+        runCatching { memory.absorbLegacyPreferences(legacyPreferences) }
+        memory.ensurePreferences(defaultPreferences(context))
+        return memory
+    }
+
+    /**
+     * The asset is the readable copy of the shape; the constant is the one that
+     * cannot go missing. Preferring the asset keeps a single file to edit when
+     * the defaults change.
+     */
+    private fun defaultPreferences(context: Context?): String {
+        if (context == null) return DEFAULT_PREFERENCES
+        return runCatching {
+            context.assets.open("$ASSET_PREFIX/preferences.json").use {
+                it.readBytes().toString(Charsets.UTF_8)
+            }
+        }.getOrDefault(DEFAULT_PREFERENCES).ifBlank { DEFAULT_PREFERENCES }
     }
 
     /** Install the app-managed defaults in Codex's standard user-skill root. */
@@ -57,7 +109,7 @@ object WorkspaceSeeder {
     }
 
     internal fun installDefaultSkills(homeDir: File, readAsset: (String) -> ByteArray) {
-        val skillsDir = File(homeDir, ".agents/skills").apply { mkdirs() }
+        val skillsDir = skillsRoot(homeDir).apply { mkdirs() }
         for (name in DEFAULT_SKILL_NAMES) {
             val bytes = readAsset("$name/SKILL.md")
             require(bytes.isNotEmpty()) { "Bundled skill $name is empty" }
@@ -77,7 +129,7 @@ object WorkspaceSeeder {
     }
 
     private fun removeLegacyWorkspaceSkillCopies(workspace: File) {
-        removeManagedSkills(File(workspace, ".agents/skills"))
+        removeManagedSkills(File(workspace, SKILLS_PATH))
         removeManagedSkills(File(workspace, ".codex/skills"))
         removeManagedSkills(File(workspace, "skills"))
     }
@@ -93,9 +145,7 @@ object WorkspaceSeeder {
             val relativePath = assetPath.removePrefix("$ASSET_PREFIX/").removePrefix(ASSET_PREFIX)
             if (relativePath.isNotBlank()) {
                 val destFile = File(targetDir, relativePath)
-                if (destFile.name == "preferences.json" && destFile.exists() && destFile.length() > 0L) {
-                    return // Do not overwrite user preferences
-                }
+                if (destFile.name == PREFERENCES_ASSET) return
                 destFile.parentFile?.mkdirs()
                 context.assets.open(assetPath).use { input ->
                     destFile.outputStream().use { output -> input.copyTo(output) }
@@ -116,9 +166,9 @@ object WorkspaceSeeder {
                 // Single file
                 val relativePath = subAsset.removePrefix("$ASSET_PREFIX/")
                 val destFile = File(targetDir, relativePath)
-                if (destFile.name == "preferences.json" && destFile.exists() && destFile.length() > 0L) {
-                    continue
-                }
+                // Preferences are global now. A workspace copy would be a
+                // second, per-chat answer to the same question.
+                if (destFile.name == PREFERENCES_ASSET) continue
                 destFile.parentFile?.mkdirs()
                 runCatching {
                     context.assets.open(subAsset).use { input ->
@@ -194,15 +244,15 @@ object WorkspaceSeeder {
         - Dispatch `tap(x=x, y=y)`. Semantic center taps are deterministic and cannot miss.
 
         ### Tier 1b: Node Addressing (only if these tools are in your tool list)
-- `tap_node`, `set_text`, `scroll_node` and `wait_for_change` act on a node
-  directly instead of on a coordinate, so they cannot miss. They require both
-  `nodeId` and the `observationId` of the `read_ui` reply that listed the node.
-- They exist only in chats started after they shipped. If they are not in your
-  tool list, use the bounds-centre maths above and do not call them.
-- `set_text` returns `verified`. When it is false the field kept its old value,
-  so tap the field and use `type_text` instead of assuming success.
+        - `tap_node`, `set_text`, `scroll_node` and `wait_for_change` act on a node
+          directly instead of on a coordinate, so they cannot miss. They require both
+          `nodeId` and the `observationId` of the `read_ui` reply that listed the node.
+        - They exist only in chats started after they shipped. If they are not in your
+          tool list, use the bounds-centre maths above and do not call them.
+        - `set_text` returns `verified`. When it is false the field kept its old value,
+          so tap the field and use `type_text` instead of assuming success.
 
-### Tier 2: Visual Fallback
+        ### Tier 2: Visual Fallback
         - Use `screenshot` when:
           - The UI hierarchy is empty, collapsed, or drawn inside an unexposed WebView/Canvas/game.
           - Targeting pure icons lacking `content-desc` or resource identifiers.
@@ -219,7 +269,7 @@ object WorkspaceSeeder {
 
         Do not overload your reasoning context with unused files. Load guidance on-demand:
 
-        1. **User Preferences**: Check `preferences.json` in your workspace for user defaults (preferred messaging app, navigation app, saved addresses, common contacts).
+        1. **User Preferences**: Read `~/memory/preferences.json` for user defaults (preferred messaging app, navigation app, saved addresses, common contacts) before asking a question it already answers. The `user-preferences` skill covers updating it.
         2. **Known App Guides**: When operating a known app, read its app card:
            - WhatsApp: `cards/whatsapp.md`
            - Chrome: `cards/chrome.md`
@@ -231,7 +281,21 @@ object WorkspaceSeeder {
 
         ---
 
-        ## 4. Golden Rules (Never Violate)
+        ## 4. Durable Memory: What Survives This Chat
+
+        Your workspace is rebuilt from templates every time it is opened. Anything you write there is gone by the next chat. Three things survive, and all of them are global to this phone:
+
+        - **Skills** — `~/.agents/skills/<name>/SKILL.md`, offered back by the catalog in every later chat. Anything the user asks you to remember, to keep a list of, or to be able to repeat belongs in one. Read the `personal-skills` skill before you build or change one; it has the shape, the shell recipe and the rules.
+        - **Skill data** — `~/memory/<skill-name>/`. The lists and lookup tables a skill reads. Kept outside the skill directory because the app replaces the skills it ships on every update, which would take the data with them.
+        - **App knowledge** — `remember_capability` for a selector or deep link you worked out, `save_workflow` for a step sequence worth repeating. Both are keyed by package; read them back with `recall_capability` and `list_workflows`.
+
+        1. **When the user says "remember this", "keep a list of", or "from now on" — build a skill.** Not a note in your reply, and not a file in the workspace.
+        2. **Check before you ask.** Each skill's catalog description says what it holds. Open the one that matches before asking the user something an earlier chat already recorded.
+        3. **Record it when you learn it, not at the end of the run.** A run that is stopped halfway still keeps what it found out.
+
+        ---
+
+        ## 5. Golden Rules (Never Violate)
 
         1. **Preserve User Intent Verbatim**: Never rewrite or distort user message text or queries.
         2. **Never Guess Critical Data — Ask First**: Confirm before sending money, deleting data, or messaging ambiguous contacts.
