@@ -36,7 +36,6 @@ object GitHubOAuthScopes {
     const val CODESPACE = "codespace"
     const val WORKFLOW = "workflow"
     const val READ_AUDIT_LOG = "read:audit_log"
-    const val OFFLINE_ACCESS = "offline_access"
 
     /** All non-empty scopes accepted by the GitHub.com OAuth Apps docs. */
     val supported: Set<String> = linkedSetOf(
@@ -74,11 +73,14 @@ object GitHubOAuthScopes {
         CODESPACE,
         WORKFLOW,
         READ_AUDIT_LOG,
-        OFFLINE_ACCESS,
     )
 
-    /** OAuth App scope set needed by the initial private-repository Issue flow. */
-    val issueWrite: Set<String> = linkedSetOf(REPO, OFFLINE_ACCESS)
+    /**
+     * OAuth App scope set needed by the initial private-repository Issue
+     * flow. `offline_access` is deliberately absent: it is not a GitHub
+     * OAuth App scope and does not opt a token into refresh tokens.
+     */
+    val issueWrite: Set<String> = linkedSetOf(REPO)
 }
 
 object GitHubEndpoints {

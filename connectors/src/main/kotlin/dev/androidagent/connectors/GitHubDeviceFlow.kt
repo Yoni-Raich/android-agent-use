@@ -358,16 +358,19 @@ class GitHubOAuthDeviceFlowClient(
             accessToken = accessToken,
             refreshToken = refreshToken,
             tokenType = payload.optionalString("token_type") ?: "bearer",
-            accessTokenExpiresAtEpochSeconds = expiresAt(payload, "expires_in", now),
+            // A GitHub OAuth App issues non-expiring tokens and omits
+            // expires_in entirely. Only a GitHub App with expiring user
+            // authorization tokens sends it, so a missing value means "does
+            // not expire" and must not fail the exchange.
+            accessTokenExpiresAtEpochSeconds = payload.optionalPositiveLong("expires_in")?.let {
+                addExpiry(now, it, "expires_in")
+            },
             refreshTokenExpiresAtEpochSeconds = payload.optionalPositiveLong("refresh_token_expires_in")?.let {
                 addExpiry(now, it, "refresh_token_expires_in")
             },
             grantedScopes = grantedScopes,
         )
     }
-
-    private fun expiresAt(payload: JsonObject, key: String, now: Long): Long =
-        addExpiry(now, payload.requiredPositiveLong(key), key)
 
     private fun addExpiry(now: Long, lifetimeSeconds: Long, key: String): Long = try {
         Math.addExact(now, lifetimeSeconds)
