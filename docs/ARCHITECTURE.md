@@ -568,18 +568,24 @@ proxy adds only `api.githubcopilot.com` while the connector is enabled.
 The app writes the official remote MCP server at
 `https://api.githubcopilot.com/mcp/x/all`, then reloads and reads its tool
 status through app-server control methods. The UI exposes three local policy
-modes: read-only (also sends `X-MCP-Readonly: true`), ask before writes (the
-default, using Codex's `writes` approval mode), and full control (Codex's
-`approve` mode). The GitHub token itself still cannot exceed the account and
-organization permissions granted by GitHub.
+modes: prompt every tool (the local read-only safety mode, which also sends
+`X-MCP-Readonly: true` as a provider hint), ask before writes (the default,
+using Codex's `writes` approval mode), and full control (Codex's `approve`
+mode). The first mode guarantees that no GitHub tool runs without user
+approval; the remote hint is not treated as a hard security boundary. The
+GitHub token itself still cannot exceed the account and organization
+permissions granted by GitHub.
 
 The connector records a canonical SHA-256 tool-schema fingerprint based on tool
-names, read-only annotations, and input schemas. If a user selected full
+names, descriptions, read-only annotations, and input schemas. If a user selected full
 control and the remote schema changes, the app automatically downgrades to
 ask-before-writes before exposing the changed tools; the warning is kept after
 the second status read. Disconnect removes and reloads the app-server entry,
 closing the supervised process only if that cleanup cannot be confirmed, and
-clears the Keystore-backed credential.
+closing the supervised process only if that cleanup cannot be confirmed, and
+clears the Keystore-backed credential. A refresh watcher retries near-expiry
+tokens while the app is running; transient network failures retain the sealed
+refresh token, while explicit OAuth invalidation requires re-authentication.
 
 The older `.codex-work/runtime/probe_apps.py` probe remains useful for checking
 whether an app-server exposes the generic control surface, but it is not the

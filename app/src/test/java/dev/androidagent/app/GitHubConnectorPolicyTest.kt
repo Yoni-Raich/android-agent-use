@@ -7,7 +7,7 @@ import org.junit.Test
 
 class GitHubConnectorPolicyTest {
     @Test
-    fun `permission modes keep read only stricter than write modes`() {
+    fun `read only prompts every tool while other modes keep their approval policy`() {
         assertEquals(
             McpToolApprovalMode.PROMPT,
             GitHubConnectorController.approvalModeFor(PermissionMode.READ_ONLY),

@@ -798,6 +798,7 @@ class AgentCoordinator(
                 McpRuntimePhase.FAILED,
                 McpRuntimePhase.CANCELLED,
                 McpRuntimePhase.DISABLED,
+                McpRuntimePhase.UNKNOWN,
             )
         ) {
             sessions.append(message(sessionId, "system", detail))

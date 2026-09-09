@@ -337,8 +337,8 @@ class GitHubOAuthDeviceFlowClient(
     }
 
     private fun validateScopes(scopes: Set<String>) {
-        require(scopes.all { it in GitHubConnectorCatalog.definition.supportedScopes }) {
-            "Unsupported GitHub OAuth scope"
+        require(scopes.isNotEmpty() && scopes.all { it in GitHubConnectorCatalog.definition.defaultScopes }) {
+            "GitHub OAuth scopes must stay within the connector's least-privilege defaults"
         }
     }
 
@@ -358,10 +358,21 @@ class GitHubOAuthDeviceFlowClient(
             accessToken = accessToken,
             refreshToken = refreshToken,
             tokenType = payload.optionalString("token_type") ?: "bearer",
-            accessTokenExpiresAtEpochSeconds = payload.optionalPositiveLong("expires_in")?.let { now + it },
-            refreshTokenExpiresAtEpochSeconds = payload.optionalPositiveLong("refresh_token_expires_in")?.let { now + it },
+            accessTokenExpiresAtEpochSeconds = expiresAt(payload, "expires_in", now),
+            refreshTokenExpiresAtEpochSeconds = payload.optionalPositiveLong("refresh_token_expires_in")?.let {
+                addExpiry(now, it, "refresh_token_expires_in")
+            },
             grantedScopes = grantedScopes,
         )
+    }
+
+    private fun expiresAt(payload: JsonObject, key: String, now: Long): Long =
+        addExpiry(now, payload.requiredPositiveLong(key), key)
+
+    private fun addExpiry(now: Long, lifetimeSeconds: Long, key: String): Long = try {
+        Math.addExact(now, lifetimeSeconds)
+    } catch (_: ArithmeticException) {
+        throw GitHubOAuthException("invalid_response", message = "GitHub response has invalid $key")
     }
 
     private fun parsePayload(response: ConnectorHttpResponse): JsonObject {

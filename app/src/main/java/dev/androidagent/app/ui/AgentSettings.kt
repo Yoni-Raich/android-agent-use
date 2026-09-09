@@ -363,7 +363,7 @@ private fun ColumnScope.ConnectorSettings(state: AgentUiState, actions: AgentUiA
                     Column {
                         Text(
                             when (mode) {
-                                PermissionMode.READ_ONLY -> "Read only"
+                                PermissionMode.READ_ONLY -> "Prompt every tool (read-only hint)"
                                 PermissionMode.ASK_BEFORE_WRITES -> "Ask before writes"
                                 PermissionMode.FULL_CONTROL -> "Full control"
                             },
@@ -371,7 +371,7 @@ private fun ColumnScope.ConnectorSettings(state: AgentUiState, actions: AgentUiA
                         )
                         Text(
                             when (mode) {
-                                PermissionMode.READ_ONLY -> "Uses the strictest local approval and requests read-only tools."
+                                PermissionMode.READ_ONLY -> "Every GitHub tool needs your approval; the server is asked to expose read-only tools."
                                 PermissionMode.ASK_BEFORE_WRITES -> "Reads run directly; every write needs your approval."
                                 PermissionMode.FULL_CONTROL -> "All tools allowed by your GitHub account can run directly."
                             },
