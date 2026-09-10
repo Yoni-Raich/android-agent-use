@@ -210,6 +210,111 @@ Each result includes monotonic elapsed time and an observation revision. This
 removes raw XML token cost and caps the observed 22-second idle-wait tail, but
 it does not prove a faster real WhatsApp workflow until measured on Q8.
 
+### Focused queries and paging
+
+A reply is capped at 20 000 characters, which a busy screen exceeds. Truncation
+on its own was a dead end: the reply said `"truncated":true` and the omitted
+nodes — typically the lower part of the screen, including contacts and controls
+the task needed — had no way back (issue #45). `read_ui` now takes a `UiQuery`,
+parsed in `:core` and applied by both backends through the same
+`UiObservationSerializer.render`:
+
+- `text`, `resourceId`, `class` and `package` are case-insensitive substring
+  filters, combined with AND. A password node is matched on its description
+  only, never on the text it never emits, so the filter cannot be used to read
+  a masked field one probe at a time.
+- `rootNodeId` returns one node and its descendants. `UiNode.parentId` carries
+  the nearest ancestor that was **itself emitted**, so a subtree resolves from
+  the flat node list in one forward pass over the pre-order traversal; it is
+  never serialized, so it costs the character budget nothing. A `rootNodeId`
+  that is not on screen is a typed `ui_unknown_node` failure, because an empty
+  node list would read as "that part of the screen is empty".
+- `offset` is the cursor. Every reply reports `totalNodes`, `returnedNodes`,
+  and — when filtered — `matchedNodes` and the query it was given; a reply that
+  left something out carries `nextOffset` and a hint naming it. Paging over a
+  screen therefore terminates and covers every node exactly once.
+- `maxNodes` and `maxChars` only ever lower the caps.
+
+A filter narrows what is *emitted*, never what is read. The dump and the
+traversal are unchanged, node ids stay stable, and the accessibility backend
+keeps handles for the whole traversal, so `tap_node`, `set_text` and
+`scroll_node` still reach a node a query did not list.
+
+The query is part of the unchanged-suppression digest. The same screen answers
+two different queries differently, so suppressing the second as "unchanged"
+would point the model at a node list that answers the wrong question; an empty
+query contributes nothing to the digest, so every unfiltered observation
+fingerprints exactly as it did before. The character-budget fit is a binary
+search over the node count rather than the previous shrink-by-an-eighth loop,
+because paging makes an oversized screen the normal case.
+
+## Prefilled intents and the approval gate
+
+`open_intent` takes the message body as `text` rather than expecting the model
+to build `?text=` into the uri. `IntentPolicy.withText` percent-encodes it and
+attaches it to the destination, because a hand-built payload is where this
+breaks: an unencoded space or `&` truncates the message at the first separator
+or fails `java.net.URI` parsing, which the policy then reports as
+`uri_malformed`. It refuses a uri that already carries a payload key rather than
+overwriting one — two bodies is ambiguous, and silently picking one would send
+something the caller did not mean to send. Composition happens **before**
+`IntentPolicy.evaluate`, so the body is judged as the payload it is; attaching
+text can only ever move a decision toward `NeedsConfirmation`, never away.
+
+That is also the trap the feature carries. The same link that launches instantly
+without a body becomes a `NeedsConfirmation` the moment one is attached, and a
+`NeedsConfirmation` suspends the tool call on `AgentCoordinator`'s approval gate
+for up to two minutes. The approval card is rendered only by the app's chat
+screen, and during device control the app is by definition not the foreground
+window, so the user saw a floating card reading "waiting for approval" with
+nothing on it to tap while the model saw a tool call that never came back.
+
+Three things close that gap. The coordinator now takes a `bringToForeground`
+callback and raises the app's own window when it publishes a local approval; the
+floating card says "Approve in Android Agent" rather than just "waiting"; and
+the outcomes are separated — `intent_denied` when the user said no,
+`approval_timeout` when nobody answered, `intent_not_approved` when the run
+stopped first. A single "denied or expired" told the model nothing it could act
+on. `cancelLocalApprovalLocked` also clears the published card, which it did not
+before: a stranded card refuses every later approval, local or engine, because
+one is already showing.
+
+`bringToForeground` is declared before `adbStatus` in the constructor so that
+`AgentCoordinator(...) { adb.status.value }` keeps binding its trailing lambda to
+the parameter it always did.
+
+## Per-operation device capability
+
+The advertised tool list is static, because Codex binds it at `thread/start`
+and never re-sends it on resume. Availability is therefore a **per-turn
+snapshot**, not a smaller tool list.
+
+`DeviceToolGateway.readyTools()` reports what one backend can serve right now:
+the ADB gateway answers nothing unless the transport is `CONNECTED`, the
+accessibility gateway answers nothing unless its service is bound, and a purely
+local gateway (workflows, knowledge) answers everything it declares.
+`CompositeDeviceToolGateway` takes the union over live members, so a name whose
+first choice is dead but whose fallback is live is still ready — which is what
+the fallback chain is for. `DeviceCapabilities.of` splits the advertised surface
+into `ready` and `blocked` and never throws: a snapshot is not worth failing a
+turn over.
+
+`AgentCoordinator` builds that snapshot per turn and `CodexEngine` renders it as
+the trusted runtime context, listing both sets by name.
+
+This replaces a single `Device tools available: yes/no` derived from the ADB
+phase alone, which also emitted "Do not call device tools" whenever the
+transport was down. That was too coarse and factually wrong: it disabled the
+entire accessibility surface — `read_ui`, `tap`, `type_text`, `open_intent` —
+for a reason that had nothing to do with any of them, and it blocked a WhatsApp
+deep link that never needed ADB (issue #44). The on-device `AGENTS.md` carried
+the same legacy framing ("you operate the device ... over local Wireless ADB")
+and is corrected with it.
+
+The setup hub already separates the two as their own checklist rows,
+`SetupItem.SCREEN_CONTROL` and `SetupItem.WIRELESS_ADB`, each with its own state
+and remedy, so the UI half of the distinction needed no change.
+
 ## Session queue and exclusive device ownership
 
 The MVP still allows one active run per phone, because one phone screen cannot

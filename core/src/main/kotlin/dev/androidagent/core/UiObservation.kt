@@ -33,6 +33,14 @@ data class UiNode(
     /** True for password fields. Their text is never emitted, whatever the backend reported. */
     val password: Boolean = false,
     val clickableAncestor: UiNode? = null,
+    /**
+     * Nearest ancestor that was itself emitted, or null for a root.
+     *
+     * Deliberately never serialized: it exists so [UiQuery.rootNodeId] can cut
+     * a subtree out of the flat list, and emitting it on every node would
+     * spend the character budget the subtree query is there to save.
+     */
+    val parentId: String? = null,
 ) {
     fun isMeaningful(): Boolean =
         text != null || contentDescription != null || resourceId != null ||
@@ -76,11 +84,174 @@ data class UiNode(
         packageName = null,
         password = false,
         clickableAncestor = null,
+        parentId = null,
     )
 }
 
 /** A parsed screen, before it is rendered for the model. */
 data class UiObservation(val activePackage: String?, val nodes: List<UiNode>)
+
+/**
+ * The one `read_ui` description, so both backends advertise the same tool.
+ *
+ * Codex binds the tool list once per thread, so this text is the only chance
+ * to teach the model that a truncated screen is recoverable.
+ */
+const val READ_UI_DESCRIPTION: String =
+    "Read a bounded compact semantic UI observation. Returns labeled/actionable nodes by " +
+        "default; use raw=true only for debug XML. A large screen does not fit in one reply: " +
+        "the reply then carries \"truncated\":true with \"nextOffset\", and calling read_ui " +
+        "again with that offset returns the next page. Narrow it instead with text, " +
+        "resourceId, class or package (case-insensitive substrings), rootNodeId (that node " +
+        "and its descendants), clickableOnly or scrollableOnly; maxNodes and maxChars lower " +
+        "the caps. A filter changes only what is listed — every node is still on screen and " +
+        "its id stays valid for tap_node, set_text and scroll_node. When both the screen and " +
+        "the query are identical to the previous observation the reply is \"unchanged\":true " +
+        "with \"unchangedSinceRevision\" instead of the node list — reuse the nodes from that " +
+        "revision, or pass force=true to resend them. Timeout or idle failures are typed and " +
+        "do not trigger a second dump."
+
+/**
+ * A focused request for part of one observation.
+ *
+ * A busy screen does not fit in one reply, and a reply that silently dropped
+ * the tail left the model with no way to ask for the rest. Every field here
+ * narrows only what is *emitted*: the backend still reads the whole screen, so
+ * node ids stay stable across a filtered call and a node an action refers to
+ * keeps working even when a later query does not list it.
+ *
+ * String filters are case-insensitive substring matches, so `package="whatsapp"`
+ * finds `com.whatsapp`. Several filters are combined with AND.
+ */
+data class UiQuery(
+    /** Substring of `text` or `contentDescription`. */
+    val text: String? = null,
+    val resourceId: String? = null,
+    val className: String? = null,
+    val packageName: String? = null,
+    /** Emit only this node and its descendants. */
+    val rootNodeId: String? = null,
+    val clickableOnly: Boolean = false,
+    val scrollableOnly: Boolean = false,
+    /** Matching nodes to skip. The cursor a truncated reply hands back. */
+    val offset: Int = 0,
+    val maxNodes: Int? = null,
+    val maxChars: Int? = null,
+) {
+    /** True when this asks for the whole screen, the way `read_ui` always did. */
+    val isEmpty: Boolean
+        get() = text == null && resourceId == null && className == null &&
+            packageName == null && rootNodeId == null && !clickableOnly &&
+            !scrollableOnly && offset == 0 && maxNodes == null && maxChars == null
+
+    /** The reply ceiling. A caller may lower it, never raise it. */
+    fun charBudget(): Int =
+        (maxChars ?: UiObservationSerializer.MAX_OUTPUT_CHARS)
+            .coerceIn(MIN_OUTPUT_CHARS, UiObservationSerializer.MAX_OUTPUT_CHARS)
+
+    fun matches(node: UiNode): Boolean {
+        if (clickableOnly && !node.clickable && node.clickableAncestor == null) return false
+        if (scrollableOnly && !node.scrollable) return false
+        if (packageName != null && node.packageName?.contains(packageName, true) != true) return false
+        if (className != null && node.className?.contains(className, true) != true) return false
+        if (resourceId != null && node.resourceId?.contains(resourceId, true) != true) return false
+        if (text != null) {
+            // A password node never emits its text, so it can only be found by
+            // its description. Matching the hidden value would leak it one
+            // probe at a time.
+            val label = node.contentDescription
+            val body = if (node.password) null else node.text
+            if (label?.contains(text, true) != true && body?.contains(text, true) != true) return false
+        }
+        return true
+    }
+
+    /** Echoed back so the model sees which filters produced this reply. */
+    fun toJson(): JsonObject = buildJsonObject {
+        text?.let { put("text", it) }
+        resourceId?.let { put("resourceId", it) }
+        className?.let { put("class", it) }
+        packageName?.let { put("package", it) }
+        rootNodeId?.let { put("rootNodeId", it) }
+        if (clickableOnly) put("clickableOnly", true)
+        if (scrollableOnly) put("scrollableOnly", true)
+        if (offset > 0) put("offset", offset)
+        maxNodes?.let { put("maxNodes", it) }
+        maxChars?.let { put("maxChars", it) }
+    }
+
+    companion object {
+        val ALL = UiQuery()
+
+        /** Below this a reply could not carry a useful node, so it is the floor. */
+        const val MIN_OUTPUT_CHARS = 1_000
+
+        /**
+         * Read the query out of the tool arguments.
+         *
+         * Out-of-range numbers are clamped rather than rejected: a bad
+         * `offset` should still return the screen, not an error the model has
+         * to recover from.
+         */
+        fun from(arguments: JsonObject): UiQuery = UiQuery(
+            text = arguments.queryString("text"),
+            resourceId = arguments.queryString("resourceId"),
+            className = arguments.queryString("class"),
+            packageName = arguments.queryString("package"),
+            rootNodeId = arguments.queryString("rootNodeId"),
+            clickableOnly = arguments.queryBoolean("clickableOnly"),
+            scrollableOnly = arguments.queryBoolean("scrollableOnly"),
+            offset = arguments.queryInt("offset")?.coerceAtLeast(0) ?: 0,
+            maxNodes = arguments.queryInt("maxNodes")
+                ?.coerceIn(1, UiObservationSerializer.MAX_UI_NODES),
+            maxChars = arguments.queryInt("maxChars"),
+        )
+
+        private fun JsonObject.queryString(key: String): String? =
+            (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
+                ?.trim()?.takeIf { it.isNotEmpty() }
+                ?.take(UiObservationSerializer.MAX_UI_FIELD_CHARS)
+
+        private fun JsonObject.queryBoolean(key: String): Boolean =
+            (this[key] as? JsonPrimitive)?.content?.toBooleanStrictOrNull() ?: false
+
+        private fun JsonObject.queryInt(key: String): Int? =
+            (this[key] as? JsonPrimitive)?.content?.toIntOrNull()
+    }
+}
+
+/**
+ * What a filtered or truncated reply has to say about the nodes it left out.
+ *
+ * This is the half the bug was missing: knowing that something was dropped is
+ * useless without the cursor that retrieves it.
+ */
+data class UiPage(
+    /** Nodes the backend read, before any filter. */
+    val totalNodes: Int,
+    /** Nodes the query selected, before the character budget. */
+    val matchedNodes: Int,
+    val offset: Int,
+    val returnedNodes: Int,
+    val query: UiQuery,
+) {
+    /** Where to continue, or null when this reply carries the last match. */
+    val nextOffset: Int? = (offset + returnedNodes).takeIf { it < matchedNodes }
+
+    fun hint(): String? = when {
+        nextOffset != null ->
+            "Nodes ${offset + 1}-${offset + returnedNodes} of $matchedNodes matching. Call " +
+                "read_ui again with offset=$nextOffset for the next page, or narrow it with " +
+                "text, resourceId, class, package, rootNodeId, clickableOnly or scrollableOnly."
+        returnedNodes == 0 && matchedNodes > 0 ->
+            "offset $offset is past the last of $matchedNodes matching nodes. Call read_ui " +
+                "with a smaller offset."
+        matchedNodes == 0 && !query.isEmpty ->
+            "No node matched this query; $totalNodes nodes are on screen. Call read_ui " +
+                "without filters to see what is there."
+        else -> null
+    }
+}
 
 /**
  * Identity of the last observation handed to the model. [backend] scopes
@@ -94,6 +265,8 @@ data class RenderedObservation(
     val text: String,
     val fingerprint: ObservationFingerprint?,
     val unchanged: Boolean,
+    /** False when the query itself was rejected; the caller reports a failure. */
+    val ok: Boolean = true,
 )
 
 /**
@@ -153,6 +326,8 @@ object UiObservationSerializer {
         elapsedMs: Long,
         truncated: Boolean,
         stable: Boolean,
+        /** Omitted only by callers that render a node list they never narrowed. */
+        page: UiPage? = null,
     ): String = buildJsonObject {
         put("ok", true)
         put("observationId", observationId)
@@ -162,6 +337,19 @@ object UiObservationSerializer {
         put("stable", stable)
         observation.activePackage?.let { put("activePackage", it) }
         put("truncated", truncated)
+        // Before the nodes, so a model that stops reading early still learns
+        // that there is more and how to ask for it.
+        page?.let { window ->
+            put("totalNodes", window.totalNodes)
+            put("returnedNodes", window.returnedNodes)
+            if (!window.query.isEmpty) {
+                put("matchedNodes", window.matchedNodes)
+                put("query", window.query.toJson())
+            }
+            if (window.offset > 0) put("offset", window.offset)
+            window.nextOffset?.let { put("nextOffset", it) }
+            window.hint()?.let { put("hint", it) }
+        }
         put("nodes", buildJsonArray { observation.nodes.forEach { add(it.toJson()) } })
     }.toString()
 
@@ -229,10 +417,18 @@ object UiObservationSerializer {
      * re-renders identically is recognised. Bounds are part of the node JSON,
      * so any real movement changes the digest.
      */
-    fun digest(activePackage: String?, nodes: List<UiNode>): String {
+    fun digest(
+        activePackage: String?,
+        nodes: List<UiNode>,
+        query: UiQuery = UiQuery.ALL,
+    ): String {
         val payload = buildJsonObject {
             activePackage?.let { put("activePackage", it) }
             put("nodes", buildJsonArray { nodes.forEach { add(it.toJson()) } })
+            // The same screen answers two different queries differently, so a
+            // query is part of the identity of a reply. An empty one adds
+            // nothing, which keeps every unfiltered digest what it always was.
+            if (!query.isEmpty) put("query", query.toJson())
         }.toString()
         return MessageDigest.getInstance("SHA-256")
             .digest(payload.toByteArray(Charsets.UTF_8))
@@ -242,6 +438,30 @@ object UiObservationSerializer {
     /**
      * Unchanged-suppression plus the truncation loop, once, for every backend.
      * The caller records [RenderedObservation.fingerprint] only on success.
+     */
+    /**
+     * The nodes a [query] selects, in traversal order.
+     *
+     * `rootNodeId` leans on pre-order: an emitted node always follows its
+     * emitted ancestors, so one forward pass resolves a whole subtree without
+     * a parent index.
+     */
+    fun select(nodes: List<UiNode>, query: UiQuery): List<UiNode> {
+        val scoped = query.rootNodeId?.let { root ->
+            val subtree = mutableSetOf(root)
+            nodes.filter { node ->
+                val inside = node.nodeId == root || (node.parentId != null && node.parentId in subtree)
+                if (inside) subtree += node.nodeId
+                inside
+            }
+        } ?: nodes
+        return scoped.filter(query::matches)
+    }
+
+    /**
+     * Unchanged-suppression, query selection and paging, once, for every
+     * backend. The caller records [RenderedObservation.fingerprint] only on
+     * success, and reports [RenderedObservation.ok] as the tool outcome.
      */
     fun render(
         observation: UiObservation,
@@ -253,37 +473,84 @@ object UiObservationSerializer {
         previous: ObservationFingerprint?,
         force: Boolean,
         stable: Boolean,
+        query: UiQuery = UiQuery.ALL,
     ): RenderedObservation {
+        if (query.rootNodeId != null && observation.nodes.none { it.nodeId == query.rootNodeId }) {
+            // An empty node list would read as "that part of the screen is
+            // empty", which is a different and wrong answer.
+            return RenderedObservation(
+                text = failureJson(
+                    observationId = observationId,
+                    revision = revision,
+                    elapsedMs = elapsedMs,
+                    errorType = "ui_unknown_node",
+                    message = "rootNodeId \"${query.rootNodeId}\" is not on the current screen.",
+                    remedy = "Call read_ui without rootNodeId, then use an id from that reply.",
+                ),
+                fingerprint = null,
+                unchanged = false,
+                ok = false,
+            )
+        }
+        val matched = select(observation.nodes, query)
         val fingerprint = ObservationFingerprint(
-            digest = digest(observation.activePackage, observation.nodes),
+            digest = digest(observation.activePackage, observation.nodes, query),
             revision = revision,
             backend = backend,
         )
         if (!force && previous != null && previous.backend == backend && previous.digest == fingerprint.digest) {
-            // The screen is byte-identical to what the model already holds.
-            // Acknowledge it instead of resending the whole node list.
+            // The screen is byte-identical to what the model already holds, and
+            // so is the question it asked of it. Acknowledge instead of
+            // resending the whole node list.
             return RenderedObservation(
                 text = unchangedJson(
-                    observation.activePackage, observation.nodes.size, source,
+                    observation.activePackage, matched.size, source,
                     observationId, revision, elapsedMs, previous.revision,
                 ),
                 fingerprint = null,
                 unchanged = true,
             )
         }
-        var nodes = observation.nodes
-        var truncated = false
-        var text = semanticJson(
-            observation, source, observationId, revision, elapsedMs, truncated, stable,
-        )
-        while (text.length > MAX_OUTPUT_CHARS && nodes.size > 1) {
-            nodes = nodes.dropLast((nodes.size / 8).coerceAtLeast(1))
-            truncated = true
-            text = semanticJson(
-                observation.copy(nodes = nodes), source, observationId, revision,
-                elapsedMs, truncated, stable,
+        val window = matched.drop(query.offset).let { rest -> query.maxNodes?.let(rest::take) ?: rest }
+        val render = { count: Int ->
+            semanticJson(
+                observation = observation.copy(nodes = window.take(count)),
+                source = source,
+                observationId = observationId,
+                revision = revision,
+                elapsedMs = elapsedMs,
+                truncated = query.offset + count < matched.size,
+                stable = stable,
+                page = UiPage(
+                    totalNodes = observation.nodes.size,
+                    matchedNodes = matched.size,
+                    offset = query.offset,
+                    returnedNodes = count,
+                    query = query,
+                ),
             )
         }
-        return RenderedObservation(text = text, fingerprint = fingerprint, unchanged = false)
+        val returned = fitCount(window.size, query.charBudget(), render)
+        return RenderedObservation(text = render(returned), fingerprint = fingerprint, unchanged = false)
+    }
+
+    /**
+     * The largest prefix that fits [budget], and never fewer than one node.
+     *
+     * A binary search rather than the shrink-by-an-eighth loop this replaces:
+     * that one re-serialized a 5000-node screen dozens of times to converge,
+     * and paging makes an oversized screen the normal case rather than the
+     * exceptional one.
+     */
+    private fun fitCount(size: Int, budget: Int, render: (Int) -> String): Int {
+        if (size == 0) return 0
+        if (render(size).length <= budget) return size
+        var low = 1
+        var high = size
+        while (low < high) {
+            val mid = (low + high + 1) / 2
+            if (render(mid).length <= budget) low = mid else high = mid - 1
+        }
+        return low
     }
 }

@@ -1,6 +1,6 @@
 ---
 name: device-automation
-description: Master skill for precise Android device control via ADB. Covers semantic UI hierarchy parsing, bounds calculation, gestures, Unicode text input, key events, and verification.
+description: Master skill for precise Android device control through the accessibility service or ADB. Covers semantic UI hierarchy parsing, bounds calculation, gestures, Unicode text input, key events, intents, and verification.
 ---
 
 # Android Device Automation Skill
@@ -10,6 +10,8 @@ This skill defines the exact mechanisms for interacting with the Android OS and 
 Two backends serve the same tool names. An on-device accessibility service handles observation and touch without any ADB connection; wireless ADB handles shell, file transfer, installs and anything the accessibility API cannot reach, and covers for the accessibility service when it is switched off. The application routes each call — you never pick. The `source` field in an observation says which backend answered (`accessibility` or `uiautomator`), and `stable:false` means the screen had not settled when it was read.
 
 A failure with `errorType` `backend_unavailable`, `a11y_unavailable`, `key_unsupported` or `no_text_focus` means **nothing happened on the device**. Read the `remedy` field and act on it instead of repeating the call.
+
+Availability is **per operation**, never one global switch. The turn's runtime snapshot lists the tools you can call now and the tools with no live backend. Only the ADB-served operations — `shell`, `push_file`, `pull_file`, `install_apk` — need Wireless Debugging. `read_ui`, `screenshot`, `tap`, `tap_node`, `swipe`, `scroll_node`, `key`, `type_text`, `set_text`, `open_app`, `wait_for_change`, `resolve_intent` and `open_intent` are all served by the accessibility service with no ADB connection at all. A disconnected ADB is never a reason to refuse one of them, and an ordinary deep link is not an ADB operation.
 
 ---
 
@@ -23,9 +25,47 @@ The normal result is compact JSON. Raw XML is available only with `raw=true` for
 {"ok":true,"revision":12,"activePackage":"com.example","stable":true,"nodes":[{"nodeId":"n3","text":"Search","resourceId":"com.example:id/search_box","contentDescription":"Search query","bounds":[72,140,936,260],"clickable":true,"enabled":true}]}
 ```
 
+### Focused Queries and Paging
+A busy screen does not fit in one reply. Never treat that as "the rest is not
+there" — narrow the question, or page through it.
+
+| Argument | Effect |
+|---|---|
+| `text` | Node whose `text` or `contentDescription` contains this (case-insensitive). |
+| `resourceId` | Node whose `resourceId` contains this. |
+| `class` | Node whose class name contains this, e.g. `EditText`, `RecyclerView`. |
+| `package` | Node from this package, e.g. `package="whatsapp"`. |
+| `rootNodeId` | That node and every node under it, and nothing else. |
+| `clickableOnly` / `scrollableOnly` | Only what can be tapped, or only what can be scrolled. |
+| `offset` | Skip this many matches. Use the `nextOffset` the previous reply handed you. |
+| `maxNodes` / `maxChars` | Lower the caps for a small, cheap reply. |
+
+Filters combine with AND. They change only what is **listed**: every node is
+still on screen, and its `nodeId` still works with `tap_node`, `set_text` and
+`scroll_node`.
+
+Every reply reports what it left out:
+```json
+{"ok":true,"revision":12,"truncated":true,"totalNodes":812,"returnedNodes":96,"matchedNodes":240,
+ "query":{"package":"whatsapp"},"nextOffset":96,"hint":"Nodes 1-96 of 240 matching. ...","nodes":[...]}
+```
+- `truncated:true` with `nextOffset` means there is more. Call `read_ui` again
+  with `offset=<nextOffset>`, or ask a narrower question.
+- `matchedNodes:0` means your filter matched nothing while `totalNodes` were on
+  screen. That is a bad filter, not an empty screen.
+- `rootNodeId` naming a node that is not on screen fails with
+  `errorType:"ui_unknown_node"` instead of returning an empty list.
+
+Worked example — find one contact in a long chat list:
+```text
+read_ui(package="whatsapp", text="Amir")   -> the row and its labels only
+read_ui(rootNodeId="n42")                  -> everything inside that row
+read_ui(clickableOnly=true, maxNodes=40)   -> just what can be tapped
+```
+
 ### Unchanged Screens
-When the screen is identical to the previous observation, the node list is not
-resent:
+When the screen and the query are both identical to the previous observation,
+the node list is not resent:
 ```json
 {"ok":true,"revision":13,"activePackage":"com.example","stable":true,"unchanged":true,"unchangedSinceRevision":12,"nodeCount":41}
 ```
@@ -33,7 +73,9 @@ Reuse the nodes from revision 12; they are still valid. This is diagnostic
 information, not an error. If the action before it was meant to change the
 screen, the action did not land — pick a different target or dismiss whatever is
 covering it rather than repeating the same tap. Use `force=true` only when the
-earlier node list is no longer available to you.
+earlier node list is no longer available to you. Changing the query is enough on
+its own to get a fresh reply, so a different filter or `offset` is never
+suppressed as unchanged.
 
 ### Addressing Rules
 1. **Search Criteria**: Look for elements where:
@@ -53,6 +95,7 @@ earlier node list is no longer available to you.
 - `ui_timeout` and `ui_idle_failure` are bounded failures. Do not repeat the same read in a loop.
 - Use `screenshot` when visual state is enough, or perform one bounded retry only after a real state change.
 - `ui_parse_failure` means semantic parsing failed safely. Use `read_ui(raw=true)` only to debug it.
+- `ui_unknown_node` means the `rootNodeId` you passed is not on the current screen. Re-read without it and use an id from that reply.
 
 ---
 
@@ -128,3 +171,35 @@ Use standard Android key events for reliable system navigation:
 
 - To open an app by package: `open_app(package="com.example.app")`.
 - When an app is already open but in the background, `open_app` brings it directly to the foreground without resetting state.
+
+---
+
+## 6. Deep Links and Intents (`resolve_intent`, `open_intent`)
+
+A deep link that lands on the target beats `open_app` plus a sequence of taps. Use `resolve_intent` first when you are not sure the link is supported.
+
+### Prefilled message bodies
+
+Pass the body as `text`. **Do not build `?text=` into the uri yourself** — an unencoded space or `&` either truncates the message at the first separator or fails uri parsing outright:
+
+```text
+open_intent(uri="https://wa.me/972500000000", text="on my way & almost there", package="com.whatsapp")
+```
+
+The body is percent-encoded and attached for you. `text` needs a uri to attach to, is capped at 400 characters, and is refused if the uri already carries a payload (`text`, `body`, `subject`, `message`, `amount`, `cc`, `bcc`) — two payloads is ambiguous, so pass one or the other, never both.
+
+### Approvals block the call
+
+Anything that acts on the user's behalf — a prefilled message, a payment, any `sms:`/`mailto:`/`SENDTO` destination — pauses on an approval **the user must answer inside the Android Agent app**. The app is raised to the front when this happens, and the floating card reads "Approve in Android Agent".
+
+`open_intent` does not return until they answer, so **say that you are waiting before you call it**. Adding `text` to a link that opened instantly without it is exactly what turns it into an approval, so expect the pause.
+
+Three different outcomes, and they mean different things:
+
+| `errorType` | Meaning | What to do |
+|---|---|---|
+| `intent_denied` | The user said no. | Do not retry. Ask what they want instead. |
+| `approval_timeout` | Nobody answered in time. | Tell the user it is waiting in the app, then call again once they have answered. |
+| `intent_not_approved` | The run stopped first. | Nothing was launched. |
+
+A successful launch only means the intent was dispatched. Confirm with `read_ui` that the expected screen actually opened.

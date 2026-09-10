@@ -53,11 +53,11 @@ fun traverse(windows: List<A11yWindow>, ownPackage: String): TraversalResult {
         // rather than the call stack. Depth is the cycle guard, because node
         // identity is not something the platform promises.
         val stack = ArrayDeque<Frame>()
-        stack.addLast(Frame(root, null, 0))
+        stack.addLast(Frame(root, null, null, 0))
 
         while (stack.isNotEmpty()) {
             if (visited >= UiObservationSerializer.MAX_UI_NODES) break
-            val (view, clickableAncestor, depth) = stack.removeLast()
+            val (view, clickableAncestor, parentId, depth) = stack.removeLast()
             if (depth > MAX_DEPTH) continue
             visited++
 
@@ -78,6 +78,7 @@ fun traverse(windows: List<A11yWindow>, ownPackage: String): TraversalResult {
                 packageName = UiObservationSerializer.compactField(view.packageName),
                 password = view.isPassword,
                 clickableAncestor = clickableAncestor,
+                parentId = parentId,
             )
             if (node.isMeaningful()) {
                 nodes += node
@@ -88,8 +89,12 @@ fun traverse(windows: List<A11yWindow>, ownPackage: String): TraversalResult {
             // A labelled child that is not itself clickable needs its nearest
             // clickable parent, so the model has something real to tap.
             val nextAncestor = if (view.isClickable) node.asClickTarget() else clickableAncestor
+            // Skipped nodes are not in the emitted list, so a child inherits
+            // the nearest ancestor that *was* emitted. That keeps a subtree
+            // query resolvable from the flat list alone.
+            val nextParentId = if (node.isMeaningful()) node.nodeId else parentId
             for (index in view.childCount - 1 downTo 0) {
-                view.child(index)?.let { stack.addLast(Frame(it, nextAncestor, depth + 1)) }
+                view.child(index)?.let { stack.addLast(Frame(it, nextAncestor, nextParentId, depth + 1)) }
             }
         }
     }
@@ -106,6 +111,8 @@ fun traverse(windows: List<A11yWindow>, ownPackage: String): TraversalResult {
 private data class Frame(
     val view: A11yNodeView,
     val clickableAncestor: UiNode?,
+    /** Nearest ancestor that was emitted, for `rootNodeId` subtree queries. */
+    val parentId: String?,
     val depth: Int,
 )
 

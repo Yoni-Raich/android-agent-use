@@ -19,6 +19,21 @@ class AgentCoordinator(
     private val sessions: SessionStore,
     private val tools: DeviceToolGateway,
     private val overlay: ControlOverlay,
+    /**
+     * Bring the app's own window to the front.
+     *
+     * An approval card only exists inside the app, and during device control
+     * the app is by definition not the foreground window — the agent is
+     * driving another app. Without this the user sees a floating card that
+     * says "waiting" and has nothing to tap, while the tool call sits unanswered
+     * until it expires. Best-effort and optional: a host that has no window
+     * leaves it a no-op.
+     *
+     * Declared before [adbStatus] on purpose: [adbStatus] stays the trailing
+     * parameter, so the `AgentCoordinator(...) { adb.status.value }` form every
+     * existing caller uses keeps binding to the parameter it always did.
+     */
+    private val bringToForeground: () -> Unit = {},
     private val adbStatus: () -> AdbStatus = { AdbStatus() },
 ) {
     private val mutableState = MutableStateFlow(RunState())
@@ -229,7 +244,10 @@ class AgentCoordinator(
             }
             overlay.updateState(OverlayState(OverlayPhase.THINKING))
             beginTurn(token)
-            val startedTurn = engine.startTurn(openedThread, prompt, images, reasoningEffort, skill, adbStatus())
+            val startedTurn = engine.startTurn(
+                openedThread, prompt, images, reasoningEffort, skill,
+                DeviceCapabilities.of(tools, adbStatus()),
+            )
             if (!activateTurn(token, startedTurn)) return
             ensureCurrent(token)
             runCompletion.await()
@@ -444,12 +462,19 @@ class AgentCoordinator(
                     approval = approval,
                     status = "Waiting for your approval",
                 )
-                overlay.updateState(OverlayState(OverlayPhase.RUNNING, "Waiting for approval"))
+                // Name where the card is. The floating card is all the user can
+                // see while another app is in front, so "waiting for approval"
+                // on its own tells them nothing they can act on.
+                overlay.updateState(OverlayState(OverlayPhase.RUNNING, "Approve in Android Agent"))
             }
         }
+        // Outside the lock: this hands control to the host's UI thread.
+        runCatching { bringToForeground() }
 
-        val allowed = try {
-            withTimeoutOrNull(LOCAL_APPROVAL_TIMEOUT_MS) { pending.decision.await() } == true
+        // null means nobody answered; false means the user said no. They are
+        // different outcomes and the model has to be able to tell them apart.
+        val decision = try {
+            withTimeoutOrNull(LOCAL_APPROVAL_TIMEOUT_MS) { pending.decision.await() }
         } catch (cancelled: CancellationException) {
             clearLocalApproval(pending)
             throw cancelled
@@ -460,8 +485,20 @@ class AgentCoordinator(
                 isCurrentTurnLocked(pending.token, pending.threadId, pending.turnId)
             clearLocalApprovalLocked(pending)
             when {
-                !stillCurrent -> localIntentRejected("Run stopped before the intent was approved.")
-                !allowed -> localIntentRejected("The intent was denied or the approval expired.")
+                !stillCurrent -> localIntentRejected(
+                    "intent_not_approved",
+                    "Run stopped before the intent was approved.",
+                )
+                decision == null -> localIntentRejected(
+                    "approval_timeout",
+                    "Nobody answered the approval within ${LOCAL_APPROVAL_TIMEOUT_MS / 1_000} seconds. " +
+                        "It is shown in the Android Agent app, not on the floating card. Tell the user " +
+                        "it is waiting there, then call open_intent again once they have answered.",
+                )
+                decision == false -> localIntentRejected(
+                    "intent_denied",
+                    "The user denied this intent. Do not retry it; ask what they want instead.",
+                )
                 else -> dispatch()
             }
         }
@@ -562,14 +599,22 @@ class AgentCoordinator(
     }
 
     private fun cancelLocalApprovalLocked() {
-        pendingLocalApproval?.decision?.complete(false)
+        val pending = pendingLocalApproval ?: return
+        pending.decision.complete(false)
         pendingLocalApproval = null
+        // The waiter clears its own card, but only while it still owns the
+        // pending slot. It no longer does, so leaving the card in the state
+        // would strand it: every later approval, local or engine, is refused
+        // while one is already showing.
+        if (state.value.approval?.requestId == pending.id) {
+            mutableState.value = state.value.copy(approval = null)
+        }
     }
 
-    private fun localIntentRejected(message: String): ToolResult = ToolResult(
+    private fun localIntentRejected(errorType: String, message: String): ToolResult = ToolResult(
         buildJsonObject {
             put("ok", false)
-            put("errorType", "intent_not_approved")
+            put("errorType", errorType)
             put("message", message)
         }.toString(),
         success = false,
@@ -985,7 +1030,8 @@ class AgentCoordinator(
         val toolsInFlight: List<Job>,
     )
 
-    private companion object {
+    /** Internal rather than private so tests can advance to the real deadline. */
+    internal companion object {
         const val LOCAL_APPROVAL_TIMEOUT_MS = 120_000L
     }
 }

@@ -1,6 +1,7 @@
 package dev.androidagent.a11y
 
 import dev.androidagent.core.UiObservationSerializer
+import dev.androidagent.core.UiQuery
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -32,6 +33,49 @@ class NodeTraversalTest {
     }
 
     private fun window(root: A11yNodeView?, active: Boolean = true) = A11yWindow(root, active)
+
+    @Test fun eachNodeNamesTheNearestAncestorThatWasItselfEmitted() {
+        // rootNodeId resolves a subtree out of the flat list, so a node that
+        // was dropped must not break the chain: its children adopt the nearest
+        // ancestor that survived.
+        val tree = FakeNode(
+            text = "Screen",
+            children = listOf(
+                FakeNode(
+                    text = "List",
+                    isScrollable = true,
+                    children = listOf(
+                        // Unlabelled and uninteractive: dropped from the list.
+                        FakeNode(children = listOf(FakeNode(text = "Row A"))),
+                        FakeNode(text = "Row B"),
+                    ),
+                ),
+            ),
+        )
+        val nodes = traverse(listOf(window(tree)), OWN).observation.nodes
+        val byText = nodes.associateBy { it.text }
+        assertNull(byText.getValue("Screen").parentId)
+        assertEquals(byText.getValue("Screen").nodeId, byText.getValue("List").parentId)
+        // The dropped wrapper is skipped over, not treated as a parent.
+        assertEquals(byText.getValue("List").nodeId, byText.getValue("Row A").parentId)
+        assertEquals(byText.getValue("List").nodeId, byText.getValue("Row B").parentId)
+    }
+
+    @Test fun aSubtreeQueryOverARealTraversalReturnsOnlyThatBranch() {
+        val tree = FakeNode(
+            text = "Screen",
+            children = listOf(
+                FakeNode(text = "Chats", children = listOf(FakeNode(text = "Amir"), FakeNode(text = "Bella"))),
+                FakeNode(text = "Tabs", children = listOf(FakeNode(text = "Calls"))),
+            ),
+        )
+        val nodes = traverse(listOf(window(tree)), OWN).observation.nodes
+        val chats = nodes.first { it.text == "Chats" }
+        assertEquals(
+            listOf("Chats", "Amir", "Bella"),
+            UiObservationSerializer.select(nodes, UiQuery(rootNodeId = chats.nodeId)).map { it.text },
+        )
+    }
 
     @Test fun visibleLabelledNodesAreEmittedInPreorder() {
         val tree = FakeNode(

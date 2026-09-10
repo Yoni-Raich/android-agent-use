@@ -7,12 +7,14 @@ import android.graphics.Path
 import android.os.Bundle
 import android.view.accessibility.AccessibilityNodeInfo
 import dev.androidagent.core.DeviceToolGateway
+import dev.androidagent.core.READ_UI_DESCRIPTION
 import dev.androidagent.core.ObservationState
 import dev.androidagent.core.ToolDefinition
 import dev.androidagent.core.ToolNotServiceable
 import dev.androidagent.core.ToolResult
 import dev.androidagent.core.LocalIntentRequest
 import dev.androidagent.core.UiObservationSerializer
+import dev.androidagent.core.UiQuery
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -123,6 +125,15 @@ class A11yDeviceTools(
         }
     }
 
+    /**
+     * Everything this backend does needs a bound service, and none of it needs
+     * ADB. That asymmetry is the point of issue #44: with the service on and
+     * Wireless Debugging off, observation, touch, text and intents are all
+     * still live and must not be reported as unavailable.
+     */
+    override fun readyTools(): Set<String> =
+        if (A11yServiceHandle.connected) definitions.map { it.name }.toSet() else emptySet()
+
     override suspend fun cancel() {
         // Nothing to tear down: every wait here is bounded by withTimeoutOrNull
         // and unwinds with the cancelled coroutine.
@@ -169,6 +180,7 @@ class A11yDeviceTools(
         }
         val service = requireService()
         val force = arguments["force"]?.jsonPrimitive?.booleanOrNull ?: false
+        val query = UiQuery.from(arguments)
         val revision = observations.nextRevision()
         val observationId = "ui-$revision"
         val startedAt = System.nanoTime()
@@ -189,16 +201,22 @@ class A11yDeviceTools(
             previous = observations.last(),
             force = force,
             stable = stable,
+            query = query,
         )
         synchronized(lock) {
-            if (!revoked) {
+            // A rejected query never reached the model as a node list, so the
+            // ids it already holds have to keep working.
+            if (!revoked && rendered.ok) {
+                // Handles come from the whole traversal, never from the page
+                // that was emitted: a node the query filtered out is still on
+                // screen, and an action that names it must still land.
                 handles = result.handles
                 handleObservationIds =
                     if (rendered.unchanged) handleObservationIds + observationId else setOf(observationId)
             }
         }
         rendered.fingerprint?.let { observations.record(it) }
-        return ToolResult(rendered.text)
+        return ToolResult(rendered.text, success = rendered.ok)
     }
 
     /** True when the screen stopped changing before the budget ran out. */
@@ -563,12 +581,14 @@ class A11yDeviceTools(
         private val TOOL_DEFINITIONS: List<ToolDefinition> = listOf(
             tool(
                 "read_ui",
-                "Read a bounded compact semantic UI observation. Returns labeled/actionable nodes " +
-                    "by default; use raw=true only for debug XML. When the screen is identical to the " +
-                    "previous observation the reply is \"unchanged\":true with \"unchangedSinceRevision\" " +
-                    "instead of the node list — reuse the nodes from that revision, or pass force=true to " +
-                    "resend them. Timeout or idle failures are typed and do not trigger a second dump.",
-                mapOf("timeoutMs" to "integer", "raw" to "boolean", "force" to "boolean"),
+                READ_UI_DESCRIPTION,
+                mapOf(
+                    "timeoutMs" to "integer", "raw" to "boolean", "force" to "boolean",
+                    "text" to "string", "resourceId" to "string", "class" to "string",
+                    "package" to "string", "rootNodeId" to "string",
+                    "clickableOnly" to "boolean", "scrollableOnly" to "boolean",
+                    "offset" to "integer", "maxNodes" to "integer", "maxChars" to "integer",
+                ),
                 emptyList(),
             ),
             tool("screenshot", "Capture a PNG screenshot. Returns imageBase64. Read-only.", emptyMap(), emptyList()),
