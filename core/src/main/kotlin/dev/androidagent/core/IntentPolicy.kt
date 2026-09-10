@@ -1,7 +1,9 @@
 package dev.androidagent.core
 
+import java.io.UnsupportedEncodingException
 import java.net.URI
 import java.net.URISyntaxException
+import java.net.URLEncoder
 import java.util.Locale
 
 /**
@@ -84,6 +86,14 @@ object IntentPolicy {
 
     private const val MAX_URI_CHARS = 2_000
 
+    /**
+     * Longest prefilled message body accepted.
+     *
+     * Percent-encoding can triple a string, so this is well under
+     * [MAX_URI_CHARS] to leave room for the destination it is attached to.
+     */
+    const val MAX_TEXT_CHARS = 400
+
     sealed interface Decision {
         /** Safe to launch without asking. */
         data class Allow(val uri: String?, val action: String) : Decision
@@ -104,6 +114,53 @@ object IntentPolicy {
      * @param action fully-qualified action, or null to default to VIEW.
      * @param uri the data URI, or null for an action that needs none.
      */
+    /**
+     * Attach a prefilled message body to a deep link.
+     *
+     * A model that hand-builds `?text=` gets the encoding wrong: an unencoded
+     * space or `&` either truncates the message at the first separator or
+     * fails [URI] parsing outright, which is why the caller hands over plain
+     * text and this composes it. The result always carries a payload, so
+     * [evaluate] will classify it as [Decision.NeedsConfirmation] — attaching
+     * text can never quietly downgrade an intent to [Decision.Allow].
+     */
+    fun withText(uri: String?, text: String?): Decision {
+        val body = text?.takeIf { it.isNotBlank() } ?: return Decision.Allow(uri, "")
+        val destination = uri?.trim()?.takeUnless { it.isEmpty() }
+            ?: return Decision.Deny(
+                "uri_required",
+                "text needs a uri to attach to. Pass the deep link that opens the conversation.",
+            )
+        if (body.length > MAX_TEXT_CHARS) {
+            return Decision.Deny(
+                "text_too_long",
+                "text is ${body.length} characters, above the $MAX_TEXT_CHARS limit.",
+            )
+        }
+        if (destination.contains('#')) {
+            return Decision.Deny(
+                "uri_has_fragment",
+                "A uri with a fragment cannot carry a query payload. Drop the \"#\" part.",
+            )
+        }
+        val existing = runCatching { queryOf(URI(destination)) }.getOrDefault(emptyMap())
+        if (payloadKeys.any { it in existing }) {
+            // Two payloads is ambiguous: silently overwriting one would send
+            // something the caller did not mean to send.
+            return Decision.Deny(
+                "text_conflict",
+                "That uri already carries a payload. Pass text, or put it in the uri, not both.",
+            )
+        }
+        val encoded = try {
+            URLEncoder.encode(body, "UTF-8").replace("+", "%20")
+        } catch (error: UnsupportedEncodingException) {
+            return Decision.Deny("text_malformed", "text could not be encoded.")
+        }
+        val separator = if (destination.contains('?')) "&" else "?"
+        return Decision.Allow("$destination${separator}text=$encoded", "")
+    }
+
     fun evaluate(action: String?, uri: String?): Decision {
         val resolvedAction = action?.trim().takeUnless { it.isNullOrEmpty() }
             ?: "android.intent.action.VIEW"

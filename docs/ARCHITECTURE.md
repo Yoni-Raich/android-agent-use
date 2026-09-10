@@ -248,6 +248,41 @@ fingerprints exactly as it did before. The character-budget fit is a binary
 search over the node count rather than the previous shrink-by-an-eighth loop,
 because paging makes an oversized screen the normal case.
 
+## Prefilled intents and the approval gate
+
+`open_intent` takes the message body as `text` rather than expecting the model
+to build `?text=` into the uri. `IntentPolicy.withText` percent-encodes it and
+attaches it to the destination, because a hand-built payload is where this
+breaks: an unencoded space or `&` truncates the message at the first separator
+or fails `java.net.URI` parsing, which the policy then reports as
+`uri_malformed`. It refuses a uri that already carries a payload key rather than
+overwriting one — two bodies is ambiguous, and silently picking one would send
+something the caller did not mean to send. Composition happens **before**
+`IntentPolicy.evaluate`, so the body is judged as the payload it is; attaching
+text can only ever move a decision toward `NeedsConfirmation`, never away.
+
+That is also the trap the feature carries. The same link that launches instantly
+without a body becomes a `NeedsConfirmation` the moment one is attached, and a
+`NeedsConfirmation` suspends the tool call on `AgentCoordinator`'s approval gate
+for up to two minutes. The approval card is rendered only by the app's chat
+screen, and during device control the app is by definition not the foreground
+window, so the user saw a floating card reading "waiting for approval" with
+nothing on it to tap while the model saw a tool call that never came back.
+
+Three things close that gap. The coordinator now takes a `bringToForeground`
+callback and raises the app's own window when it publishes a local approval; the
+floating card says "Approve in Android Agent" rather than just "waiting"; and
+the outcomes are separated — `intent_denied` when the user said no,
+`approval_timeout` when nobody answered, `intent_not_approved` when the run
+stopped first. A single "denied or expired" told the model nothing it could act
+on. `cancelLocalApprovalLocked` also clears the published card, which it did not
+before: a stranded card refuses every later approval, local or engine, because
+one is already showing.
+
+`bringToForeground` is declared before `adbStatus` in the constructor so that
+`AgentCoordinator(...) { adb.status.value }` keeps binding its trailing lambda to
+the parameter it always did.
+
 ## Per-operation device capability
 
 The advertised tool list is static, because Codex binds it at `thread/start`

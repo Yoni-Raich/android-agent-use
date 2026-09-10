@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- `open_intent` now takes the prefilled message body as `text` and encodes it
+  into the deep link, instead of expecting a hand-built `?text=` that an
+  unencoded space or `&` would truncate or make unparseable. Attaching a body
+  still needs the user's approval, and that approval no longer looks like a
+  hung tool call: the app is raised so the card can be answered, the floating
+  card says "Approve in Android Agent", and a denial, an unanswered approval
+  and a stopped run are now three distinct typed errors instead of one "denied
+  or expired". A cancelled approval no longer strands its card and block every
+  later approval.
 - Device control is no longer reported as one global ADB-dependent switch. Each
   turn now carries a snapshot naming the tools that can be called right now and
   the tools whose backend is down, so a disconnected Wireless ADB no longer

@@ -323,6 +323,89 @@ class AgentCoordinatorTest {
         rig.close()
     }
 
+    @Test fun aWaitingIntentApprovalRaisesTheAppAndSaysWhereToAnswerIt() = runTest {
+        // The approval card lives only in the app, and device control means the
+        // app is not in front. Without raising it the user sees a floating card
+        // that says "waiting" and has nothing to tap, and the tool call looks
+        // to the model like it never returned.
+        val rig = Rig(this)
+        rig.coordinator.send("one", "Message Amir")
+        runCurrent()
+        val result = async {
+            rig.coordinator.authorizeLocalIntent(
+                LocalIntentRequest(
+                    "android.intent.action.VIEW",
+                    "https://wa.me/972500000000?text=on%20my%20way",
+                    "com.whatsapp",
+                    "Open wa.me with a prefilled message (text).",
+                ),
+            ) { ToolResult("launched") }
+        }
+        runCurrent()
+
+        assertEquals(1, rig.foregroundRequests)
+        assertTrue(rig.overlay.states.last().label.contains("Approve in Android Agent"))
+        assertEquals("Waiting for your approval", rig.coordinator.state.value.status)
+
+        rig.coordinator.approve(rig.coordinator.state.value.approval!!.requestId, true)
+        runCurrent()
+        assertTrue(result.await().success)
+        rig.close()
+    }
+
+    @Test fun anUnansweredApprovalExpiresWithADifferentErrorThanADenial() = runTest {
+        val rig = Rig(this)
+        rig.coordinator.send("one", "Message Amir")
+        runCurrent()
+        val expired = async {
+            rig.coordinator.authorizeLocalIntent(
+                LocalIntentRequest("android.intent.action.VIEW", "https://wa.me/1?text=hi", null, "Send."),
+            ) { ToolResult("launched") }
+        }
+        runCurrent()
+        advanceTimeBy(AgentCoordinator.LOCAL_APPROVAL_TIMEOUT_MS + 1_000)
+        runCurrent()
+
+        val text = expired.await().text
+        // "denied or expired" told the model nothing it could act on. Nobody
+        // answering is a different situation from the user saying no.
+        assertTrue(text, text.contains("\"errorType\":\"approval_timeout\""))
+        assertTrue(text, text.contains("Android Agent app"))
+        assertNull(rig.coordinator.state.value.approval)
+
+        val denied = async {
+            rig.coordinator.authorizeLocalIntent(
+                LocalIntentRequest("android.intent.action.VIEW", "https://wa.me/1?text=hi", null, "Send."),
+            ) { ToolResult("launched") }
+        }
+        runCurrent()
+        rig.coordinator.approve(rig.coordinator.state.value.approval!!.requestId, false)
+        runCurrent()
+        assertTrue(denied.await().text.contains("\"errorType\":\"intent_denied\""))
+        rig.close()
+    }
+
+    @Test fun aStoppedApprovalDoesNotStrandItsCardAndBlockTheNextOne() = runTest {
+        val rig = Rig(this)
+        rig.coordinator.send("one", "Message Amir")
+        runCurrent()
+        val stopped = async {
+            rig.coordinator.authorizeLocalIntent(
+                LocalIntentRequest("android.intent.action.VIEW", "https://wa.me/1?text=hi", null, "Send."),
+            ) { ToolResult("launched") }
+        }
+        runCurrent()
+        assertNotNull(rig.coordinator.state.value.approval)
+
+        rig.coordinator.stop()
+        runCurrent()
+        assertFalse(stopped.await().success)
+        // A card left behind here refuses every later approval, local or
+        // engine, because one is already showing.
+        assertNull(rig.coordinator.state.value.approval)
+        rig.close()
+    }
+
     private class Rig(test: TestScope) {
         val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(test.testScheduler))
         val engine = FakeEngine()
@@ -330,7 +413,11 @@ class AgentCoordinatorTest {
         val overlay = FakeOverlay()
         val tools = FakeTools(overlay)
         val adbStatus = MutableStateFlow(AdbStatus())
-        val coordinator = AgentCoordinator(scope, engine, store, tools, overlay) { adbStatus.value }
+        var foregroundRequests = 0
+        val coordinator = AgentCoordinator(
+            scope, engine, store, tools, overlay,
+            bringToForeground = { foregroundRequests++ },
+        ) { adbStatus.value }
         fun close() { scope.cancel() }
     }
 

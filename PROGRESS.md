@@ -27,6 +27,15 @@ not production-ready.
   the serializer, both parsers and the ADB gateway wiring only; it was **not**
   run against WhatsApp or any physical phone, so the original reproduction is
   still unverified on hardware.
+- The `open_intent` prefilled-text path passed JVM tests and a dev debug build
+  on 2026-09-10. New tests cover percent-encoding into the uri, that attaching a
+  body never downgrades a decision below `NeedsConfirmation`, the ambiguity and
+  length refusals, that a waiting approval raises the app and labels the
+  floating card, that an unanswered approval expires with a different error than
+  a denial, and that a stopped approval clears its card. Not proven on a phone:
+  the app-raise itself is an Android `startActivity` from the application
+  context and has no unit coverage, and the reported WhatsApp deep link with a
+  message body has not been re-run on hardware.
 - Per-operation device capability reporting (issue #44) passed JVM tests and a
   dev debug build on 2026-09-10. New tests cover the composite union over live
   backends, the ready/blocked split, an ADB gateway that reports nothing while

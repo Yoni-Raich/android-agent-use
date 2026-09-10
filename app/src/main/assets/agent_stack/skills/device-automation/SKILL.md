@@ -171,3 +171,35 @@ Use standard Android key events for reliable system navigation:
 
 - To open an app by package: `open_app(package="com.example.app")`.
 - When an app is already open but in the background, `open_app` brings it directly to the foreground without resetting state.
+
+---
+
+## 6. Deep Links and Intents (`resolve_intent`, `open_intent`)
+
+A deep link that lands on the target beats `open_app` plus a sequence of taps. Use `resolve_intent` first when you are not sure the link is supported.
+
+### Prefilled message bodies
+
+Pass the body as `text`. **Do not build `?text=` into the uri yourself** — an unencoded space or `&` either truncates the message at the first separator or fails uri parsing outright:
+
+```text
+open_intent(uri="https://wa.me/972500000000", text="on my way & almost there", package="com.whatsapp")
+```
+
+The body is percent-encoded and attached for you. `text` needs a uri to attach to, is capped at 400 characters, and is refused if the uri already carries a payload (`text`, `body`, `subject`, `message`, `amount`, `cc`, `bcc`) — two payloads is ambiguous, so pass one or the other, never both.
+
+### Approvals block the call
+
+Anything that acts on the user's behalf — a prefilled message, a payment, any `sms:`/`mailto:`/`SENDTO` destination — pauses on an approval **the user must answer inside the Android Agent app**. The app is raised to the front when this happens, and the floating card reads "Approve in Android Agent".
+
+`open_intent` does not return until they answer, so **say that you are waiting before you call it**. Adding `text` to a link that opened instantly without it is exactly what turns it into an approval, so expect the pause.
+
+Three different outcomes, and they mean different things:
+
+| `errorType` | Meaning | What to do |
+|---|---|---|
+| `intent_denied` | The user said no. | Do not retry. Ask what they want instead. |
+| `approval_timeout` | Nobody answered in time. | Tell the user it is waiting in the app, then call again once they have answered. |
+| `intent_not_approved` | The run stopped first. | Nothing was launched. |
+
+A successful launch only means the intent was dispatched. Confirm with `read_ui` that the expected screen actually opened.
