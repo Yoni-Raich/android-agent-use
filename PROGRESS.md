@@ -7,6 +7,22 @@ not production-ready.
 
 ### Verified
 
+- Full-screen voice mode, the floating status pill, the new composer, folded
+  device actions, per-line right-to-left text, the queue fix after a pause and
+  the sphere launcher icon passed the full gate on 2026-09-11:
+  `./gradlew.bat test assembleDevRelease assembleDevDebugAndroidTest
+  :voice:lintDebug :overlay:lintDebug` (539 JVM tests, no failures; lint
+  warnings only), `python -m unittest tools.test_prepare_runtime` and
+  `git diff --check`. New tests cover the voice level meter, the overlay's
+  plain-language statuses, folding tool messages, the per-line RTL marks and
+  list alignment, and a message sent after Stop running while held work waits.
+  Dev debug APKs were installed by hand on a Nothing Phone (3a); the user
+  reported voice mode, the pill and the composer from real use, but no command
+  evidence was captured on the phone. Not verified on hardware: the launcher
+  icon (its build was not confirmed installed), the live audio
+  level and mute over WebRTC, the window-by-window screenshot (whether the
+  keyboard and system bars are captured, its rate limit, secure windows), and
+  the instrumented UI tests, which compile but were not run.
 - The public v0.6.2 dev APK was built from merged `main` at tag `v0.6.2` on
   2026-09-10. The full Gradle gate, runtime staging tests, APK metadata check,
   zip alignment check, and APK Signature Scheme v3 verification passed. The
