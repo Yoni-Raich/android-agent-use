@@ -197,8 +197,8 @@ git diff --check
 ```
 
 The CI workflow is smaller than the full gate. Do not claim the full gate from
-a green CI run. Do not hide the known `:app:lintDevDebug` failure by weakening
-CI or changing unrelated source files.
+a green CI run. Keep `:app:lintDevDebug` green: fix new lint errors instead of
+weakening CI.
 
 Never run `connectedDevDebugAndroidTest` on a phone whose app data matters.
 That flow can uninstall the app, delete sign-in and sessions, and disable the

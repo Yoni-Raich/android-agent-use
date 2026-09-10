@@ -8,9 +8,6 @@ be treated as part of the current product state.
   streamed conversation.
 - The x86_64 emulator app-server exits with `SIGSYS` (159). Use an ARM64 phone
   as the practical runtime target until this is fixed and re-tested.
-- `:app:lintDevDebug` has a known pre-existing error at
-  `AgentInputMethodService.kt:39`. Scoped checks can pass while project-wide
-  app lint still fails.
 - Physical validation is incomplete for realtime voice, Accessibility control,
   overlay visuals, Wireless ADB reconnect, recovery, and several device tools.
 - Instrumentation cannot cover a live Accessibility service because it

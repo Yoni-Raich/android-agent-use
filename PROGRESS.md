@@ -104,9 +104,7 @@ not production-ready.
 
 The x86_64 emulator app-server currently exits with `SIGSYS` (exit code 159),
 so emulator runtime success must not be inferred from APK installation or
-Compose fixture tests. The project-wide `:app:lintDevDebug` task also has a
-known pre-existing failure in `AgentInputMethodService.kt`; see
-[Known issues](docs/KNOWN_ISSUES.md).
+Compose fixture tests.
 
 Build output and test results are evidence for those exact checks only. They do
 not prove real phone, visual, account, network, or end-to-end success.

@@ -44,9 +44,8 @@ Physical checks are still needed for the Accessibility service, realtime voice,
 overlay visuals, recovery, Wireless ADB pairing/reconnect, and several device
 tools. The emulator runtime is also not a substitute for an ARM64 phone.
 
-The project-wide `:app:lintDevDebug` task has a known pre-existing error in
-`AgentInputMethodService.kt` at line 39. Do not claim that CI or project-wide
-lint is green because scoped tests or `:voice:lintDebug` pass.
+CI runs `:core:test`, `:app:assembleDevDebug`, and `:app:lintDevDebug`, and
+all three are expected to pass. A green CI run is not the full gate.
 
 ## Protecting a configured phone
 

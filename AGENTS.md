@@ -7,7 +7,7 @@ Read `PROGRESS.md` and `docs/ARCHITECTURE.md` before work. Write short, clear En
 - Quick: `./gradlew :app:assembleDevDebug`; unit: `./gradlew :core:test`; scoped: `./gradlew :device-tools:test :core:test`
 - Full gate (evidence for releases): `./gradlew.bat test assembleDevRelease assembleDevDebugAndroidTest :voice:lintDebug --no-daemon` + `python -m unittest tools.test_prepare_runtime` + `git diff --check`
 - CI (`android.yml`) runs only `:core:test :app:assembleDevDebug :app:lintDevDebug` on Java 17 — passing CI does not equal full gate.
-- `:app:lintDevDebug` has a known pre-existing error (`AgentInputMethodService.kt:39` indentation); use scoped `:voice:lintDebug` / `:overlay:lintDebug` for signal, do not "fix" unrelated files to green CI.
+- `:app:lintDevDebug` is expected to pass. Fix new lint errors instead of weakening CI; scoped `:voice:lintDebug` / `:overlay:lintDebug` give faster signal.
 - `preBuild` runs `tools/prepare_runtime.py`: stages pinned Codex app-server ARM64+x86_64 binaries, patches helper lookup to `codex-code-mode-x.so`, fails closed on upstream layout change. Runtime sources live under `research/runtime/`, never in the APK directly.
 - Flavors: `dev` (`dev.androidagent.app.dev`) for daily work, `prod` for release. `version.properties` is the single version source (`app/build.gradle.kts` reads it).
 
