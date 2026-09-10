@@ -93,8 +93,8 @@ private fun toolKey(name: String): String = name.trim().lowercase().replace(' ',
 private fun plainName(name: String): String =
     name.trim().replace('_', ' ').replaceFirstChar { it.uppercase() }.ifEmpty { "Device action" }
 
-private val RTL_LETTER = Regex("[֐-ࣿיִ-﷿ﹰ-﻿]")
-internal const val RLM = '‏'
+private val RTL_LETTER = Regex("[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]")
+internal const val RLM = '\u200F'
 
 /** True when [text] holds any Hebrew or Arabic letter. */
 internal fun containsRtl(text: String): Boolean = RTL_LETTER.containsMatchIn(text)
