@@ -1,12 +1,16 @@
 # Progress
 
-## Status — 2026-09-09
+## Status — 2026-09-10
 
 Android Agent is a Developer Preview. It is useful for local testing, but it is
 not production-ready.
 
 ### Verified
 
+- The public v0.6.2 dev APK was built from merged `main` at tag `v0.6.2` on
+  2026-09-10. The full Gradle gate, runtime staging tests, APK metadata check,
+  zip alignment check, and APK Signature Scheme v3 verification passed. The
+  artifact uses the local debug key and was not installed on a physical phone.
 - The public v0.6.1 dev APK was built from merged `main` at tag `v0.6.1` on
   2026-09-09. The full Gradle gate, runtime staging tests, APK metadata check,
   zip alignment check, and APK Signature Scheme v3 verification passed. The

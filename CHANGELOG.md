@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.2 — 2026-09-10
+
 - `open_intent` now takes the prefilled message body as `text` and encodes it
   into the deep link, instead of expecting a hand-built `?text=` that an
   unencoded space or `&` would truncate or make unparseable. Attaching a body
