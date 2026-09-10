@@ -81,32 +81,117 @@ internal object Screenshotter {
         }
     }
 
+    /**
+     * Capture every window on the display except [ownPackage]'s, composited
+     * bottom to top, so the floating controls never have to leave the screen
+     * for the agent to see it. Android 14+ only: it needs per-window capture.
+     *
+     * Only on-screen windows are captured, so the wallpaper behind a launcher
+     * comes out black. A system window that refuses is left out; an app window
+     * that refuses fails the whole capture, because a frame missing the app is
+     * not the screen.
+     *
+     * @throws ToolNotServiceable when the capture cannot be trusted, so the
+     *   caller can fall back to a whole-display capture.
+     */
+    @android.annotation.TargetApi(34)
+    suspend fun capturePngWithout(service: AccessibilityService, ownPackage: String): ByteArray {
+        val windows = service.windows
+            .filterNot { window -> isOwnWindow(window, ownPackage) }
+            .sortedBy { it.layer }
+        val display = service.getSystemService(android.view.WindowManager::class.java).maximumWindowMetrics.bounds
+        val frame = Bitmap.createBitmap(display.width(), display.height(), Bitmap.Config.ARGB_8888)
+        try {
+            val canvas = android.graphics.Canvas(frame)
+            canvas.drawColor(android.graphics.Color.BLACK)
+            val bounds = android.graphics.Rect()
+            var drawn = 0
+            for (window in windows) {
+                window.getBoundsInScreen(bounds)
+                if (bounds.isEmpty) continue
+                val appWindow = window.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION
+                val capture = try {
+                    takeWindowScreenshot(service, window.id)
+                } catch (refused: ToolNotServiceable) {
+                    if (appWindow) throw refused
+                    continue
+                }
+                val software = try {
+                    Bitmap.wrapHardwareBuffer(capture.buffer, capture.colorSpace)?.let { wrapped ->
+                        try {
+                            wrapped.copy(Bitmap.Config.ARGB_8888, false)
+                        } finally {
+                            wrapped.recycle()
+                        }
+                    }
+                } finally {
+                    capture.buffer.close()
+                }
+                if (software == null) {
+                    if (appWindow) throw ToolNotServiceable("screenshot_unreadable", "A window came back in a format this device cannot read.")
+                    continue
+                }
+                try {
+                    canvas.drawBitmap(software, null, bounds, null)
+                    drawn++
+                } finally {
+                    software.recycle()
+                }
+            }
+            if (drawn == 0) throw ToolNotServiceable("screenshot_no_windows", "No window on screen could be captured on its own.")
+            val out = ByteArrayOutputStream(DEFAULT_ENCODE_BUFFER)
+            check(frame.compress(Bitmap.CompressFormat.PNG, PNG_QUALITY, out)) { "PNG encoding failed" }
+            return out.toByteArray()
+        } finally {
+            frame.recycle()
+        }
+    }
+
+    /**
+     * Our floating card is an overlay window of this package. It is matched by
+     * package and, in case its node tree is not available, by the title the
+     * overlay gives its window.
+     */
+    private fun isOwnWindow(window: android.view.accessibility.AccessibilityWindowInfo, ownPackage: String): Boolean {
+        if (window.title?.toString() == OVERLAY_WINDOW_TITLE) return true
+        return runCatching { window.root?.packageName?.toString() }.getOrNull() == ownPackage
+    }
+
     private suspend fun takeScreenshot(service: AccessibilityService): Capture =
         suspendCancellableCoroutine { continuation ->
-            service.takeScreenshot(
-                Display.DEFAULT_DISPLAY,
-                Executor { it.run() },
-                object : AccessibilityService.TakeScreenshotCallback {
-                    override fun onSuccess(screenshot: AccessibilityService.ScreenshotResult) {
-                        val buffer = screenshot.hardwareBuffer
-                        if (!continuation.isActive) {
-                            // Stop happened while the capture was in flight.
-                            // Nobody downstream will ever see this buffer, so
-                            // this is the only place it can be released.
-                            buffer.close()
-                            return
-                        }
-                        continuation.resume(Capture(buffer, screenshot.colorSpace))
-                    }
-
-                    override fun onFailure(errorCode: Int) {
-                        if (continuation.isActive) {
-                            continuation.resumeWithException(failureFor(errorCode))
-                        }
-                    }
-                },
-            )
+            service.takeScreenshot(Display.DEFAULT_DISPLAY, Executor { it.run() }, captureCallback(continuation))
         }
+
+    @android.annotation.TargetApi(34)
+    private suspend fun takeWindowScreenshot(service: AccessibilityService, windowId: Int): Capture =
+        suspendCancellableCoroutine { continuation ->
+            service.takeScreenshotOfWindow(windowId, Executor { it.run() }, captureCallback(continuation))
+        }
+
+    private fun captureCallback(
+        continuation: kotlinx.coroutines.CancellableContinuation<Capture>,
+    ) = object : AccessibilityService.TakeScreenshotCallback {
+        override fun onSuccess(screenshot: AccessibilityService.ScreenshotResult) {
+            val buffer = screenshot.hardwareBuffer
+            if (!continuation.isActive) {
+                // Stop happened while the capture was in flight. Nobody
+                // downstream will ever see this buffer, so this is the only
+                // place it can be released.
+                buffer.close()
+                return
+            }
+            continuation.resume(Capture(buffer, screenshot.colorSpace))
+        }
+
+        override fun onFailure(errorCode: Int) {
+            if (continuation.isActive) {
+                continuation.resumeWithException(failureFor(errorCode))
+            }
+        }
+    }
+
+    /** Must match the window title FloatingControlOverlay sets. */
+    private const val OVERLAY_WINDOW_TITLE = "AndroidAgentControl"
 
     private class Capture(val buffer: HardwareBuffer, val colorSpace: ColorSpace)
 

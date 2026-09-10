@@ -49,6 +49,8 @@ class A11yDeviceTools(
     private val observations: ObservationState,
     /** Moves the floating card away from a coordinate before a gesture lands on it. */
     private val avoidTouch: (Int, Int) -> Unit = { _, _ -> },
+    /** Steps the floating card aside (true) and back (false) around a whole-display capture. */
+    private val observationVisibility: suspend (Boolean) -> Unit = {},
     private val authorizeIntent: suspend (LocalIntentRequest, () -> ToolResult) -> ToolResult = { _, _ ->
         ToolResult(
             "{\"ok\":false,\"errorType\":\"approval_unavailable\",\"message\":\"This intent needs approval in the app.\"}",
@@ -111,9 +113,10 @@ class A11yDeviceTools(
         }
 
     override fun hidesOverlayDuringCapture(name: String): Boolean =
-        // Only the screenshot composites the display. read_ui filters our own
-        // windows out of the tree instead, so the card can stay put.
-        name == "screenshot"
+        // Neither tool needs the coordinator to hide the card: read_ui filters
+        // our own windows out of the tree, and screenshot leaves our window out
+        // of the capture, stepping the card aside itself only where it cannot.
+        false
 
     override fun statusLine(): String {
         val connected = A11yServiceHandle.connected
@@ -230,17 +233,10 @@ class A11yDeviceTools(
 
     // ---- actions ----
 
-    /**
-     * Capture the display without ADB.
-     *
-     * The overlay is already invisible by the time this runs: the coordinator
-     * consults [hidesOverlayDuringCapture] first, and this composites the real
-     * display, so window filtering — which is what keeps our card out of
-     * `read_ui` — does nothing here.
-     */
+    /** Capture the screen without ADB, and without our floating card in it. */
     private suspend fun screenshot(): ToolResult {
         val service = requireService()
-        val png = Screenshotter.capturePng(service)
+        val png = captureWithoutOverlay(service)
         if (png.size > MAX_SCREENSHOT_BYTES) {
             // Bigger than the model will accept. Say so rather than truncating
             // into a file that decodes to a corrupt image.
@@ -258,6 +254,32 @@ class A11yDeviceTools(
             imageBase64 = android.util.Base64.encodeToString(png, android.util.Base64.NO_WRAP),
             attachmentPaths = listOf(image.absolutePath),
         )
+    }
+
+    /**
+     * On Android 14+ each window is captured on its own and ours is left out,
+     * so the floating card never has to leave the screen. On older Android, or
+     * when that fails for any reason but a secure window, the display is
+     * composited whole with the card stepped aside for the moment of capture.
+     */
+    private suspend fun captureWithoutOverlay(service: AgentAccessibilityService): ByteArray {
+        if (android.os.Build.VERSION.SDK_INT >= 34) {
+            try {
+                return Screenshotter.capturePngWithout(service, context.packageName)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                // A secure window refuses every capture; saying so beats a
+                // whole-display attempt that the platform will refuse too.
+                if (failure is ToolNotServiceable && failure.errorType == "screenshot_secure_window") throw failure
+            }
+        }
+        observationVisibility(true)
+        try {
+            return Screenshotter.capturePng(service)
+        } finally {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { observationVisibility(false) }
+        }
     }
 
     private suspend fun tap(arguments: JsonObject): ToolResult {
