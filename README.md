@@ -85,8 +85,6 @@ See [Architecture](docs/ARCHITECTURE.md) for the boundaries and safety rules.
   not established.
 - Full signed-in phone chat, voice, recovery, and device-control E2E are still
   incomplete.
-- `:app:lintDevDebug` has a known pre-existing error; see
-  [Known issues](docs/KNOWN_ISSUES.md).
 - Stop prevents new work and interrupts active work, but it cannot undo a side
   effect that already completed.
 
