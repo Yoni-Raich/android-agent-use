@@ -55,6 +55,8 @@ class AgentGraph(private val app: Application) {
         app,
         observations,
         avoidTouch = { x, y -> overlay.avoidTouch(x, y) },
+        // Used only where Android cannot leave our window out of a screenshot.
+        observationVisibility = { hidden -> overlay.setCaptureHidden(hidden) },
         authorizeIntent = { request, dispatch -> runCoordinator.authorizeLocalIntent(request, dispatch) },
     )
     // Under homeDirectory, which is global across chats and is the one place

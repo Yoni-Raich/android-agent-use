@@ -527,8 +527,19 @@ raise `ToolNotServiceable`, so the composite falls through to ADB. A
 succeed: `screencap` returns a black frame there, and a black frame presented
 as the screen is worse than an honest refusal.
 
-`hidesOverlayDuringCapture` stays true for this tool. Window filtering is what
-keeps our card out of `read_ui`, and it does nothing for a composited display.
+The floating controls stay on screen through a capture. On Android 14+ the
+screenshot is assembled from `takeScreenshotOfWindow`, one window at a time,
+bottom to top, leaving out our own overlay window (matched by package and by
+its `AndroidAgentControl` title). Only on-screen windows are captured, so the
+wallpaper behind a launcher comes out black. A system window that refuses is
+left out; an app window that refuses fails the per-window capture. On older
+Android, or when the per-window capture fails for any reason other than a
+secure window, the gateway steps the card aside itself for the moment of a
+whole-display `takeScreenshot`. `hidesOverlayDuringCapture` is therefore false
+for every accessibility tool: window filtering keeps our card out of `read_ui`,
+and the screenshot handles its own capture. ADB's `screencap` photographs every
+window, so it steps the card aside around the capture itself — the coordinator
+only does that when ADB is asked first, not after a fall-through.
 
 ## Reaching a destination directly
 

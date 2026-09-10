@@ -33,6 +33,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -55,6 +56,17 @@ class AndroidRealtimeVoiceController(
     private val lifecycle = Mutex()
     private val mutableState = MutableStateFlow(VoiceState())
     val state: StateFlow<VoiceState> = mutableState.asStateFlow()
+    private val mutableMuted = MutableStateFlow(false)
+
+    /** True while the user has silenced the microphone. The conversation stays open. */
+    val muted: StateFlow<Boolean> = mutableMuted.asStateFlow()
+    private val mutableLevel = MutableStateFlow(0f)
+
+    /**
+     * Loudness of whoever is talking, 0 (silence) to 1: the microphone while
+     * listening, Codex's audio while it speaks. Updated every 10-20 ms.
+     */
+    val level: StateFlow<Float> = mutableLevel.asStateFlow()
 
     private var activeThreadId: String? = null
     private var recorder: AudioRecord? = null
@@ -72,7 +84,9 @@ class AndroidRealtimeVoiceController(
     private var focusRequest: AudioFocusRequest? = null
     private var startedSignal: CompletableDeferred<Unit>? = null
     private var sdpSignal: CompletableDeferred<String>? = null
-    private var webRtcSession: RealtimeMediaSession? = null
+    // Also read from the UI thread by setMuted.
+    @Volatile private var webRtcSession: RealtimeMediaSession? = null
+    @Volatile private var lastCodexAudioAt = 0L
     private var activeTransport: RealtimeTransport = RealtimeTransport.WEBRTC
     private var previousAudioMode: Int? = null
     private var previousSpeakerphoneState: Boolean? = null
@@ -102,6 +116,7 @@ class AndroidRealtimeVoiceController(
                 ) { "Microphone permission is required for voice." }
 
                 mutableState.value = VoiceState(VoicePhase.STARTING, "Connecting voice", threadId)
+                mutableMuted.value = false
                 activeThreadId = threadId
                 activeTransport = transport
                 requestAudioFocus()
@@ -122,7 +137,10 @@ class AndroidRealtimeVoiceController(
                         onBufferOverflow = BufferOverflow.DROP_OLDEST,
                     )
                 } else {
-                    mediaSession = webRtcSessionFactory(app)
+                    mediaSession = webRtcSessionFactory(app).also { session ->
+                        session.setLevelListener(::onAudioLevel)
+                        session.setMicrophoneMuted(mutableMuted.value)
+                    }
                     webRtcSession = mediaSession
                 }
             }
@@ -233,6 +251,59 @@ class AndroidRealtimeVoiceController(
         engine.appendText(text, "user")
     }
 
+    /** Silence or restore the microphone without ending the conversation. */
+    fun setMuted(muted: Boolean) {
+        if (!state.value.active) return
+        mutableMuted.value = muted
+        webRtcSession?.setMicrophoneMuted(muted)
+        if (muted && state.value.phase != VoicePhase.SPEAKING) mutableLevel.value = 0f
+    }
+
+    // Audio-thread callback from capture and playback.
+    private fun onAudioLevel(source: VoiceLevelSource, value: Float) {
+        val current = state.value
+        if (!current.active || current.phase == VoicePhase.STOPPING) return
+        when (source) {
+            VoiceLevelSource.INPUT -> if (current.phase != VoicePhase.SPEAKING) {
+                mutableLevel.value = if (mutableMuted.value) 0f else value
+            }
+            VoiceLevelSource.OUTPUT -> {
+                // Over WebRTC Codex's audio arrives on the media track, so its
+                // playback level also marks Codex as speaking.
+                val threadId = current.threadId ?: return
+                if (value >= OUTPUT_SPEECH_LEVEL) heardCodex(threadId)
+                if (state.value.phase == VoicePhase.SPEAKING) mutableLevel.value = value
+            }
+        }
+    }
+
+    /** Codex audio just arrived: show Codex as speaking until it has been quiet for [SPEAKING_IDLE_MS]. */
+    private fun heardCodex(threadId: String) {
+        lastCodexAudioAt = System.nanoTime()
+        mutableState.update { current ->
+            if (current.threadId == threadId && current.active && current.phase != VoicePhase.STOPPING) {
+                VoiceState(VoicePhase.SPEAKING, "Codex is speaking", threadId)
+            } else {
+                current
+            }
+        }
+        if (speakingResetJob?.isActive == true) return
+        speakingResetJob = scope.launch {
+            while (true) {
+                val quietMs = (System.nanoTime() - lastCodexAudioAt) / 1_000_000L
+                if (quietMs >= SPEAKING_IDLE_MS) break
+                delay(SPEAKING_IDLE_MS - quietMs)
+            }
+            mutableState.update { current ->
+                if (current.threadId == threadId && current.phase == VoicePhase.SPEAKING) {
+                    VoiceState(VoicePhase.LISTENING, "Listening", threadId)
+                } else {
+                    current
+                }
+            }
+        }
+    }
+
     private suspend fun handleEvent(event: VoiceEvent) {
         when (event) {
             is VoiceEvent.Started -> if (event.threadId == activeThreadId) {
@@ -249,15 +320,8 @@ class AndroidRealtimeVoiceController(
                 sdpSignal?.complete(event.sdp)
             }
             is VoiceEvent.OutputAudio -> if (event.threadId == activeThreadId) {
-                mutableState.value = VoiceState(VoicePhase.SPEAKING, "Codex is speaking", event.threadId)
+                heardCodex(event.threadId)
                 if (activeTransport == RealtimeTransport.WEBSOCKET) outputFrames?.trySend(event.audio)
-                speakingResetJob?.cancel()
-                speakingResetJob = scope.launch {
-                    delay(SPEAKING_IDLE_MS)
-                    if (activeThreadId == event.threadId && state.value.phase == VoicePhase.SPEAKING) {
-                        mutableState.value = VoiceState(VoicePhase.LISTENING, "Listening", event.threadId)
-                    }
-                }
             }
             is VoiceEvent.Failure -> activeThreadId?.takeIf { event.threadId == null || it == event.threadId }?.let { threadId ->
                 startedSignal?.completeExceptionally(IllegalStateException(event.message))
@@ -299,6 +363,9 @@ class AndroidRealtimeVoiceController(
             while (record.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
                 val count = record.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
                 if (count > 0) {
+                    // Muted: send silence rather than nothing, so the stream keeps its timing.
+                    if (mutableMuted.value) buffer.fill(0, 0, count)
+                    onAudioLevel(VoiceLevelSource.INPUT, VoiceLevelMeter.level(buffer, count))
                     outgoing.trySend(
                         RealtimeAudioChunk(
                             data = buffer.copyOf(count),
@@ -318,6 +385,7 @@ class AndroidRealtimeVoiceController(
 
     private fun play(chunk: RealtimeAudioChunk) {
         if (chunk.data.isEmpty()) return
+        onAudioLevel(VoiceLevelSource.OUTPUT, VoiceLevelMeter.level(chunk.data))
         val channels = chunk.numChannels.coerceIn(1, 2)
         val format = chunk.sampleRate to channels
         if (player == null || playerFormat != format) {
@@ -453,8 +521,11 @@ class AndroidRealtimeVoiceController(
         gainControl = null
         recorder?.release()
         recorder = null
+        webRtcSession?.setLevelListener(null)
         webRtcSession?.close()
         webRtcSession = null
+        mutableLevel.value = 0f
+        mutableMuted.value = false
         sdpSignal?.cancel()
         sdpSignal = null
         player?.runCatching { stop() }
@@ -479,6 +550,9 @@ class AndroidRealtimeVoiceController(
         const val FRAME_BYTES = SAMPLES_PER_FRAME * CHANNELS * BYTES_PER_SAMPLE
         private const val FRAME_QUEUE_CAPACITY = 12
         private const val SPEAKING_IDLE_MS = 280L
+
+        // Playback louder than this is Codex talking rather than line noise.
+        private const val OUTPUT_SPEECH_LEVEL = 0.12f
         private const val VOICE_START_TIMEOUT_MS = 30_000L
 
         internal fun samplesPerChannel(byteCount: Int, channels: Int): Int =

@@ -438,6 +438,24 @@ class AndroidDeviceTools(
 
     private suspend fun screenshot(arguments: JsonObject): ToolResult {
         val timeout = arguments.timeoutMsOrDefault().coerceIn(1L, MAX_TIMEOUT_MS)
+        // screencap photographs every window, ours included. The coordinator
+        // only steps the card aside when this backend is asked first, not after
+        // a fall-through from accessibility, so step it aside here as well.
+        observationVisibility(true)
+        val png = try {
+            screencapPng(timeout)
+        } finally {
+            withContext(NonCancellable) { observationVisibility(false) }
+        }
+        val encoded = Base64.getEncoder().encodeToString(png)
+        checkActive()
+        val image = File(checkNotNull(workspace), "screenshots/${java.util.UUID.randomUUID()}.png")
+        image.parentFile!!.mkdirs()
+        image.writeBytes(png)
+        return ToolResult("Screenshot captured (${png.size} bytes, PNG)", imageBase64 = encoded, attachmentPaths = listOf(image.absolutePath))
+    }
+
+    private suspend fun screencapPng(timeout: Long): ByteArray {
         val bytes = runCatching { userExecuteBytes("screencap -p", timeout) }.getOrNull()
         val png = if (bytes != null && isPng(bytes)) {
             bytes
@@ -457,12 +475,7 @@ class AndroidDeviceTools(
             }
         }
         check(png.size <= MAX_SCREENSHOT_BYTES) { "Screenshot exceeds size limit" }
-        val encoded = Base64.getEncoder().encodeToString(png)
-        checkActive()
-        val image = File(checkNotNull(workspace), "screenshots/${java.util.UUID.randomUUID()}.png")
-        image.parentFile!!.mkdirs()
-        image.writeBytes(png)
-        return ToolResult("Screenshot captured (${png.size} bytes, PNG)", imageBase64 = encoded, attachmentPaths = listOf(image.absolutePath))
+        return png
     }
 
     private suspend fun tap(arguments: JsonObject): ToolResult {

@@ -231,6 +231,28 @@ class AgentCoordinatorTest {
         rig.close()
     }
 
+    @Test fun aMessageSentAfterAStopRunsWhileHeldWorkWaits() = runTest {
+        val rig = Rig(this)
+        val queue = SessionRunQueue(rig.scope, rig.coordinator, rig.store)
+        runCurrent()
+        queue.submit(QueuedTurn(sessionId = "one", prompt = "First"))
+        runCurrent()
+        queue.submit(QueuedTurn(sessionId = "two", prompt = "Held"))
+        queue.pause()
+        rig.coordinator.stop()
+        runCurrent()
+        assertEquals(1, rig.engine.turns)
+
+        // Typed after the stop: it runs even though the queue is still paused.
+        queue.submit(QueuedTurn(sessionId = "one", prompt = "Follow-up"))
+        runCurrent()
+        assertEquals(2, rig.engine.turns)
+        assertEquals("one", rig.coordinator.state.value.sessionId)
+        assertTrue(queue.paused.value)
+        assertEquals(listOf("Held"), queue.turns.value.map { it.prompt })
+        rig.close()
+    }
+
     @Test fun theGatewayDecidesWhichToolsTakeTheOverlayOffTheCapturedSurface() = runTest {
         val rig = Rig(this)
         rig.coordinator.send("one", "Read the screen")

@@ -684,7 +684,6 @@ class AgentCoordinator(
                         if (!isCurrentTurn(token, event.threadId.orEmpty(), event.turnId.orEmpty())) return@withLock
                         val visible = tools.needsControl(event.name)
                         val capture = tools.hidesOverlayDuringCapture(event.name)
-                        val status = event.name.replace('_', ' ')
                         // act_and_observe wraps the real action, so report that
                         // instead: callers care that a tap is happening, not
                         // which envelope carried it.
@@ -694,6 +693,7 @@ class AgentCoordinator(
                         } else {
                             event.name
                         }
+                        val status = toolName.replace('_', ' ')
                         val overlayState = if (visible) {
                             OverlayState(OverlayPhase.CONTROLLING, status)
                         } else {

@@ -49,7 +49,11 @@ class MainActivity : ComponentActivity() {
             DisposableEffect(Unit) {
                 onDispose { window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
             }
-            AndroidAgentScreen(state, actions())
+            // Handed down as a reader so the sphere redraws on every level
+            // change without recomposing the screen.
+            val voiceLevel = model.graph.voice.level.collectAsStateWithLifecycle()
+            val readVoiceLevel = remember(voiceLevel) { { voiceLevel.value } }
+            AndroidAgentScreen(state, actions(), voiceLevel = readVoiceLevel)
         }
         ensureService()
         model.prepare()
@@ -84,6 +88,7 @@ class MainActivity : ComponentActivity() {
         onCancelQueued = model::cancelQueued,
         onResumeQueue = { model.resumeQueue() },
         onVoiceToggle = ::toggleVoice,
+        onVoiceMuteToggle = model::toggleVoiceMute,
         onOpenSettings = { model.editUi { it.copy(isSettingsOpen = true) } },
         onCloseSettings = { model.editUi { it.copy(isSettingsOpen = false) } },
         onPrepareRuntime = { ensureService(); model.prepare() },

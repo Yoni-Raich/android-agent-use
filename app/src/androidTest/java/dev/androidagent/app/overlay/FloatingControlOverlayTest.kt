@@ -42,30 +42,35 @@ class FloatingControlOverlayTest {
         try {
             runBlocking { overlay.show("Thinking") }
             waitForIdle(instrumentation)
+            // A run starts as the pill: what is happening, and Stop.
             assertTrue(device.hasObject(By.desc("Stop run")))
-            assertTrue(device.hasObject(By.text("Thinking")))
+            assertTrue(device.hasObject(By.text("Working")))
+            assertFalse(device.hasObject(By.desc("Send message")))
+            val target = (48 * targetContext.resources.displayMetrics.density).toInt()
+            val pill = device.findObject(By.descStartsWith("Expand agent controls"))
+            assertTrue("Pill touch target", pill.visibleBounds.height() >= target)
+            saveScreenshot(device, targetContext, "overlay-pill")
 
-            // Catch the old crowded layout: controls must remain usable and
-            // the composer must sit below the header, within the screen.
+            pill.click()
+            SystemClock.sleep(450L)
+            waitForIdle(instrumentation)
+
+            // Catch a crowded card: controls must remain usable and the
+            // steer field must sit below the pill row, within the screen.
             val stop = device.findObject(By.desc("Stop run")).visibleBounds
             val send = device.findObject(By.desc("Send message")).visibleBounds
             val input = device.findObject(By.desc("Steer or reply")).visibleBounds
-            val target = (48 * targetContext.resources.displayMetrics.density).toInt()
             assertTrue("Stop touch target", stop.width() >= target && stop.height() >= target)
             assertTrue("Send touch target", send.width() >= target && send.height() >= target)
-            assertTrue("Composer below header", input.top >= stop.bottom)
-            assertTrue("Composer has space", input.width() >= target * 3)
+            assertTrue("Steer field below the pill row", input.top >= stop.bottom)
+            assertTrue("Steer field has space", input.width() >= target * 3)
             assertTrue("Send stays on screen", send.right <= device.displayWidth)
+            saveScreenshot(device, targetContext, "overlay-card")
 
-            saveScreenshot(device, targetContext, "overlay-glass-pill-visible")
-            device.findObject(By.desc("Minimize agent controls")).click()
+            device.findObject(By.desc("Collapse agent controls")).click()
+            SystemClock.sleep(450L)
             waitForIdle(instrumentation)
-            assertFalse(device.hasObject(By.desc("Stop run")))
-            val bubble = device.findObject(By.descStartsWith("Expand agent controls"))
-            assertTrue(bubble.visibleBounds.width() >= target)
-            saveScreenshot(device, targetContext, "overlay-bubble")
-            bubble.click()
-            waitForIdle(instrumentation)
+            assertFalse(device.hasObject(By.desc("Send message")))
             assertTrue(device.hasObject(By.desc("Stop run")))
 
             overlay.setAppForeground(true)

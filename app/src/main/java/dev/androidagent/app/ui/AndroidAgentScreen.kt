@@ -51,7 +51,10 @@ import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PictureInPictureAlt
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.outlined.Stop
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -127,8 +130,8 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 /** Disabled fill and ink for the composer's circular buttons. */
-private val DisabledFill = Color(0xFF444444)
-private val DisabledInk = Color(0xFF999999)
+internal val DisabledFill = Color(0xFF444444)
+internal val DisabledInk = Color(0xFF999999)
 
 /** Longest approval payload shown before it is folded behind "Show all". */
 private const val APPROVAL_DETAIL_LIMIT = 600
@@ -177,6 +180,9 @@ fun AndroidAgentTheme(content: @Composable () -> Unit) {
 fun AndroidAgentScreen(
     state: AgentUiState,
     actions: AgentUiActions,
+    // Read once per frame by the voice-mode sphere. A reader rather than a
+    // field of [state], so a level change never recomposes the screen.
+    voiceLevel: () -> Float = { 0f },
 ) {
     AndroidAgentTheme {
         val drawerState = rememberDrawerState(
@@ -192,8 +198,11 @@ fun AndroidAgentScreen(
                 .collectLatest { actions.onDrawerChanged(it == DrawerValue.Open) }
         }
 
+        val voiceMode = rememberVoiceModeMotion(voiceModeShown(state.voiceState))
+
         ModalNavigationDrawer(
             drawerState = drawerState,
+            gesturesEnabled = !voiceMode.shown,
             drawerContent = {
                 ModalDrawerSheet(
                     modifier = Modifier
@@ -218,26 +227,36 @@ fun AndroidAgentScreen(
                 actions.onDismissInfo()
             }
             Scaffold(
-                modifier = Modifier.fillMaxSize().imePadding(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .imePadding()
+                    // The chat stays composed under voice mode; keep it out
+                    // of touch exploration while it is off screen.
+                    .then(if (voiceMode.shown) Modifier.clearAndSetSemantics { } else Modifier),
                 contentWindowInsets = WindowInsets.safeDrawing,
                 containerColor = MaterialTheme.colorScheme.background,
                 snackbarHost = { SnackbarHost(snackbars) },
                 topBar = {
-                    AgentTopBar(
-                        state = state,
-                        onOpenDrawer = { scope.launch { drawerState.open() } },
-                        onOpenSettings = actions.onOpenSettings,
-                        onOpenWirelessSettings = actions.onOpenWirelessSettings,
-                        onOpenFiles = actions.onOpenWorkspaceFiles,
-                        onNewChat = actions.onNewChat,
-                        onRefreshUsage = actions.onRefreshAccount,
-                    )
+                    Box(Modifier.voiceStage(voiceMode.topBar, lift = (-8).dp)) {
+                        AgentTopBar(
+                            state = state,
+                            onOpenDrawer = { scope.launch { drawerState.open() } },
+                            onOpenSettings = actions.onOpenSettings,
+                            onOpenWirelessSettings = actions.onOpenWirelessSettings,
+                            onOpenFiles = actions.onOpenWorkspaceFiles,
+                            onNewChat = actions.onNewChat,
+                            onRefreshUsage = actions.onRefreshAccount,
+                        )
+                    }
                 },
                 bottomBar = {
-                    AgentComposer(
-                        state = state,
-                        actions = actions,
-                    )
+                    Box(Modifier.voiceStage(voiceMode.composer, lift = 56.dp)) {
+                        AgentComposer(
+                            state = state,
+                            actions = actions,
+                            onVoiceButtonPlaced = { voiceMode.dock.value = it },
+                        )
+                    }
                 },
             ) { padding ->
                 AgentChatContent(
@@ -245,9 +264,11 @@ fun AndroidAgentScreen(
                     actions = actions,
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(padding),
+                        .padding(padding)
+                        .voiceStage(voiceMode.chat, lift = (-32).dp, scaleFrom = 0.97f, blur = 10.dp),
                 )
             }
+            VoiceModeLayer(motion = voiceMode, state = state, actions = actions, voiceLevel = voiceLevel)
         }
 
         if (state.isSettingsOpen) {
@@ -727,7 +748,14 @@ private fun AgentChatContent(
                 EmptyChatCard(hasSession = state.activeSessionId != null)
             }
         } else {
-            items(state.messages, key = { it.id }) { message -> MessageBubble(message) }
+            // Back-to-back device actions fold into one row.
+            val running = state.runState.active && state.runState.sessionId == state.activeSessionId
+            items(chatRows(state.messages, running), key = { it.key }) { row ->
+                when (row) {
+                    is MessageRow -> MessageBubble(row.message)
+                    is ActionsRow -> DeviceActionsRow(row)
+                }
+            }
         }
 
         if (state.workspaceFiles.isNotEmpty()) {
@@ -855,7 +883,7 @@ private fun MessageBubble(message: ChatMessage) {
                 }
                 if (message.text.isNotBlank()) {
                     if (user) {
-                        SelectionContainer { Text(message.text, modifier = Modifier.fillMaxWidth(), color = textColor, style = MaterialTheme.typography.bodyLarge) }
+                        SelectionContainer { Text(withRtlLines(message.text), modifier = Modifier.fillMaxWidth(), color = textColor, style = MaterialTheme.typography.bodyLarge) }
                     } else {
                         MarkdownMessage(message.text, textColor)
                         val clipboard = LocalClipboardManager.current
@@ -875,7 +903,7 @@ private fun MessageBubble(message: ChatMessage) {
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        AgentPulse(modifier = Modifier.size(34.dp))
+                        AgentOrb(modifier = Modifier.size(28.dp))
                         Text("Working…", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 } else {
@@ -895,18 +923,6 @@ private fun MessageBubble(message: ChatMessage) {
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun RunCard(runState: dev.androidagent.core.RunState) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        AgentPulse(Modifier.size(28.dp), phase = runState.phase, controlling = runState.controlling, tool = runState.tool)
-        Text(if (runState.controlling) "Controlling device" else readableRunPhase(runState.phase),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.bodyMedium)
     }
 }
 
@@ -1154,299 +1170,7 @@ private fun UpdateBanner(
     }
 }
 
-@Composable
-private fun AgentComposer(state: AgentUiState, actions: AgentUiActions) {
-    var draft by rememberSaveable(state.activeSessionId) { mutableStateOf("") }
-    var modelMenu by remember { mutableStateOf(false) }
-    var reasoningMenu by remember { mutableStateOf(false) }
-    val voiceActive = state.voiceState.active
-    val active = state.runState.active && state.runState.sessionId == state.activeSessionId && !voiceActive
-    val stopping = state.runState.phase == RunPhase.STOPPING && !voiceActive
-    val voiceStopping = state.voiceState.phase == dev.androidagent.core.VoicePhase.STOPPING
-    val voiceBusy = state.voiceState.phase in setOf(
-        dev.androidagent.core.VoicePhase.STARTING,
-        dev.androidagent.core.VoicePhase.STOPPING,
-    )
-    val canSend = state.activeSessionId != null && draft.isNotBlank() && !state.isLoadingMessages && !stopping && !voiceStopping
-    val selectedModel = state.modelCatalog.firstOrNull { it.id == state.selectedModel }
-    val reasoningOptions = selectedModel?.reasoningEfforts.orEmpty()
-    val showSkillSuggestions = draft.startsWith("\$") && !draft.contains(" ") && !draft.contains("\n")
-    val skillQuery = if (showSkillSuggestions) draft.removePrefix("\$").trim() else ""
-    val matchingSkills = remember(showSkillSuggestions, skillQuery, state.availableSkills) {
-        if (!showSkillSuggestions) {
-            emptyList()
-        } else if (skillQuery.isEmpty()) {
-            state.availableSkills
-        } else {
-            state.availableSkills.filter {
-                it.name.contains(skillQuery, ignoreCase = true) ||
-                    it.description.contains(skillQuery, ignoreCase = true)
-            }
-        }
-    }
-    Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background)
-        .navigationBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp)) {
-        if (state.runState.active) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.weight(1f)) { RunCard(state.runState) }
-                if (!active && !voiceActive) TextButton(onClick = actions.onStop) { Text("Stop active task") }
-            }
-        }
-        if (state.queuedTurns.isNotEmpty()) {
-            Column(Modifier.fillMaxWidth().heightIn(max = 144.dp).verticalScroll(rememberScrollState())) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("${state.queuedTurns.size} queued${if (state.queuePaused) " · paused" else ""}", Modifier.weight(1f))
-                    if (state.queuePaused) TextButton(onClick = actions.onResumeQueue) { Text("Resume queue") }
-                }
-                state.queuedTurns.forEach { queued ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(queued.prompt, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        TextButton(onClick = { actions.onCancelQueued(queued.id) }) { Text("Cancel task") }
-                    }
-                }
-            }
-        }
-        if (voiceActive) {
-            Button(onClick = actions.onStop, enabled = !voiceStopping, modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.errorContainer, contentColor = MaterialTheme.colorScheme.onErrorContainer)) {
-                Icon(Icons.Outlined.Stop, null); Spacer(Modifier.width(8.dp)); Text("Stop voice")
-            }
-        }
-        if (matchingSkills.isNotEmpty()) {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 8.dp),
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.surface,
-                border = BorderStroke(1.dp, Color(0xFF383838)),
-                shadowElevation = 6.dp,
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp),
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = "Codex Skills",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Spacer(Modifier.weight(1f))
-                        Text(
-                            text = "${matchingSkills.size} available",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    HorizontalDivider(color = Color(0xFF333333), thickness = 0.5.dp)
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 220.dp),
-                    ) {
-                        items(matchingSkills, key = { it.path }) { skill ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        draft = "\$${skill.name} "
-                                    }
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Surface(
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = Color(0xFF282828),
-                                    border = BorderStroke(0.5.dp, Color(0xFF444444)),
-                                ) {
-                                    Text(
-                                        text = "\$${skill.name}",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color(0xFF83D9CA),
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                    )
-                                }
-                                Spacer(Modifier.width(10.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = skill.name,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Medium,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                    )
-                                    Text(
-                                        text = skill.description,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        Surface(shape = RoundedCornerShape(28.dp), color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(1.dp, Color(0xFF383838))) {
-            Column(Modifier.padding(6.dp)) {
-                if (state.attachments.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    items(state.attachments, key = { it.id }) { attachment ->
-                        AssistChip(onClick = { actions.onRemoveAttachment(attachment.id) },
-                            label = { Text(attachment.name, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.widthIn(max = 180.dp)) },
-                            trailingIcon = { Icon(Icons.Outlined.Close, "Remove ${attachment.name}", Modifier.size(16.dp)) })
-                    }
-                }
-                TextField(value = draft, onValueChange = { draft = it },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp, max = 160.dp)
-                        .semantics { contentDescription = "Message input" },
-                    enabled = state.activeSessionId != null,
-                    placeholder = { Text(if (active) "Add an instruction…" else "Message Android Agent") },
-                    textStyle = MaterialTheme.typography.bodyLarge,
-                    maxLines = 6, keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
-                    colors = TextFieldDefaults.colors(focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = Color.Transparent, disabledContainerColor = Color.Transparent,
-                        focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent,
-                        disabledIndicatorColor = Color.Transparent))
-                // Attach + both pickers + three circular buttons have to fit a
-                // 360 dp screen, so the pickers are capped and ellipsise.
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = actions.onAttach, enabled = !active && !voiceActive && state.activeSessionId != null) {
-                        Icon(Icons.Outlined.Add, "Attach file")
-                    }
-                    Spacer(Modifier.weight(1f))
-                    Box {
-                        TextButton(onClick = { if (state.availableModels.isEmpty()) actions.onOpenSettings() else modelMenu = true },
-                            enabled = !active && !voiceActive, modifier = Modifier.widthIn(max = 120.dp)) {
-                            Text(state.selectedModel?.removePrefix("gpt-") ?: "Choose model",
-                                maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                style = MaterialTheme.typography.labelMedium)
-                            Icon(Icons.Outlined.ExpandMore, null, Modifier.size(16.dp))
-                        }
-                        DropdownMenu(expanded = modelMenu, onDismissRequest = { modelMenu = false }) {
-                            state.availableModels.forEach { model ->
-                                DropdownMenuItem(text = { Text(model) }, onClick = {
-                                    actions.onModelSelected(model); modelMenu = false
-                                })
-                            }
-                        }
-                    }
-                    Box {
-                        TextButton(
-                            onClick = { reasoningMenu = true },
-                            enabled = !active && !voiceActive && reasoningOptions.isNotEmpty(),
-                            modifier = Modifier
-                                .widthIn(max = 96.dp)
-                                .semantics { contentDescription = "Choose reasoning effort" },
-                        ) {
-                            Text(
-                                state.selectedReasoningEffort ?: "Default",
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                style = MaterialTheme.typography.labelMedium,
-                            )
-                            Icon(Icons.Outlined.ExpandMore, null, Modifier.size(16.dp))
-                        }
-                        DropdownMenu(expanded = reasoningMenu, onDismissRequest = { reasoningMenu = false }) {
-                            DropdownMenuItem(
-                                text = { Text("Default") },
-                                trailingIcon = if (state.selectedReasoningEffort == null) ({ Icon(Icons.Outlined.Check, contentDescription = null) }) else null,
-                                onClick = {
-                                    reasoningMenu = false
-                                    actions.onReasoningEffortSelected(null)
-                                },
-                            )
-                            reasoningOptions.forEach { option ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Column {
-                                            Text(option.value)
-                                            if (option.description.isNotBlank()) {
-                                                Text(option.description, style = MaterialTheme.typography.labelSmall)
-                                            }
-                                        }
-                                    },
-                                    trailingIcon = if (option.value == state.selectedReasoningEffort) ({ Icon(Icons.Outlined.Check, contentDescription = null) }) else null,
-                                    onClick = {
-                                        reasoningMenu = false
-                                        actions.onReasoningEffortSelected(option.value)
-                                    },
-                                )
-                            }
-                        }
-                    }
-                    // Stop is always reachable, including while a steering draft is typed.
-                    if (active) IconButton(onClick = actions.onStop, enabled = !stopping,
-                        modifier = Modifier.size(48.dp).padding(3.dp)
-                            .background(if (stopping) DisabledFill else Color.White, CircleShape)) {
-                        Icon(Icons.Default.Stop, "Stop agent", tint = if (stopping) DisabledInk else Color.Black)
-                    }
-                    if (!active || draft.isNotBlank()) IconButton(onClick = {
-                        val text = draft.trim()
-                        if (text.isNotEmpty()) {
-                            if (active) actions.onSteer(text) else actions.onSend(text, state.attachments)
-                            draft = ""
-                        }
-                    }, enabled = canSend, modifier = Modifier.size(48.dp).padding(3.dp)
-                        .background(if (canSend) Color.White else DisabledFill, CircleShape)) {
-                        Icon(Icons.Default.ArrowUpward, if (active) "Steer agent" else "Send message",
-                            tint = if (canSend) Color.Black else DisabledInk)
-                    }
-                    if (!state.runState.active || voiceActive) IconButton(
-                        onClick = actions.onVoiceToggle,
-                        enabled = state.activeSessionId != null && !state.isLoadingMessages && !voiceStopping,
-                        modifier = Modifier.size(48.dp).padding(3.dp)
-                            .background(Color(0xFF2F80ED), CircleShape)
-                            .semantics {
-                                contentDescription = if (voiceActive) "End voice conversation" else "Start voice conversation"
-                            },
-                    ) {
-                        if (voiceBusy) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(22.dp),
-                                color = Color.White,
-                                strokeWidth = 2.dp,
-                            )
-                        } else {
-                            Icon(Icons.Default.GraphicEq, null, tint = Color.White)
-                        }
-                    }
-                }
-            }
-        }
-        when {
-            voiceActive || voiceBusy -> {
-                val transcript = state.voiceTranscript.trim()
-                Text(
-                    if (transcript.isNotEmpty()) {
-                        val speaker = if (state.voiceTranscriptRole.equals("assistant", ignoreCase = true)) "Codex" else "You"
-                        "$speaker · $transcript"
-                    } else "Voice · ${state.voiceState.message}",
-                    Modifier.padding(start = 12.dp, top = 6.dp),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (state.voiceState.phase == dev.androidagent.core.VoicePhase.SPEAKING) Color(0xFF69A7FF)
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            active -> Text(if (stopping) "Stopping… your draft is kept" else "Working · you can add instructions or stop", Modifier.padding(start = 12.dp, top = 6.dp),
-                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-private fun readableRunPhase(phase: RunPhase): String = when (phase) {
+internal fun readableRunPhase(phase: RunPhase): String = when (phase) {
     RunPhase.IDLE -> "Ready"
     RunPhase.STARTING -> "Starting"
     RunPhase.THINKING -> "Working"

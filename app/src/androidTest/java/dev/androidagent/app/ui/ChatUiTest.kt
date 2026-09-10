@@ -71,9 +71,22 @@ class ChatUiTest {
     @Test fun dedicatedVoiceStopIsVisibleAndDispatchesLocalStop() {
         var stopped = 0
         compose.setContent { AndroidAgentScreen(fixture.copy(voiceState = VoiceState(VoicePhase.SPEAKING, "Speaking", "voice")), AgentUiActions(onStop = { stopped++ })) }
-        compose.onNodeWithText("Stop voice").assertIsDisplayed().performClick()
+        compose.onNodeWithText("End voice").assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals(1, stopped) }
         screenshot("voice-stop")
+    }
+
+    @Test fun voiceModeMuteTogglesAndShowsMicrophoneOff() {
+        var toggles = 0
+        val listening = fixture.copy(voiceState = VoiceState(VoicePhase.LISTENING, "Listening", "voice"))
+        compose.setContent { AndroidAgentScreen(listening, AgentUiActions(onVoiceMuteToggle = { toggles++ })) }
+        compose.onNodeWithContentDescription("Mute microphone").assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals(1, toggles) }
+
+        compose.setContent { AndroidAgentScreen(listening.copy(voiceMuted = true), AgentUiActions()) }
+        compose.onNodeWithContentDescription("Unmute microphone").assertIsDisplayed()
+        compose.onNodeWithText("Microphone off").assertIsDisplayed()
+        screenshot("voice-muted")
     }
 
     @Test fun workStatusStaysOutsideTheScrollingConversation() {
@@ -129,7 +142,8 @@ class ChatUiTest {
         var sent = ""
         compose.setContent { AndroidAgentScreen(fixture, AgentUiActions(onSend = { text, _ -> sent = text })) }
         compose.onNodeWithText("עזור לי לתכנן את היום שלי").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Send message").assertIsNotEnabled()
+        // An empty draft offers voice rather than a disabled send.
+        compose.onNodeWithContentDescription("Send message").assertDoesNotExist()
         screenshot("chat-hebrew")
         compose.onNodeWithContentDescription("Message input").performClick().performTextInput("נכין רשימה")
         compose.onNodeWithContentDescription("Send message").performClick()
@@ -167,7 +181,7 @@ class ChatUiTest {
                 AgentUiActions(onReasoningEffortSelected = { selected = it }),
             )
         }
-        compose.onNodeWithContentDescription("Choose reasoning effort").performClick()
+        compose.onNodeWithContentDescription("Choose model and reasoning").performClick()
         compose.onNodeWithText("high").performClick()
         compose.runOnIdle { assertEquals("high", selected) }
     }
@@ -204,7 +218,21 @@ class ChatUiTest {
             )
         }
         compose.onNodeWithContentDescription("End voice conversation").assertIsDisplayed()
-        compose.onNodeWithText("Voice · Listening").assertIsDisplayed()
+        compose.onNodeWithText("Listening").assertIsDisplayed()
+    }
+
+    @Test fun deviceActionsFoldIntoOneRowThatOpens() {
+        compose.setContent { AndroidAgentScreen(fixture.copy(messages = listOf(
+            ChatMessage("u", "ui-fixture", "user", "פתח את וואטסאפ", 1),
+            ChatMessage("t1", "ui-fixture", "tool", "open_app: ok", 2),
+            ChatMessage("t2", "ui-fixture", "tool", "read_ui: {}", 3),
+            ChatMessage("t3", "ui-fixture", "tool", "tap: ok", 4),
+        )), AgentUiActions()) }
+        compose.onNodeWithText("3 actions on your phone").assertIsDisplayed()
+        compose.onNodeWithText("Read the screen").assertDoesNotExist()
+        compose.onNodeWithText("3 actions on your phone").performClick()
+        compose.onNodeWithText("Read the screen").assertIsDisplayed()
+        screenshot("chat-device-actions")
     }
 
     @Test fun adbStatusIsVisibleAndOpensWirelessSettings() {
