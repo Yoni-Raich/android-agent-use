@@ -22,7 +22,14 @@ data class QueuedTurn(
     val skill: AgentSkill? = null,
 )
 
-/** FIFO sessions share one device owner. Restored work requires explicit Resume. */
+/**
+ * FIFO sessions share one device owner. Restored work requires explicit Resume.
+ *
+ * Pausing (Stop, voice) holds the work that was already waiting. A message the
+ * user submits afterwards is a request to run now, so it runs as soon as the
+ * device is free even while the queue is paused; the held work still waits
+ * for Resume.
+ */
 class SessionRunQueue(
     private val scope: CoroutineScope,
     private val coordinator: AgentCoordinator,
@@ -33,6 +40,10 @@ class SessionRunQueue(
     val turns = pending.asStateFlow()
     private val pausedState = MutableStateFlow(false)
     val paused = pausedState.asStateFlow()
+
+    // Turns submitted since the last pause, which that pause does not hold
+    // back. Not persisted: after a restart everything waits for Resume again.
+    private val submittedNow: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
     private val loaded = scope.launch {
         lock.withLock {
             pending.value = store.loadQueuedTurns()
@@ -59,12 +70,17 @@ class SessionRunQueue(
                 return
             }
             check(pending.value.size < 32) { "The queue is full. Cancel a queued task first." }
+            submittedNow += request.id
             save(pending.value + request)
         }
         dispatch()
     }
 
-    fun pause() { pausedState.value = true }
+    /** Hold everything waiting now; only turns submitted after this may start until [resume]. */
+    fun pause() {
+        submittedNow.clear()
+        pausedState.value = true
+    }
     suspend fun resume() { loaded.join(); pausedState.value = false; dispatch() }
     suspend fun cancel(id: String) { loaded.join(); lock.withLock { save(pending.value.filterNot { it.id == id }) } }
     suspend fun cancelSession(id: String) { loaded.join(); lock.withLock { save(pending.value.filterNot { it.sessionId == id }) } }
@@ -72,10 +88,16 @@ class SessionRunQueue(
     private suspend fun save(value: List<QueuedTurn>) { store.saveQueuedTurns(value); pending.value = value }
 
     private suspend fun dispatch() = lock.withLock {
-        if (pausedState.value || !coordinator.available.value || coordinator.state.value.active) return@withLock
-        val next = pending.value.firstOrNull() ?: return@withLock
+        if (!coordinator.available.value || coordinator.state.value.active) return@withLock
+        // While paused, only turns submitted since the pause may start.
+        val next = if (pausedState.value) {
+            pending.value.firstOrNull { it.id in submittedNow }
+        } else {
+            pending.value.firstOrNull()
+        } ?: return@withLock
         // Dequeue durably before starting, so a process crash cannot replay side effects.
-        save(pending.value.drop(1))
+        save(pending.value - next)
+        submittedNow -= next.id
         coordinator.send(next.sessionId, next.prompt, next.imagePaths.map(::File), next.model, next.effort, next.skill)
     }
 }
