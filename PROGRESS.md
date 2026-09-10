@@ -1,12 +1,20 @@
 # Progress
 
-## Status — 2026-09-10
+## Status — 2026-09-11
 
 Android Agent is a Developer Preview. It is useful for local testing, but it is
 not production-ready.
 
 ### Verified
 
+- The public v0.7.0 dev APK was built from `main` with the release version on
+  2026-09-11. The full Gradle gate (539 JVM tests, no failures), runtime
+  staging tests and `git diff --check` passed. `aapt2` reports
+  `dev.androidagent.app.dev` versionCode 19 versionName 0.7.0 for ARM64 and
+  x86_64; zip alignment and APK Signature Scheme v3 verification passed with
+  the local debug key. SHA-256
+  `B5CB6196FFDDC50C8AD33FB2650F60E98EEE9B547DF800C00762A5E5C6089625`. The
+  release APK itself was not installed on a physical phone.
 - Full-screen voice mode, the floating status pill, the new composer, folded
   device actions, per-line right-to-left text, the queue fix after a pause and
   the sphere launcher icon passed the full gate on 2026-09-11:

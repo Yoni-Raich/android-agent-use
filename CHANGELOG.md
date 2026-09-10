@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.7.0 — 2026-09-11
+
 - Voice now has its own full-screen mode instead of a line under the composer.
   Starting voice dissolves the chat, and the voice button lifts off and grows
   into a sphere of points that swells with the live audio level: teal while you
