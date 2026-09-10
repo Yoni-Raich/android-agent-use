@@ -1,6 +1,7 @@
 package dev.androidagent.voice
 
 import android.content.Context
+import android.media.AudioFormat
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeout
 import org.webrtc.AudioTrack
@@ -27,6 +28,10 @@ interface RealtimeMediaSession {
     suspend fun awaitConnected()
     fun startAudio()
     fun stopAudio()
+    /** Silence the microphone without tearing the call down. Applies before and after [startAudio]. */
+    fun setMicrophoneMuted(muted: Boolean)
+    /** Microphone and playback loudness while audio runs; `null` stops reporting. */
+    fun setLevelListener(listener: VoiceLevelListener?)
     fun close()
 }
 
@@ -43,6 +48,10 @@ internal class WebRtcRealtimeAudioSession(context: Context) : RealtimeMediaSessi
     private val iceGathered = CompletableDeferred<Unit>()
     private val connected = CompletableDeferred<Unit>()
 
+    @Volatile private var levelListener: VoiceLevelListener? = null
+    @Volatile private var microphoneMuted = false
+    @Volatile private var audioStarted = false
+
     private val audioDeviceModule: AudioDeviceModule
     private val factory: PeerConnectionFactory
     private val audioSource: org.webrtc.AudioSource
@@ -55,6 +64,8 @@ internal class WebRtcRealtimeAudioSession(context: Context) : RealtimeMediaSessi
         audioDeviceModule = JavaAudioDeviceModule.builder(app)
             .setUseHardwareAcousticEchoCanceler(true)
             .setUseHardwareNoiseSuppressor(true)
+            .setSamplesReadyCallback { samples -> reportLevel(VoiceLevelSource.INPUT, samples) }
+            .setPlaybackSamplesReadyCallback { samples -> reportLevel(VoiceLevelSource.OUTPUT, samples) }
             .createAudioDeviceModule()
         factory = PeerConnectionFactory.builder()
             .setAudioDeviceModule(audioDeviceModule)
@@ -151,20 +162,35 @@ internal class WebRtcRealtimeAudioSession(context: Context) : RealtimeMediaSessi
 
     override fun startAudio() {
         checkOpen()
-        audioDeviceModule.setMicrophoneMute(false)
+        audioStarted = true
+        audioDeviceModule.setMicrophoneMute(microphoneMuted)
         audioDeviceModule.setSpeakerMute(false)
-        localAudioTrack.setEnabled(true)
+        localAudioTrack.setEnabled(!microphoneMuted)
     }
 
     override fun stopAudio() {
         if (closed.get()) return
+        audioStarted = false
         audioDeviceModule.setMicrophoneMute(true)
         audioDeviceModule.setSpeakerMute(true)
         localAudioTrack.setEnabled(false)
     }
 
+    override fun setMicrophoneMuted(muted: Boolean) {
+        microphoneMuted = muted
+        if (closed.get() || !audioStarted) return
+        audioDeviceModule.setMicrophoneMute(muted)
+        localAudioTrack.setEnabled(!muted)
+    }
+
+    override fun setLevelListener(listener: VoiceLevelListener?) {
+        levelListener = listener
+    }
+
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
+        levelListener = null
+        audioStarted = false
         connected.cancel()
         iceGathered.cancel()
         runCatching { audioDeviceModule.setMicrophoneMute(true) }
@@ -177,6 +203,13 @@ internal class WebRtcRealtimeAudioSession(context: Context) : RealtimeMediaSessi
         runCatching { audioSource.dispose() }
         runCatching { audioDeviceModule.release() }
         runCatching { factory.dispose() }
+    }
+
+    // Runs on WebRTC's record and playout threads, every 10 ms while audio runs.
+    private fun reportLevel(source: VoiceLevelSource, samples: JavaAudioDeviceModule.AudioSamples) {
+        val listener = levelListener ?: return
+        if (!audioStarted || samples.audioFormat != AudioFormat.ENCODING_PCM_16BIT) return
+        listener.onLevel(source, VoiceLevelMeter.level(samples.data))
     }
 
     private fun checkOpen() {
