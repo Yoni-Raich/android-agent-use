@@ -76,6 +76,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         viewModelScope.launch { graph.voice.state.collect { state -> mutable.update { it.copy(voiceState = state) } } }
+        viewModelScope.launch { graph.voice.muted.collect { muted -> mutable.update { it.copy(voiceMuted = muted) } } }
         viewModelScope.launch { graph.engine.voiceEvents.collect(::handleVoiceEvent) }
         viewModelScope.launch { graph.engine.events.collect { event ->
             when (event) {
@@ -151,6 +152,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     fun toggleVoice() {
         if (graph.voice.state.value.active) stopVoice() else startVoice()
     }
+    fun toggleVoiceMute() = graph.voice.setMuted(!graph.voice.muted.value)
     private fun startVoice() = task {
         graph.queue.pause()
         check(!graph.coordinator.state.value.active) { "Stop the current agent run before starting voice." }

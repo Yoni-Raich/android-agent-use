@@ -56,14 +56,17 @@ internal fun MarkdownMessage(value: String, textColor: Color) {
                 }
             }).build()
     }
-    val rendered = remember(renderer, value) { renderer.toMarkdown(value) }
+    val rendered = remember(renderer, value) { renderer.toMarkdown(keepListsTogether(value)) }
     AndroidView(
         modifier = Modifier.fillMaxWidth().semantics { text = AnnotatedString(rendered.toString()) },
         factory = { TextView(it).apply {
             textSize = 16f
             setLineSpacing(0f, 1.18f)
             setTextIsSelectable(true)
-            textDirection = View.TEXT_DIRECTION_FIRST_STRONG
+            // Decided per line: any Hebrew or Arabic letter makes the whole
+            // line right-to-left, so "Yoni Raich (את/ה)" no longer flips a
+            // Hebrew list to the left just because it starts with Latin.
+            textDirection = View.TEXT_DIRECTION_ANY_RTL
         } },
         update = { view ->
             view.setTextColor(textColor.toArgb())
