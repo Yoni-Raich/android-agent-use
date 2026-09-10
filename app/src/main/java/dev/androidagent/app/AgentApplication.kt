@@ -79,7 +79,23 @@ class AgentGraph(private val app: Application) {
         get() = runCoordinator
     val queue: SessionRunQueue
     init {
-        runCoordinator = AgentCoordinator(scope, engine, sessions, tools, overlay) { adb.status.value }
+        runCoordinator = AgentCoordinator(
+            scope, engine, sessions, tools, overlay,
+            adbStatus = { adb.status.value },
+            // An approval card lives only in the app, and device control means
+            // the app is not in front. Raising it is what makes the approval
+            // answerable at all.
+            bringToForeground = {
+                runCatching {
+                    app.startActivity(
+                        android.content.Intent(app, MainActivity::class.java).addFlags(
+                            android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+                                android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT,
+                        ),
+                    )
+                }
+            },
+        )
         queue = SessionRunQueue(scope, coordinator, sessions)
         runCatching {
             WorkspaceSeeder.installDefaultSkills(runtime.homeDirectory, app)

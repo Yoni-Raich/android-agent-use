@@ -160,4 +160,81 @@ class IntentPolicyTest {
         val decision = IntentPolicy.evaluate("android.intent.action.SENDTO", "https://example.com/x")
         assertTrue(decision is IntentPolicy.Decision.NeedsConfirmation)
     }
+
+    // ---- prefilled message bodies ----
+
+    @Test fun textIsPercentEncodedIntoTheUriSoASpaceDoesNotTruncateTheMessage() {
+        // A hand-built "?text=on my way" either fails URI parsing or loses
+        // everything after the first separator, which is why the tool composes
+        // it instead of trusting the model to encode.
+        val composed = IntentPolicy.withText("https://wa.me/972500000000", "on my way & almost there")
+        val uri = (composed as IntentPolicy.Decision.Allow).uri
+        assertEquals(
+            "https://wa.me/972500000000?text=on%20my%20way%20%26%20almost%20there",
+            uri,
+        )
+        // And it survives the parse that a raw one would have failed.
+        assertTrue(
+            IntentPolicy.evaluate("android.intent.action.VIEW", uri)
+                is IntentPolicy.Decision.NeedsConfirmation,
+        )
+        assertTrue(
+            IntentPolicy.evaluate("android.intent.action.VIEW", "https://wa.me/972500000000?text=on my way")
+                is IntentPolicy.Decision.Deny,
+        )
+    }
+
+    @Test fun composedTextAlwaysStillNeedsConfirmation() {
+        // Attaching a body must never turn a send into plain navigation.
+        for (base in listOf(
+            "https://wa.me/972500000000",
+            "whatsapp://send?phone=972500000000",
+            "smsto:+972500000000",
+        )) {
+            val uri = (IntentPolicy.withText(base, "hello") as IntentPolicy.Decision.Allow).uri
+            assertTrue(
+                "$base should still need confirmation",
+                IntentPolicy.evaluate("android.intent.action.VIEW", uri)
+                    is IntentPolicy.Decision.NeedsConfirmation,
+            )
+        }
+    }
+
+    @Test fun textJoinsAnExistingQueryWithAnAmpersandNotASecondQuestionMark() {
+        val uri = (IntentPolicy.withText("whatsapp://send?phone=972500000000", "hi") as IntentPolicy.Decision.Allow).uri
+        assertEquals("whatsapp://send?phone=972500000000&text=hi", uri)
+    }
+
+    @Test fun noTextLeavesTheUriExactlyAsItWas() {
+        assertEquals(
+            "https://wa.me/972500000000",
+            (IntentPolicy.withText("https://wa.me/972500000000", null) as IntentPolicy.Decision.Allow).uri,
+        )
+        assertEquals(
+            "https://wa.me/972500000000",
+            (IntentPolicy.withText("https://wa.me/972500000000", "   ") as IntentPolicy.Decision.Allow).uri,
+        )
+    }
+
+    @Test fun textIsRefusedWhenItWouldBeAmbiguousOrUnbounded() {
+        // Two payloads: overwriting one would send something unintended.
+        assertEquals(
+            "text_conflict",
+            (IntentPolicy.withText("https://wa.me/1?text=already", "other") as IntentPolicy.Decision.Deny).reason,
+        )
+        assertEquals(
+            "uri_required",
+            (IntentPolicy.withText(null, "hello") as IntentPolicy.Decision.Deny).reason,
+        )
+        assertEquals(
+            "text_too_long",
+            (IntentPolicy.withText("https://wa.me/1", "x".repeat(IntentPolicy.MAX_TEXT_CHARS + 1))
+                as IntentPolicy.Decision.Deny).reason,
+        )
+        assertEquals(
+            "uri_has_fragment",
+            (IntentPolicy.withText("https://example.com/page#part", "hello") as IntentPolicy.Decision.Deny).reason,
+        )
+    }
+
 }

@@ -56,9 +56,16 @@ internal class IntentTools(
      */
     suspend fun open(arguments: JsonObject): ToolResult {
         val action = arguments.string("action")
-        val uri = arguments.string("uri")
         val pkg = arguments.string("package")
         if (pkg != null) require(PACKAGE_RE.matches(pkg)) { "package is not a valid Android package name" }
+        // A prefilled body is composed into the uri before the policy runs, so
+        // it is checked as the payload it is rather than slipping past as an
+        // argument the policy never sees.
+        val uri = when (val composed = IntentPolicy.withText(arguments.string("uri"), arguments.string("text"))) {
+            is IntentPolicy.Decision.Deny -> return denied(composed)
+            is IntentPolicy.Decision.Allow -> composed.uri
+            is IntentPolicy.Decision.NeedsConfirmation -> composed.uri
+        }
         return when (val decision = IntentPolicy.evaluate(action, uri)) {
             is IntentPolicy.Decision.Deny -> denied(decision)
             is IntentPolicy.Decision.NeedsConfirmation -> authorizeIntent(
@@ -196,13 +203,18 @@ internal class IntentTools(
                 name = "open_intent",
                 description = "Open a destination directly by intent or deep link instead of navigating " +
                     "there through the UI — a maps route, a specific chat, a settings screen. Prefer this " +
-                    "over open_app plus taps when a link reaches the target. Sensitive destinations pause " +
-                    "for an app-owned user approval before launch. Always verify with read_ui that the " +
-                    "expected screen opened.",
+                    "over open_app plus taps when a link reaches the target. Pass a prefilled message body " +
+                    "as text rather than building \"?text=\" into the uri yourself; it is encoded for you, " +
+                    "and an unencoded space or & in a hand-built uri truncates the message or fails to " +
+                    "parse. Anything that sends on the user's behalf — a prefilled message, a payment — " +
+                    "pauses for an approval the user must answer in the Android Agent app, so the call " +
+                    "does not return until they do. Say that you are waiting before you call it. Always " +
+                    "verify with read_ui that the expected screen opened.",
                 properties = mapOf(
                     "action" to "string",
                     "uri" to "string",
                     "package" to "string",
+                    "text" to "string",
                 ),
                 required = emptyList(),
             ),
