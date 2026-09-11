@@ -468,7 +468,7 @@ class AgentCoordinator(
                 // Name where the card is. The floating card is all the user can
                 // see while another app is in front, so "waiting for approval"
                 // on its own tells them nothing they can act on.
-                overlay.updateState(OverlayState(OverlayPhase.RUNNING, "Approve in Android Agent"))
+                overlay.updateState(OverlayState(OverlayPhase.RUNNING, "Approve in Hey Mike"))
             }
         }
         // Outside the lock: this hands control to the host's UI thread.
@@ -495,7 +495,7 @@ class AgentCoordinator(
                 decision == null -> localIntentRejected(
                     "approval_timeout",
                     "Nobody answered the approval within ${LOCAL_APPROVAL_TIMEOUT_MS / 1_000} seconds. " +
-                        "It is shown in the Android Agent app, not on the floating card. Tell the user " +
+                        "It is shown in the Hey Mike app, not on the floating card. Tell the user " +
                         "it is waiting there, then call open_intent again once they have answered.",
                 )
                 decision == false -> localIntentRejected(

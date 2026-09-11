@@ -400,7 +400,7 @@ class AndroidRuntimeHost(private val appContext: Context) : RuntimeHost {
         private const val MAX_PROXY_EVENTS = 64
         private const val REALTIME_FEATURE = "realtime_conversation"
         private const val DEFAULT_CONFIG =
-            "# Managed by Android Agent. Credentials stay in app-private CODEX_HOME.\n" +
+            "# Managed by Hey Mike. Credentials stay in app-private CODEX_HOME.\n" +
                 "# Helper discovery (rg/code-mode-host/zsh) is limited while the\n" +
                 "# upstream package layout cannot be preserved under nativeLibraryDir.\n"
         private val TOML_TABLE = Regex("^\\s*\\[([^]]+)](?:\\s*#.*)?$")

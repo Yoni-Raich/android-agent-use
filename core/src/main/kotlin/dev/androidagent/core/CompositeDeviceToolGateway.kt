@@ -118,7 +118,7 @@ class CompositeDeviceToolGateway(
             elapsedMs = 0,
             errorType = "backend_unavailable",
             message = "No device backend can currently serve \"$name\".",
-            remedy = "Ask the user to enable the Android Agent accessibility service in " +
+            remedy = "Ask the user to enable the Hey Mike accessibility service in " +
                 "Settings > Accessibility, or to connect Wireless Debugging.",
             alternatives = definitions.map { it.name }.filter { it != name && it in READ_ONLY_ALTERNATIVES },
             reasons = reasons,

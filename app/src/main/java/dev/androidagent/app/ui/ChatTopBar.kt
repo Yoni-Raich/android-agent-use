@@ -137,7 +137,7 @@ internal fun ChatTopBar(state: AgentUiState, actions: AgentUiActions, onOpenDraw
             dismissButton = { TextButton(onClick = { confirmNew = false }) { Text("Cancel") } },
         )
     }
-    val title = state.activeSessionTitle?.takeIf { it.isNotBlank() } ?: "Android Agent"
+    val title = state.activeSessionTitle?.takeIf { it.isNotBlank() } ?: "Hey Mike"
     TopAppBar(
         title = {
             Row(

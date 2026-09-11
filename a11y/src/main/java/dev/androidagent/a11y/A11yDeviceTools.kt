@@ -519,8 +519,8 @@ class A11yDeviceTools(
             ?: A11yServiceHandle.await(CONNECT_GRACE_MS)
             ?: throw ToolNotServiceable(
                 "a11y_unavailable",
-                "The Android Agent accessibility service is not running. Ask the user to " +
-                    "enable it in Settings > Accessibility > Android Agent.",
+                "The Hey Mike accessibility service is not running. Ask the user to " +
+                    "enable it in Settings > Accessibility > Hey Mike.",
             )
 
     /**
@@ -533,7 +533,7 @@ class A11yDeviceTools(
         val service = A11yServiceHandle.service.value ?: return
         if (service.ownWindowContains(context.packageName, x, y)) {
             throw IllegalStateException(
-                "($x,$y) is inside Android Agent's own window. Nothing was tapped; " +
+                "($x,$y) is inside Hey Mike's own window. Nothing was tapped; " +
                     "read_ui again and pick a target in the app you are driving.",
             )
         }

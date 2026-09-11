@@ -1,6 +1,6 @@
 # Releases
 
-Android Agent releases are Developer Preview artifacts until production signing
+Hey Mike releases are Developer Preview artifacts until production signing
 and complete phone E2E are established.
 
 ## Current public artifact
@@ -15,7 +15,7 @@ The latest public artifact is v0.7.3:
 
 This is test-only signing. It is installable for local testing, not a production
 release. The public release page is
-[v0.7.3 on GitHub](https://github.com/Yoni-Raich/android-agent-use/releases/tag/v0.7.3).
+[v0.7.3 on GitHub](https://github.com/Yoni-Raich/hey-mike/releases/tag/v0.7.3).
 
 v0.6.1 to v0.7.2 cannot control the phone: their release APKs install without
 the code-mode helper. v0.7.3 is the first published APK with device control.

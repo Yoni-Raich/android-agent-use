@@ -1,6 +1,6 @@
 # Code of Conduct
 
-We want Android Agent discussions and contributions to be safe, useful, and
+We want Hey Mike discussions and contributions to be safe, useful, and
 respectful.
 
 Expected behavior:

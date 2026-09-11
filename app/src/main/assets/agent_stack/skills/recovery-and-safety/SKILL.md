@@ -3,7 +3,7 @@ name: recovery-and-safety
 description: Safety guardrails, intent preservation rules, and recovery procedures for stuck screens, system dialogs, keyboard obstruction, and app crashes.
 ---
 
-# Android Agent Safety & Recovery Guide
+# Hey Mike Safety & Recovery Guide
 
 Operating an actual mobile phone requires strict safety boundaries and systematic recovery mechanisms.
 

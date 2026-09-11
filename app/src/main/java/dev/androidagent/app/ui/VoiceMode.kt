@@ -243,7 +243,7 @@ internal fun VoiceModeLayer(
 private fun VoiceHeader(title: String?, modifier: Modifier) {
     Column(modifier.fillMaxWidth().height(64.dp).padding(start = 52.dp, end = 16.dp)) {
         Text(
-            text = title?.takeIf { it.isNotBlank() } ?: "Android Agent",
+            text = title?.takeIf { it.isNotBlank() } ?: "Hey Mike",
             style = MaterialTheme.typography.titleMedium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,

@@ -61,7 +61,7 @@ class A11yToolsHardwareTest {
         // "not rebound yet".
         val connected = runBlocking { A11yServiceHandle.await(45_000) } != null
         assumeTrue(
-            "Accessibility service is not connected. Enable Android Agent in " +
+            "Accessibility service is not connected. Enable Hey Mike in " +
                 "Settings > Accessibility and re-run.",
             connected,
         )

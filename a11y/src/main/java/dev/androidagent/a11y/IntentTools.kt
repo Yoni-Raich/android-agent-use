@@ -207,7 +207,7 @@ internal class IntentTools(
                     "as text rather than building \"?text=\" into the uri yourself; it is encoded for you, " +
                     "and an unencoded space or & in a hand-built uri truncates the message or fails to " +
                     "parse. Anything that sends on the user's behalf — a prefilled message, a payment — " +
-                    "pauses for an approval the user must answer in the Android Agent app, so the call " +
+                    "pauses for an approval the user must answer in the Hey Mike app, so the call " +
                     "does not return until they do. Say that you are waiting before you call it. Always " +
                     "verify with read_ui that the expected screen opened.",
                 properties = mapOf(

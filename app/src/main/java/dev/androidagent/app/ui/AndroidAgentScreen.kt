@@ -293,7 +293,7 @@ private fun AgentDrawer(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text("Android Agent", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text("Hey Mike", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 Text("Local Codex workspace", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             IconButton(onClick = close) {

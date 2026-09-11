@@ -287,7 +287,7 @@ nothing on it to tap while the model saw a tool call that never came back.
 
 Three things close that gap. The coordinator now takes a `bringToForeground`
 callback and raises the app's own window when it publishes a local approval; the
-floating card says "Approve in Android Agent" rather than just "waiting"; and
+floating card says "Approve in Hey Mike" rather than just "waiting"; and
 the outcomes are separated — `intent_denied` when the user said no,
 `approval_timeout` when nobody answered, `intent_not_approved` when the run
 stopped first. A single "denied or expired" told the model nothing it could act

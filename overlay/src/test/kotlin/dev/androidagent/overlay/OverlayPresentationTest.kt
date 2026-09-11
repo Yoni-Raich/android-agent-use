@@ -12,7 +12,7 @@ class OverlayPresentationTest {
         assertEquals(OverlayTone.ACTIVE, overlayTone("Thinking"))
         assertEquals(OverlayTone.ACTIVE, overlayTone("Running · read ui"))
         assertEquals(OverlayTone.CONTROLLING, overlayTone("Controlling · tap"))
-        assertEquals(OverlayTone.WAITING, overlayTone("Working · Approve in Android Agent"))
+        assertEquals(OverlayTone.WAITING, overlayTone("Working · Approve in Hey Mike"))
         assertEquals(OverlayTone.STOPPING, overlayTone("Stopping"))
         assertEquals(OverlayTone.DONE, overlayTone("Done · Stopped"))
         assertEquals(OverlayTone.ERROR, overlayTone("Error · Overlay permission missing"))
@@ -43,9 +43,9 @@ class OverlayPresentationTest {
     }
 
     @Test fun approvalAsksForTheApp() {
-        val waiting = overlayContent("Working · Approve in Android Agent", "Sending the message")
+        val waiting = overlayContent("Working · Approve in Hey Mike", "Sending the message")
         assertTrue(waiting.needsApproval)
-        assertEquals("Approve in Android Agent", waiting.headline)
+        assertEquals("Approve in Hey Mike", waiting.headline)
         assertEquals("Sending the message", waiting.commentary)
         assertFalse(overlayContent("Controlling · tap", null).needsApproval)
     }

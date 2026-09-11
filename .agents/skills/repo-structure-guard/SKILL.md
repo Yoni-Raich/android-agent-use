@@ -1,9 +1,9 @@
 ---
 name: repo-structure-guard
-description: Use this skill whenever an agent works inside the Android Agent repository: before coding, reviewing, adding files, building, releasing, cleaning, or creating another skill. It explains the exact repository layout, module ownership, safe file paths, generated-output rules, branch flow, release gates, and evidence rules so agents do not scatter files or damage another worktree.
+description: Use this skill whenever an agent works inside the Hey Mike repository: before coding, reviewing, adding files, building, releasing, cleaning, or creating another skill. It explains the exact repository layout, module ownership, safe file paths, generated-output rules, branch flow, release gates, and evidence rules so agents do not scatter files or damage another worktree.
 ---
 
-# Android Agent repository guard
+# Hey Mike repository guard
 
 This is a development skill for agents that work on the repository.
 
