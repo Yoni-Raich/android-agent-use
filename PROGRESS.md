@@ -7,6 +7,22 @@ not production-ready.
 
 ### Verified
 
+- The agent-orb top bar passed JVM tests and a dev debug build on
+  2026-09-11: `./gradlew.bat :app:testDevDebugUnitTest
+  :app:compileDevDebugAndroidTestKotlin :app:assembleDevDebug`. New tests
+  cover which backend the status names (accessibility alone counts), the
+  blocked, ready and working sentences, and the backend notes. `ChatUiTest`
+  now opens the status sheet from the orb instead of tapping an ADB pill; it
+  compiles but was not run. Not verified on hardware: the orb and quota ring
+  in the bar, the status sheet's fix buttons, and the title opening the
+  drawer.
+- The Workspace files sheet passed JVM tests and a dev debug build on
+  2026-09-11: `./gradlew.bat :app:testDevDebugUnitTest
+  :app:compileDevDebugAndroidTestKotlin :app:assembleDevDebug`. New tests
+  cover splitting the user's files from the files the app seeds, newest
+  first, attachment names without their stored ID, file kinds, and the type
+  offered to other apps. Not verified on hardware: opening and sharing a file
+  through the FileProvider, and which apps offer to open notes and JSON.
 - The public v0.7.1 dev APK was built from merged `main` at tag `v0.7.1` on
   2026-09-11. The full Gradle gate, runtime staging tests and `git diff --check`
   passed. `aapt2` reports `dev.androidagent.app.dev` versionCode 20

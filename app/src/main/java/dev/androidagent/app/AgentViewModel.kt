@@ -443,8 +443,21 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         mutable.update { it.copy(isLoadingWorkspace = true, workspaceError = null) }
         try {
             val root = current.value?.let { graph.sessions.workspace(it) } ?: return@task
-            val files = withContext(Dispatchers.IO) { root.walkTopDown().filter { it != root }.take(500).map { WorkspaceFileItem(it.relativeTo(root).path, it.length(), it.lastModified(), it.isDirectory) }.toList() }
+            // Files only, and not inside hidden folders such as .agents or
+            // .codex: those are Codex's own state, not something to open.
+            val files = withContext(Dispatchers.IO) {
+                root.walkTopDown()
+                    .onEnter { it == root || !it.name.startsWith(".") }
+                    .filter { it.isFile }
+                    .take(500)
+                    .map { WorkspaceFileItem(it.relativeTo(root).invariantSeparatorsPath, it.length(), it.lastModified()) }
+                    .toList()
+            }
             mutable.update { it.copy(workspaceFiles = files) }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            mutable.update { it.copy(workspaceError = failure.message ?: "Could not read this chat's files.") }
         } finally { mutable.update { it.copy(isLoadingWorkspace = false) } }
     }
     fun resolveWorkspaceFile(item: WorkspaceFileItem): File {

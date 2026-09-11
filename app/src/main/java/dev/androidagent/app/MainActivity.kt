@@ -113,8 +113,10 @@ class MainActivity : ComponentActivity() {
         onDeleteSession = { model.delete(it) },
         onRetry = { model.prepare() },
         onDismissError = { model.editUi { it.copy(errorMessage = null) } },
-        onOpenWorkspaceFiles = { model.listFiles() },
+        onOpenWorkspaceFiles = { model.editUi { it.copy(isWorkspaceOpen = true) }; model.listFiles() },
         onOpenWorkspaceFile = { item -> openFile(item) },
+        onShareWorkspaceFile = { item -> shareFile(item) },
+        onCloseWorkspaceFiles = { model.editUi { it.copy(isWorkspaceOpen = false) } },
         onApproval = { requestId, allow -> model.graph.coordinator.approve(requestId, allow) },
         onCheckForUpdates = { model.checkForUpdates(manual = true) },
         onDownloadUpdate = { model.downloadUpdate() },
@@ -196,11 +198,26 @@ class MainActivity : ComponentActivity() {
     }
     private fun openFile(item: WorkspaceFileItem) {
         runCatching {
-            check(!item.isDirectory) { "Choose a file inside this folder." }
-            val file = model.resolveWorkspaceFile(item)
-            val uri = FileProvider.getUriForFile(this, "$packageName.files", file)
-            val type = MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase()) ?: "application/octet-stream"
-            startActivity(Intent.createChooser(Intent(Intent.ACTION_VIEW).setDataAndType(uri, type).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), "Open file"))
+            val (uri, type) = workspaceUri(item)
+            startActivity(Intent.createChooser(Intent(Intent.ACTION_VIEW).setDataAndType(uri, type).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), "Open with"))
         }.onFailure { model.error(it.message ?: "No app can open this file.") }
+    }
+
+    private fun shareFile(item: WorkspaceFileItem) {
+        runCatching {
+            val (uri, type) = workspaceUri(item)
+            val send = Intent(Intent.ACTION_SEND).setType(type).putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            startActivity(Intent.createChooser(send, "Share file"))
+        }.onFailure { model.error(it.message ?: "Could not share this file.") }
+    }
+
+    // A content URI other apps may read, and a type they will claim: notes
+    // and JSON go out as plain text, which almost every viewer accepts.
+    private fun workspaceUri(item: WorkspaceFileItem): Pair<Uri, String> {
+        check(!item.isDirectory) { "Choose a file inside this folder." }
+        val file = model.resolveWorkspaceFile(item)
+        check(file.isFile) { "This file is no longer in the chat's folder." }
+        val uri = FileProvider.getUriForFile(this, "$packageName.files", file)
+        return uri to mimeTypeFor(file.name) { MimeTypeMap.getSingleton().getMimeTypeFromExtension(it) }
     }
 }

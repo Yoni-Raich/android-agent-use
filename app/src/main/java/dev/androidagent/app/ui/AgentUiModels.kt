@@ -107,6 +107,8 @@ data class AgentUiState(
     val voiceMuted: Boolean = false,
     val isDrawerOpen: Boolean = false,
     val isSettingsOpen: Boolean = false,
+    /** The chat folder's file sheet is showing. */
+    val isWorkspaceOpen: Boolean = false,
     val isLoadingSessions: Boolean = false,
     val isLoadingMessages: Boolean = false,
     val isPreparingRuntime: Boolean = false,
@@ -168,6 +170,8 @@ data class AgentUiActions(
     val onDismissError: () -> Unit = {},
     val onOpenWorkspaceFiles: () -> Unit = {},
     val onOpenWorkspaceFile: (WorkspaceFileItem) -> Unit = {},
+    val onShareWorkspaceFile: (WorkspaceFileItem) -> Unit = {},
+    val onCloseWorkspaceFiles: () -> Unit = {},
     val onApproval: (requestId: String, allow: Boolean) -> Unit = { _, _ -> },
     val onCheckForUpdates: () -> Unit = {},
     val onDownloadUpdate: () -> Unit = {},

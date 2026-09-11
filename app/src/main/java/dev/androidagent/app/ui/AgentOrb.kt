@@ -73,13 +73,15 @@ internal fun AgentOrb(
     modifier: Modifier = Modifier,
     phase: RunPhase = RunPhase.THINKING,
     controlling: Boolean = false,
+    // At rest the top bar tints it by whether the agent can reach the phone.
+    idleColor: Color = OrbIdle,
 ) {
     val color by animateColorAsState(
         when {
             phase == RunPhase.ERROR -> OrbError
             phase == RunPhase.STOPPING -> OrbStopping
             controlling || phase == RunPhase.CONTROLLING -> OrbControlling
-            phase == RunPhase.IDLE -> OrbIdle
+            phase == RunPhase.IDLE -> idleColor
             else -> OrbWorking
         },
         tween(400),
