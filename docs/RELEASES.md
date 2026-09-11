@@ -5,17 +5,17 @@ and complete phone E2E are established.
 
 ## Current public artifact
 
-The latest public artifact is v0.7.1:
+The latest public artifact is v0.7.2:
 
 - package: `dev.androidagent.app.dev`;
-- versionCode: `20`;
-- APK: `android-agent-0.7.1.apk`;
-- SHA-256: `97D8D1E13F0A19BACB3EE4C881AFD67C96D15A03D030A83A85F1FE49319D7E60`;
+- versionCode: `21`;
+- APK: `android-agent-0.7.2.apk`;
+- SHA-256: `F5FA50A871CED900488736E8EB7113FBE1A36EB17CD0E75C5E73F90A6F72AE25`;
 - signing: APK Signature Scheme v3 with the local Android debug key.
 
 This is test-only signing. It is installable for local testing, not a production
 release. The public release page is
-[v0.7.1 on GitHub](https://github.com/Yoni-Raich/android-agent-use/releases/tag/v0.7.1).
+[v0.7.2 on GitHub](https://github.com/Yoni-Raich/android-agent-use/releases/tag/v0.7.2).
 
 ## Version rules
 

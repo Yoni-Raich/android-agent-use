@@ -7,6 +7,14 @@ not production-ready.
 
 ### Verified
 
+- The public v0.7.2 dev APK was built from merged `main` at tag `v0.7.2` on
+  2026-09-11. The full Gradle gate (including clean `:app:lintDevDebug`),
+  runtime staging tests and `git diff --check` passed. `aapt2` reports
+  `dev.androidagent.app.dev` versionCode 21 versionName 0.7.2 for ARM64 and
+  x86_64; zip alignment and APK Signature Scheme v3 verification passed with
+  the local debug key. SHA-256
+  `F5FA50A871CED900488736E8EB7113FBE1A36EB17CD0E75C5E73F90A6F72AE25`. The
+  release APK itself was not installed on a physical phone.
 - The agent-orb top bar passed JVM tests and a dev debug build on
   2026-09-11: `./gradlew.bat :app:testDevDebugUnitTest
   :app:compileDevDebugAndroidTestKotlin :app:assembleDevDebug`. New tests

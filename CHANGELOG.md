@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.7.2 — 2026-09-11
+
 - The top bar is redesigned around the agent's sphere. The chat title opens
   the chat list, and the sphere is the status: teal when the agent can reach
   the phone, blue and busy while it works, amber when nothing lets it control
