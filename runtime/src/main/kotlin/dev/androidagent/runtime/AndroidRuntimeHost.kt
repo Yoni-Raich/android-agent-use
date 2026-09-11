@@ -420,7 +420,7 @@ class AndroidRuntimeHost(private val appContext: Context) : RuntimeHost {
          */
         val PACKAGE_LINKS: List<Pair<String, String>> = listOf(
             "bin/codex-app-server" to "libcodex_app_server.so",
-            "bin/codex-code-mode-host" to "codex-code-mode-x.so",
+            "bin/codex-code-mode-host" to "libcodex_codemode.so",
             "codex-path/rg" to "libcodex_rg.so",
             "codex-path/bwrap" to "libcodex_bwrap.so",
             "codex-resources/bwrap" to "libcodex_bwrap.so",
