@@ -7,6 +7,13 @@ not production-ready.
 
 ### Verified
 
+- The public v0.7.1 dev APK was built from merged `main` at tag `v0.7.1` on
+  2026-09-11. The full Gradle gate, runtime staging tests and `git diff --check`
+  passed. `aapt2` reports `dev.androidagent.app.dev` versionCode 20
+  versionName 0.7.1 for ARM64 and x86_64; zip alignment and APK Signature
+  Scheme v3 verification passed with the local debug key. SHA-256
+  `97D8D1E13F0A19BACB3EE4C881AFD67C96D15A03D030A83A85F1FE49319D7E60`. The
+  release APK itself was not installed on a physical phone.
 - The Skills chip, the `/` menu and composer commands passed JVM tests on
   2026-09-11: `./gradlew.bat :core:test :engine-codex:test
   :app:testDevDebugUnitTest :app:compileDevDebugAndroidTestKotlin`. New tests

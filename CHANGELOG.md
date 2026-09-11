@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.7.1 — 2026-09-11
+
 - Skills are easy to find: a Skills chip under the field opens every skill and
   command with search, and typing `/` opens the same list above the field
   (`$` still lists skills only). Skills show their own name, colour and short
