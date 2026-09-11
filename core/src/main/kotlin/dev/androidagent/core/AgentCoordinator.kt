@@ -84,6 +84,7 @@ class AgentCoordinator(
         model: String? = null,
         reasoningEffort: String? = null,
         skill: AgentSkill? = null,
+        planMode: Boolean = false,
     ) {
         if (prompt.isBlank() && images.isEmpty()) return
         synchronized(lifecycleLock) {
@@ -112,7 +113,7 @@ class AgentCoordinator(
             awaitingTurn = false
             startupEvents.clear()
             textRevision = 0L
-            runJob = scope.launch { run(token, runCompletion, sessionId, prompt, images, model, reasoningEffort, skill) }
+            runJob = scope.launch { run(token, runCompletion, sessionId, prompt, images, model, reasoningEffort, skill, planMode) }
         }
     }
 
@@ -218,6 +219,7 @@ class AgentCoordinator(
         model: String?,
         reasoningEffort: String?,
         skill: AgentSkill?,
+        planMode: Boolean,
     ) {
         try {
             // Read-only chat does not take over the user's screen. The first
@@ -247,6 +249,7 @@ class AgentCoordinator(
             val startedTurn = engine.startTurn(
                 openedThread, prompt, images, reasoningEffort, skill,
                 DeviceCapabilities.of(tools, adbStatus()),
+                planModel = if (planMode) model else null,
             )
             if (!activateTurn(token, startedTurn)) return
             ensureCurrent(token)

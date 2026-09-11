@@ -80,7 +80,17 @@ data class AgentSkill(
     val path: String,
     val scope: String,
     val enabled: Boolean = true,
-)
+    /** From the skill's interface block, when its author gave one. */
+    val displayName: String? = null,
+    val shortDescription: String? = null,
+    /** A `#RRGGBB` colour the skill's author picked for it. */
+    val brandColor: String? = null,
+    /** What to put in the composer when the skill is picked from an empty field. */
+    val defaultPrompt: String? = null,
+) {
+    val label: String get() = displayName?.takeIf { it.isNotBlank() } ?: name
+    val summary: String get() = shortDescription?.takeIf { it.isNotBlank() } ?: description
+}
 data class TokenUsage(val total: Long, val input: Long, val output: Long, val cachedInput: Long = 0, val contextWindow: Long? = null)
 data class UsageLimit(val name: String, val usedPercent: Double?, val resetsAt: Long? = null, val windowMinutes: Long? = null)
 data class RunMetrics(val firstResponseMs: Long?, val totalMs: Long, val toolCalls: Int, val toolMs: Long)
@@ -151,6 +161,21 @@ interface AgentEngine {
         skill: AgentSkill?,
         capabilities: DeviceCapabilities,
     ): String = startTurn(threadId, prompt, images, reasoningEffort, skill, capabilities.adbStatus)
+    /**
+     * Start a turn in plan mode when [planModel] is set: the agent agrees a
+     * plan before acting. Plan mode needs a model name, so it rides on one.
+     */
+    suspend fun startTurn(
+        threadId: String,
+        prompt: String,
+        images: List<File> = emptyList(),
+        reasoningEffort: String?,
+        skill: AgentSkill?,
+        capabilities: DeviceCapabilities,
+        planModel: String?,
+    ): String = startTurn(threadId, prompt, images, reasoningEffort, skill, capabilities)
+    /** Summarize the thread's history to free up context. */
+    suspend fun compact(threadId: String): Unit = throw UnsupportedOperationException("This engine cannot compact a chat.")
     suspend fun steer(threadId: String, turnId: String, prompt: String)
     suspend fun interrupt(threadId: String, turnId: String)
     suspend fun answerTool(requestId: String, result: ToolResult)

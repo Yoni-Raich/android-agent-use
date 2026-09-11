@@ -1,5 +1,7 @@
 package dev.androidagent.app
 
+import dev.androidagent.app.ui.statusSummary
+
 import android.app.Application
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -136,14 +138,41 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         val invokedSkill = invokedSkillName?.let { name ->
             snapshot.availableSkills.firstOrNull { it.enabled && it.name.equals(name, ignoreCase = true) }
         }
+        // Plan mode is carried by a model name, so fall back to the first
+        // offered model when the user has not picked one.
+        val model = snapshot.selectedModel
+            ?: if (snapshot.planMode) snapshot.modelCatalog.firstOrNull()?.id ?: snapshot.availableModels.firstOrNull() else null
+        if (snapshot.planMode && model == null) { error("Choose a model before using plan mode."); return }
         task {
             graph.queue.submit(QueuedTurn(sessionId = id, prompt = prompt, imagePaths = images.map { it.absolutePath },
-                model = snapshot.selectedModel, effort = selectedReasoningEffort(snapshot), skill = invokedSkill))
+                model = model, effort = selectedReasoningEffort(snapshot), skill = invokedSkill, planMode = snapshot.planMode))
             mutable.update { if (it.activeSessionId == id) it.copy(attachments = emptyList(), errorMessage = null) else it }
         }
     }
     fun cancelQueued(id: String) = task { graph.queue.cancel(id) }
     fun resumeQueue() = task { graph.queue.resume() }
+
+    fun togglePlanMode() { mutable.update { it.copy(planMode = !it.planMode) } }
+
+    fun compact() {
+        val id = current.value ?: return
+        if (graph.coordinator.state.value.active) { error("Wait for the agent to finish before compacting."); return }
+        task {
+            val thread = checkNotNull(graph.sessions.getSession(id)?.engineThreadId) { "There is nothing to compact yet. Send a message first." }
+            graph.engine.compact(thread)
+            note(id, "Compacting the chat to free up context")
+        }
+    }
+
+    fun showStatus() {
+        val id = current.value ?: return
+        val text = statusSummary(mutable.value)
+        task { note(id, text) }
+    }
+
+    // A line in the chat that records what a command did; the model never sees it.
+    private suspend fun note(sessionId: String, text: String) =
+        graph.sessions.append(ChatMessage(UUID.randomUUID().toString(), sessionId, "note", text, System.currentTimeMillis()))
 
     fun stop() {
         graph.queue.pause()

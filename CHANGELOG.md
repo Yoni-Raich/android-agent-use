@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Skills are easy to find: a Skills chip under the field opens every skill and
+  command with search, and typing `/` opens the same list above the field
+  (`$` still lists skills only). Skills show their own name, colour and short
+  description from Codex, and a picked skill sits in the field as a chip and
+  fills in its default prompt.
+- `/` also offers commands: New chat, Compact, Plan mode, Model, Rename and
+  Status. Plan mode stays on, shown as a chip, until you turn it off; its
+  turns ask Codex for a plan before acting. Compact and Status leave a short
+  note in the chat.
+
 ## 0.7.0 — 2026-09-11
 
 - Voice now has its own full-screen mode instead of a line under the composer.

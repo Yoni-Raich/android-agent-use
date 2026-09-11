@@ -183,10 +183,23 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
         reasoningEffort: String?,
         skill: AgentSkill?,
         capabilities: DeviceCapabilities,
+    ): String = startTurn(threadId, prompt, images, reasoningEffort, skill, capabilities, planModel = null)
+
+    override suspend fun startTurn(
+        threadId: String,
+        prompt: String,
+        images: List<File>,
+        reasoningEffort: String?,
+        skill: AgentSkill?,
+        capabilities: DeviceCapabilities,
+        planModel: String?,
     ): String {
-        val result = request("turn/start", turnStartParams(threadId, prompt, images, reasoningEffort, skill, capabilities))
+        val result = request("turn/start", turnStartParams(threadId, prompt, images, reasoningEffort, skill, capabilities, planModel))
         return result["turn"]?.jsonObject?.string("id")?.takeIf { it.isNotBlank() } ?: error("Codex returned no turn ID")
     }
+
+    // Compaction streams as an ordinary turn on the thread; the call itself returns at once.
+    override suspend fun compact(threadId: String) { connect(); request("thread/compact/start", buildJsonObject { put("threadId", threadId) }) }
 
     override suspend fun startVoice(
         threadId: String,
@@ -495,6 +508,8 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
     }
 
     companion object {
+        private val BRAND_COLOR = Regex("#[0-9A-Fa-f]{6}")
+
         private const val MAX_STDERR_LINES = 80
         private fun JsonObject.string(name: String) = (get(name) as? JsonPrimitive)?.contentOrNull.orEmpty()
 
@@ -589,6 +604,7 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
             reasoningEffort: String?,
             skill: AgentSkill? = null,
             capabilities: DeviceCapabilities? = null,
+            planModel: String? = null,
         ): JsonObject = buildJsonObject {
             put("threadId", threadId)
             put("input", buildJsonArray {
@@ -608,6 +624,17 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
             })
             // Omitting effort keeps the app-server's model default in control.
             if (!reasoningEffort.isNullOrBlank()) put("effort", reasoningEffort)
+            // Plan mode is a collaboration mode; its settings take precedence over
+            // the turn's model and effort, so they are restated here. A null
+            // developer_instructions keeps Codex's own plan-mode instructions.
+            if (!planModel.isNullOrBlank()) put("collaborationMode", buildJsonObject {
+                put("mode", "plan")
+                put("settings", buildJsonObject {
+                    put("model", planModel)
+                    put("reasoning_effort", reasoningEffort?.takeIf { it.isNotBlank() }?.let(::JsonPrimitive) ?: JsonNull)
+                    put("developer_instructions", JsonNull)
+                })
+            })
         }
 
         /**
@@ -717,12 +744,18 @@ class CodexEngine(private val runtime: RuntimeHost) : AgentEngine, RealtimeVoice
                     val name = skill.string("name").trim()
                     val path = skill.string("path").trim()
                     if (name.isBlank() || path.isBlank()) return@mapNotNull null
+                    val face = skill["interface"] as? JsonObject
                     AgentSkill(
                         name = name,
                         description = skill.string("description").trim(),
                         path = path,
                         scope = skill.string("scope").trim(),
                         enabled = (skill["enabled"] as? JsonPrimitive)?.booleanOrNull ?: true,
+                        displayName = face?.string("displayName")?.trim()?.ifBlank { null },
+                        shortDescription = (face?.string("shortDescription")?.trim()?.ifBlank { null }
+                            ?: skill.string("shortDescription").trim().ifBlank { null }),
+                        brandColor = face?.string("brandColor")?.trim()?.takeIf { BRAND_COLOR.matches(it) },
+                        defaultPrompt = face?.string("defaultPrompt")?.trim()?.ifBlank { null },
                     )
                 }
                 .filter { it.enabled }

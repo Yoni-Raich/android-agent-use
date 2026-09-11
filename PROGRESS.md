@@ -7,6 +7,15 @@ not production-ready.
 
 ### Verified
 
+- The Skills chip, the `/` menu and composer commands passed JVM tests on
+  2026-09-11: `./gradlew.bat :core:test :engine-codex:test
+  :app:testDevDebugUnitTest :app:compileDevDebugAndroidTestKotlin`. New tests
+  cover reading a skill's interface block, plan mode sent as a
+  `collaborationMode` on `turn/start`, the `/` and `$` query rules, whole-draft
+  commands, the default prompt a picked skill brings, and the /status line.
+  Not verified on hardware: the menu, the sheet and the chips on a phone, plan
+  mode and `thread/compact/start` against the pinned app-server, and how a
+  skill's brand colour and default prompt look for real skills.
 - The public v0.7.0 dev APK was built from `main` with the release version on
   2026-09-11. The full Gradle gate (539 JVM tests, no failures), runtime
   staging tests and `git diff --check` passed. `aapt2` reports

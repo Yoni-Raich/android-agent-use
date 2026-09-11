@@ -9,6 +9,7 @@ import dev.androidagent.core.RealtimeAudioChunk
 import dev.androidagent.core.ReasoningEffortOption
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -77,6 +78,41 @@ class CodexEngineTest {
             ),
             CodexEngine.parseSkillCatalog(response, workspace),
         )
+    }
+
+    @Test fun skillCatalogKeepsTheSkillsOwnFace() {
+        val workspace = File("workspace").absoluteFile
+        val response = Json.parseToJsonElement(
+            """{"data":[{"cwd":"${workspace.invariantSeparatorsPath}","skills":[
+              {"name":"daily-briefing","description":"Long description","path":"/s/daily/SKILL.md","scope":"user","enabled":true,
+               "interface":{"displayName":"Daily briefing","shortDescription":"One summary","brandColor":"#F2B155","defaultPrompt":"Brief me"}},
+              {"name":"plain","description":"Plain","path":"/s/plain/SKILL.md","scope":"system","enabled":true,
+               "shortDescription":"Top-level short","interface":{"brandColor":"orange"}}
+            ]}]}"""
+        ).jsonObject
+
+        val (plain, daily) = CodexEngine.parseSkillCatalog(response, workspace).sortedBy { it.name }.let { it[1] to it[0] }
+        assertEquals("Daily briefing", daily.label)
+        assertEquals("One summary", daily.summary)
+        assertEquals("#F2B155", daily.brandColor)
+        assertEquals("Brief me", daily.defaultPrompt)
+        // No display name falls back to the id; a colour that is not #RRGGBB is dropped.
+        assertEquals("plain", plain.label)
+        assertEquals("Top-level short", plain.summary)
+        assertNull(plain.brandColor)
+    }
+
+    @Test fun planModeTravelsAsACollaborationModeWithTheTurnsModelAndEffort() {
+        val plan = CodexEngine.turnStartParams("thread", "Plan it", emptyList(), "high", planModel = "gpt-5.6-luna")
+        val mode = plan["collaborationMode"]!!.jsonObject
+        assertEquals("plan", mode["mode"]?.jsonPrimitive?.content)
+        val settings = mode["settings"]!!.jsonObject
+        assertEquals("gpt-5.6-luna", settings["model"]?.jsonPrimitive?.content)
+        assertEquals("high", settings["reasoning_effort"]?.jsonPrimitive?.content)
+        // Null keeps Codex's own plan-mode instructions.
+        assertEquals(JsonNull, settings["developer_instructions"])
+
+        assertFalse(CodexEngine.turnStartParams("thread", "Do it", emptyList(), "high").containsKey("collaborationMode"))
     }
 
     @Test fun skillCatalogDoesNotUseAnotherWorkspaceEntry() {

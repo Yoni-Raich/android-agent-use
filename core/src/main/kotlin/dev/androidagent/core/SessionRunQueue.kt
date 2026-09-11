@@ -20,6 +20,8 @@ data class QueuedTurn(
     val model: String? = null,
     val effort: String? = null,
     val skill: AgentSkill? = null,
+    /** Run in plan mode: agree a plan before acting. */
+    val planMode: Boolean = false,
 )
 
 /**
@@ -98,6 +100,6 @@ class SessionRunQueue(
         // Dequeue durably before starting, so a process crash cannot replay side effects.
         save(pending.value - next)
         submittedNow -= next.id
-        coordinator.send(next.sessionId, next.prompt, next.imagePaths.map(::File), next.model, next.effort, next.skill)
+        coordinator.send(next.sessionId, next.prompt, next.imagePaths.map(::File), next.model, next.effort, next.skill, next.planMode)
     }
 }
