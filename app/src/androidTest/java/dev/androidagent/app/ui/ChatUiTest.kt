@@ -235,8 +235,7 @@ class ChatUiTest {
         screenshot("chat-device-actions")
     }
 
-    @Test fun adbStatusIsVisibleAndOpensWirelessSettings() {
-        var opened = 0
+    @Test fun phoneControlStatusOpensFromTheAgentOrb() {
         compose.setContent {
             AndroidAgentScreen(
                 fixture.copy(
@@ -246,12 +245,13 @@ class ChatUiTest {
                         port = 37123,
                     ),
                 ),
-                AgentUiActions(onOpenWirelessSettings = { opened++ }),
+                AgentUiActions(),
             )
         }
 
-        compose.onNodeWithText("ADB · 37123").assertIsDisplayed().performClick()
-        compose.runOnIdle { assertEquals(1, opened) }
+        compose.onNodeWithContentDescription("Open status and usage", substring = true).performClick()
+        compose.onNodeWithText("Ready to control your phone through ADB").assertIsDisplayed()
+        compose.onNodeWithText("Connected · port 37123").assertIsDisplayed()
 
         compose.setContent {
             AndroidAgentScreen(
@@ -264,6 +264,8 @@ class ChatUiTest {
                 AgentUiActions(),
             )
         }
-        compose.onNodeWithText("ADB · reconnecting").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Open status and usage", substring = true).performClick()
+        compose.onNodeWithText("The agent cannot control your phone yet").assertIsDisplayed()
+        compose.onNodeWithText("Reconnecting").assertIsDisplayed()
     }
 }

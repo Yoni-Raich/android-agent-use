@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- The top bar is redesigned around the agent's sphere. The chat title opens
+  the chat list, and the sphere is the status: teal when the agent can reach
+  the phone, blue and busy while it works, amber when nothing lets it control
+  the phone, with the quota as a ring around it. It opens one sheet with each
+  backend and its fix, the quota windows, the chat's files and settings. The
+  status no longer says "ADB · disconnected" while accessibility is in
+  control, and the bar no longer repeats the run status or the drawer's
+  Files and Settings.
+
+- Workspace files open in a sheet instead of a card at the bottom of the
+  chat. The files you attached and the ones the agent saved come first,
+  newest on top, with their real names; a tap opens one in another app and
+  the share button sends it on. The instructions and app cards the app puts
+  in every chat fold away under "Agent files". Notes and JSON are offered as
+  plain text, so a text viewer can open them.
+
 ## 0.7.1 — 2026-09-11
 
 - Skills are easy to find: a Skills chip under the field opens every skill and

@@ -238,14 +238,10 @@ fun AndroidAgentScreen(
                 snackbarHost = { SnackbarHost(snackbars) },
                 topBar = {
                     Box(Modifier.voiceStage(voiceMode.topBar, lift = (-8).dp)) {
-                        AgentTopBar(
+                        ChatTopBar(
                             state = state,
+                            actions = actions,
                             onOpenDrawer = { scope.launch { drawerState.open() } },
-                            onOpenSettings = actions.onOpenSettings,
-                            onOpenWirelessSettings = actions.onOpenWirelessSettings,
-                            onOpenFiles = actions.onOpenWorkspaceFiles,
-                            onNewChat = actions.onNewChat,
-                            onRefreshUsage = actions.onRefreshAccount,
                         )
                     }
                 },
@@ -274,164 +270,9 @@ fun AndroidAgentScreen(
         if (state.isSettingsOpen) {
             AgentSettingsSheet(state = state, actions = actions)
         }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun AgentTopBar(
-    state: AgentUiState,
-    onOpenDrawer: () -> Unit,
-    onOpenSettings: () -> Unit,
-    onOpenWirelessSettings: () -> Unit,
-    onOpenFiles: () -> Unit,
-    onNewChat: () -> Unit,
-    onRefreshUsage: () -> Unit,
-) {
-    var confirmNew by remember { mutableStateOf(false) }
-    // Recomputed when the limits change, not per frame: the countdown text is
-    // coarse enough that a redraw every minute would be wasted work.
-    val usageWindows = remember(state.usageLimits) {
-        UsageSummary.windows(state.usageLimits, System.currentTimeMillis() / 1000L)
-    }
-    if (confirmNew) AlertDialog(onDismissRequest = { confirmNew = false },
-        title = { Text("Start a new chat?") },
-        text = { Text("The current task will keep running. New tasks will wait in the queue.") },
-        confirmButton = { TextButton(onClick = { confirmNew = false; onNewChat() }) { Text("New chat") } },
-        dismissButton = { TextButton(onClick = { confirmNew = false }) { Text("Cancel") } })
-    TopAppBar(
-        title = {
-            Column {
-                Text(
-                    text = state.activeSessionTitle?.takeIf { it.isNotBlank() } ?: "Android Agent",
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    AdbStatusPill(
-                        status = state.adbStatus,
-                        onClick = onOpenWirelessSettings,
-                    )
-                    if (state.runState.active) RunStatusPill(runState = state.runState)
-                }
-            }
-        },
-        navigationIcon = {
-            IconButton(
-                onClick = onOpenDrawer,
-                modifier = Modifier.semantics { contentDescription = "Open sessions" },
-            ) {
-                Icon(Icons.Outlined.Menu, contentDescription = null)
-            }
-        },
-        actions = {
-            // The quota ring sits first: it is a reading, not an action, and it
-            // is the thing that decides whether the next run will work at all.
-            UsageMeter(
-                windows = usageWindows,
-                usage = state.tokenUsage,
-                refreshing = state.isRefreshingAccount,
-                onRefresh = onRefreshUsage,
-            )
-            IconButton(onClick = { if (state.runState.active) confirmNew = true else onNewChat() }) {
-                Icon(Icons.Outlined.EditNote, contentDescription = "New chat")
-            }
-            IconButton(
-                onClick = onOpenFiles,
-                modifier = Modifier.semantics { contentDescription = "Open workspace files" },
-            ) {
-                Icon(Icons.Outlined.Folder, contentDescription = null)
-            }
-            IconButton(
-                onClick = onOpenSettings,
-                modifier = Modifier.semantics { contentDescription = "Open settings" },
-            ) {
-                Icon(Icons.Outlined.Settings, contentDescription = null)
-            }
-        },
-        colors = TopAppBarDefaults.topAppBarColors(
-            containerColor = MaterialTheme.colorScheme.background,
-        ),
-    )
-}
-
-@Composable
-private fun AdbStatusPill(
-    status: dev.androidagent.core.AdbStatus,
-    onClick: () -> Unit,
-) {
-    val working = status.phase == ConnectionPhase.DISCOVERING ||
-        status.phase == ConnectionPhase.PAIRING ||
-        status.phase == ConnectionPhase.CONNECTING
-    val color = when (status.phase) {
-        ConnectionPhase.CONNECTED -> MaterialTheme.colorScheme.secondary
-        ConnectionPhase.DISCOVERING,
-        ConnectionPhase.PAIRING,
-        ConnectionPhase.CONNECTING -> MaterialTheme.colorScheme.primary
-        ConnectionPhase.ERROR -> MaterialTheme.colorScheme.error
-        ConnectionPhase.DISCONNECTED -> MaterialTheme.colorScheme.onSurfaceVariant
-    }
-    val label = when (status.phase) {
-        ConnectionPhase.CONNECTED -> status.port?.let { "ADB · $it" } ?: "ADB · connected"
-        ConnectionPhase.DISCOVERING -> "ADB · searching"
-        ConnectionPhase.PAIRING -> "ADB · pairing"
-        ConnectionPhase.CONNECTING -> "ADB · reconnecting"
-        ConnectionPhase.ERROR -> "ADB · error"
-        ConnectionPhase.DISCONNECTED -> "ADB · disconnected"
-    }
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
-        modifier = Modifier
-            .clip(RoundedCornerShape(999.dp))
-            .clickable(onClick = onClick)
-            .semantics {
-                liveRegion = LiveRegionMode.Polite
-                contentDescription = "$label. ${status.message}. Open Wireless Debugging settings"
-            }
-            // It opens Wireless Debugging setup, so it has to be reachable by a
-            // thumb rather than a stylus.
-            .heightIn(min = 40.dp)
-            .padding(horizontal = 8.dp),
-    ) {
-        StatusDot(color = color, size = 7.dp, pulsing = working)
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = color,
-            maxLines = 1,
-        )
-    }
-}
-
-@Composable
-private fun RunStatusPill(runState: dev.androidagent.core.RunState) {
-    val active = runState.active
-    val color = when {
-        runState.phase == RunPhase.ERROR -> MaterialTheme.colorScheme.error
-        runState.controlling -> MaterialTheme.colorScheme.secondary
-        active -> MaterialTheme.colorScheme.primary
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
-    }
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
-        modifier = Modifier
-            .padding(top = 2.dp)
-            .semantics { liveRegion = LiveRegionMode.Polite },
-    ) {
-        StatusDot(color = color, size = 7.dp, pulsing = active && runState.phase != RunPhase.ERROR)
-        Text(
-            text = if (runState.controlling) "Controlling device" else readableRunPhase(runState.phase),
-            style = MaterialTheme.typography.labelSmall,
-            color = color,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        if (state.isWorkspaceOpen) {
+            WorkspaceFilesSheet(state = state, actions = actions)
+        }
     }
 }
 
@@ -757,16 +598,6 @@ private fun AgentChatContent(
                 }
             }
         }
-
-        if (state.workspaceFiles.isNotEmpty()) {
-            item(key = "workspace-files") {
-                WorkspaceFilesCard(
-                    files = state.workspaceFiles,
-                    onOpenFiles = actions.onOpenWorkspaceFiles,
-                    onOpenFile = actions.onOpenWorkspaceFile,
-                )
-            }
-        }
     }
 }
 
@@ -1011,53 +842,6 @@ private fun StatusCard(card: AgentStatusCard) {
 
 
 @Composable
-private fun WorkspaceFilesCard(
-    files: List<WorkspaceFileItem>,
-    onOpenFiles: () -> Unit,
-    onOpenFile: (WorkspaceFileItem) -> Unit,
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.52f)),
-    ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Outlined.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.width(8.dp))
-                Text("Workspace files", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.weight(1f))
-                TextButton(onClick = onOpenFiles) { Text("Open") }
-            }
-            files.take(5).forEach { file ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .clickable { onOpenFile(file) }
-                        .padding(vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        file.path,
-                        modifier = Modifier.weight(1f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    file.sizeBytes?.let {
-                        Text(formatBytes(it), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-            }
-            if (files.size > 5) {
-                Text("${files.size - 5} more files", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-    }
-}
-
-@Composable
 private fun ErrorBanner(message: String, onRetry: () -> Unit, onDismiss: () -> Unit) {
     var expanded by rememberSaveable(message) { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
@@ -1187,7 +971,7 @@ internal fun readableRunPhase(phase: RunPhase): String = when (phase) {
 
 
 
-private fun formatBytes(bytes: Long): String = when {
+internal fun formatBytes(bytes: Long): String = when {
     bytes < 1024L -> "$bytes B"
     bytes < 1024L * 1024L -> "${bytes / 1024L} KB"
     bytes < 1024L * 1024L * 1024L -> "${bytes / (1024L * 1024L)} MB"
