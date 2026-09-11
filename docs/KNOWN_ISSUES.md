@@ -1,6 +1,6 @@
 # Known issues
 
-Android Agent is a Developer Preview. The following limits are known and should
+Hey Mike is a Developer Preview. The following limits are known and should
 be treated as part of the current product state.
 
 - The complete signed-in Codex chat and device-control flow is not yet proven

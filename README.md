@@ -1,22 +1,22 @@
-# Android Agent
+# Hey Mike
 
-**An AI agent that lives on your Android phone and uses it for you.**
+**Mike is an AI agent that lives on your Android phone and uses it for you.**
 
-Tell it what you want, typed or spoken. It reads the screen, taps, types,
+Tell Mike what you want, typed or spoken. It reads the screen, taps, types,
 scrolls and opens apps on the same phone. You watch every step and can stop it
 at any moment.
 
 <p>
-  <a href="https://github.com/Yoni-Raich/android-agent-use/releases/latest"><img alt="Download the latest APK" src="https://img.shields.io/badge/Download-latest%20APK-3DDC84?style=for-the-badge&logo=android&logoColor=white"></a>
+  <a href="https://github.com/Yoni-Raich/hey-mike/releases/latest"><img alt="Download the latest APK" src="https://img.shields.io/badge/Download-latest%20APK-3DDC84?style=for-the-badge&logo=android&logoColor=white"></a>
 </p>
 
-[![Latest release](https://img.shields.io/github/v/release/Yoni-Raich/android-agent-use?label=release)](https://github.com/Yoni-Raich/android-agent-use/releases/latest)
+[![Latest release](https://img.shields.io/github/v/release/Yoni-Raich/hey-mike?label=release)](https://github.com/Yoni-Raich/hey-mike/releases/latest)
 ![Android 11+](https://img.shields.io/badge/Android-11%2B-3DDC84?logo=android&logoColor=white)
 ![Status](https://img.shields.io/badge/status-developer%20preview-orange)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
 <p align="center">
-  <img src="docs/images/demo-youtube.gif" width="280" alt="Android Agent receives the task &quot;Open YouTube, search for Android 16 features and play the first video&quot;, opens YouTube, types the search and opens the first result, with its floating status pill and Stop button on screen">
+  <img src="docs/images/demo-youtube.gif" width="280" alt="Mike receives the task &quot;Open YouTube, search for Android 16 features and play the first video&quot;, opens YouTube, types the search and opens the first result, with its floating status pill and Stop button on screen">
   <br>
   <em>“Open YouTube, search for Android 16 features and play the first video.”<br>A real screen recording of the agent on a phone, at 2× speed.</em>
 </p>
@@ -35,7 +35,7 @@ at any moment.
 every phone today), and a ChatGPT account with Codex access.
 
 1. On your phone, open the
-   **[latest release](https://github.com/Yoni-Raich/android-agent-use/releases/latest)**.
+   **[latest release](https://github.com/Yoni-Raich/hey-mike/releases/latest)**.
 2. Under **Assets**, tap the `.apk` file to download it.
 3. Open the downloaded file and tap **Install**. If Android asks, allow your
    browser or file manager to install unknown apps.
@@ -44,7 +44,7 @@ every phone today), and a ChatGPT account with Codex access.
 > ### Google Play Protect will probably block the install
 >
 > Play Protect blocks apps that come from outside Google Play and ask for
-> sensitive permissions. Android Agent needs **Accessibility**, the permission
+> sensitive permissions. Hey Mike needs **Accessibility**, the permission
 > that lets it see and tap the screen, so Play Protect treats it as risky, even
 > though it is not. You may see *"App blocked"* or *"Unsafe app blocked"*.
 >
@@ -57,18 +57,18 @@ every phone today), and a ChatGPT account with Codex access.
 >   5. **Go back and turn Play Protect on again.**
 >
 > Only do this for an APK you downloaded from this repository's
-> [Releases](https://github.com/Yoni-Raich/android-agent-use/releases/latest)
+> [Releases](https://github.com/Yoni-Raich/hey-mike/releases/latest)
 > page. Each release lists the file's SHA-256 so you can check it.
 
 ## 2. Set up the app
 
-1. **Open Android Agent and sign in.** The app shows a code; confirm it with
+1. **Open Hey Mike and sign in.** The app shows a code; confirm it with
    your ChatGPT account. No API key is needed.
 2. **Turn on Accessibility.** With the app open, go to *Settings →
-   Accessibility → Android Agent* and turn it on. This lets the agent see and
+   Accessibility → Hey Mike* and turn it on. This lets the agent see and
    control the screen.
    - **Greyed out?** Android 13+ restricts this for apps installed outside
-     Google Play. Go to *Settings → Apps → Android Agent*, tap **⋮** (top right)
+     Google Play. Go to *Settings → Apps → Hey Mike*, tap **⋮** (top right)
      → **Allow restricted settings**, then try again.
 3. **Allow "Display over other apps"** so the floating status pill with the
    **Stop** button can stay on screen while the agent works (recommended).
@@ -141,7 +141,7 @@ one row, such as "5 actions on your phone", that you can open.
 More: [Permissions and privacy](docs/PERMISSIONS_AND_PRIVACY.md) ·
 [Known issues](docs/KNOWN_ISSUES.md) · [Changelog](CHANGELOG.md)
 
-Found a bug? [Open an issue](https://github.com/Yoni-Raich/android-agent-use/issues).
+Found a bug? [Open an issue](https://github.com/Yoni-Raich/hey-mike/issues).
 Please don't include passwords, pairing codes, tokens or screenshots with
 private information. To report a security problem, see [SECURITY.md](SECURITY.md).
 
@@ -153,7 +153,7 @@ private information. To report a security problem, see [SECURITY.md](SECURITY.md
 
 ```mermaid
 flowchart LR
-    You([You: text or voice]) --> App[Android Agent app]
+    You([You: text or voice]) --> App[Hey Mike app]
     App <-->|JSON-RPC| Codex[Codex app-server<br/>on the phone]
     Codex <-->|HTTPS| Model[(Codex model<br/>in the cloud)]
     Codex -->|tool calls| Gateway[Device gateway]
@@ -178,8 +178,8 @@ flowchart LR
 You need Git, JDK 17, Python 3, and the Android SDK with platform tools.
 
 ```bash
-git clone https://github.com/Yoni-Raich/android-agent-use.git
-cd android-agent-use
+git clone https://github.com/Yoni-Raich/hey-mike.git
+cd hey-mike
 ./gradlew :app:assembleDevDebug
 ```
 
@@ -207,5 +207,5 @@ Bundled and downloaded third-party components keep their own licenses; see
 [NOTICE](NOTICE) and the
 [Codex app-server license](third_party/licenses/openai-codex-app-server-0.153.4-Apache-2.0.txt).
 
-Android Agent is an independent project and is not affiliated with or endorsed
+Hey Mike is an independent project and is not affiliated with or endorsed
 by OpenAI or Google. All docs: [docs/INDEX.md](docs/INDEX.md).

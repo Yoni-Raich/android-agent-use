@@ -383,7 +383,7 @@ class AgentCoordinatorTest {
         runCurrent()
 
         assertEquals(1, rig.foregroundRequests)
-        assertTrue(rig.overlay.states.last().label.contains("Approve in Android Agent"))
+        assertTrue(rig.overlay.states.last().label.contains("Approve in Hey Mike"))
         assertEquals("Waiting for your approval", rig.coordinator.state.value.status)
 
         rig.coordinator.approve(rig.coordinator.state.value.approval!!.requestId, true)
@@ -409,7 +409,7 @@ class AgentCoordinatorTest {
         // "denied or expired" told the model nothing it could act on. Nobody
         // answering is a different situation from the user saying no.
         assertTrue(text, text.contains("\"errorType\":\"approval_timeout\""))
-        assertTrue(text, text.contains("Android Agent app"))
+        assertTrue(text, text.contains("Hey Mike app"))
         assertNull(rig.coordinator.state.value.approval)
 
         val denied = async {

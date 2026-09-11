@@ -224,7 +224,7 @@ internal object Screenshotter {
         AccessibilityService.ERROR_TAKE_SCREENSHOT_NO_ACCESSIBILITY_ACCESS -> ToolNotServiceable(
             "screenshot_no_access",
             "The accessibility service is not permitted to capture the screen. Ask the user " +
-                "to re-enable Android Agent in Settings > Accessibility.",
+                "to re-enable Hey Mike in Settings > Accessibility.",
         )
         SECURE_WINDOW_ERROR -> ToolNotServiceable(
             "screenshot_secure_window",

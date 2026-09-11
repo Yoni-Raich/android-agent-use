@@ -602,7 +602,7 @@ class AndroidAdbTransport(context: Context) : AdbTransport, AdbFileTransport {
         private const val CONNECT_TIMEOUT_MS = 10_000L
         private const val SOCKET_TIMEOUT_MS = 30_000L
         private const val LOOPBACK = "127.0.0.1"
-        private const val DEVICE_NAME = "android-agent"
+        private const val DEVICE_NAME = "hey-mike"
         private const val IDENTITY_DIRECTORY = "kadb_identity"
         private const val CERTIFICATE_FILE = "certificate.pem"
         private const val PRIVATE_KEY_FILE = "private_key.pem"

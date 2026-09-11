@@ -36,7 +36,7 @@ class AppUpdateManagerTest {
           "assets": [
             {
               "name": "android-agent-0.1.2.apk",
-              "browser_download_url": "https://github.com/Yoni-Raich/android-agent-use/releases/download/v0.1.2/android-agent-0.1.2.apk",
+              "browser_download_url": "https://github.com/Yoni-Raich/hey-mike/releases/download/v0.1.2/android-agent-0.1.2.apk",
               "size": 250000000
             },
             {
@@ -68,7 +68,7 @@ class AppUpdateManagerTest {
           "assets": [
             {
               "name": "android-agent-0.1.1.apk",
-              "browser_download_url": "https://github.com/Yoni-Raich/android-agent-use/releases/download/v0.1.1/android-agent-0.1.1.apk",
+              "browser_download_url": "https://github.com/Yoni-Raich/hey-mike/releases/download/v0.1.1/android-agent-0.1.1.apk",
               "size": 289000000
             }
           ]

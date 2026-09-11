@@ -1,6 +1,6 @@
 # Security
 
-Android Agent can read screen content, send it to a cloud model, control apps,
+Hey Mike can read screen content, send it to a cloud model, control apps,
 and install an update APK. Treat test builds as powerful local software.
 
 ## Reporting a vulnerability

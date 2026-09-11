@@ -1,4 +1,4 @@
-# AGENTS.md — Android Agent
+# AGENTS.md — Hey Mike
 
 Read `PROGRESS.md` and `docs/ARCHITECTURE.md` before work. Write short, clear English. Goal: on-device Codex chat with session files, wireless self-ADB, visible device control, live steering, local stop.
 

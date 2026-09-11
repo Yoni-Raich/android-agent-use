@@ -1,6 +1,6 @@
 # Permissions and privacy
 
-Android Agent can send screen content to a cloud Codex service and can control
+Hey Mike can send screen content to a cloud Codex service and can control
 the phone. Read this page before granting optional permissions.
 
 ## Declared permissions

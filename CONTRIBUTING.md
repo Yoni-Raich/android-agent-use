@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping with Android Agent. It is a Developer Preview, so clear
+Thanks for helping with Hey Mike. It is a Developer Preview, so clear
 evidence and small changes matter more than broad claims.
 
 ## Before changing code
@@ -31,6 +31,6 @@ request template when opening a PR.
 
 ## Issues
 
-Use the [GitHub issue tracker](https://github.com/Yoni-Raich/android-agent-use/issues)
+Use the [GitHub issue tracker](https://github.com/Yoni-Raich/hey-mike/issues)
 for reproducible bugs and feature requests. Do not include secrets or private
 screen content. Use [Security](SECURITY.md) for vulnerability reports.

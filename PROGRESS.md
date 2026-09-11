@@ -7,6 +7,25 @@ not production-ready.
 
 ### Verified
 
+- The rename to Hey Mike passed on 2026-09-11: `./gradlew.bat test
+  assembleDevDebug assembleDevDebugAndroidTest :app:lintDevDebug
+  :voice:lintDebug :overlay:lintDebug --no-daemon` (app lint 0 errors,
+  19 warnings), then `:adb:test :app:assembleDevDebug` after the ADB pairing
+  name change; `python -m unittest tools.test_prepare_runtime` and
+  `git diff --check` passed. `aapt2` reports the dev label "Hey Mike Dev". On
+  the Redmi Note 11 Pro the updated dev debug build installed over v0.7.3
+  with the sign-in kept, the accessibility service is bound as "Hey Mike Dev",
+  and "Who are you?" in a new chat was answered with the new identity: "I'm
+  Mike, an AI agent that runs on your Android phone and uses it for you. I
+  run on OpenAI's Codex models through the Codex app-server on the phone."
+  Two earlier prompt wordings were rejected by that test: giving the Hebrew
+  spelling as a plain aside made the model answer an English question in
+  Hebrew, and then add "(מייק)" to its English answer, which the per-line
+  right-to-left rule turned into a right-aligned English line. The prompt now
+  says to write מייק only in Hebrew replies and to answer in the language of
+  the user's latest message. The old repository API URL answers `301` to the renamed repository
+  and still returns v0.7.3, so installed updaters keep working. Not verified:
+  a new Wireless ADB pairing showing the "hey-mike" name.
 - The public v0.7.3 dev APK was built from merged `main` (with #55) on
   2026-09-11. `./gradlew.bat test assembleDevRelease
   assembleDevDebugAndroidTest :voice:lintDebug :overlay:lintDebug

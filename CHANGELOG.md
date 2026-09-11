@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Android Agent is now **Hey Mike**, and the agent is **Mike**. The app,
+  its Accessibility entry, the notification and the floating card use the
+  new name, and the agent knows its name: it answers to "Mike" or
+  "Hey Mike" and introduces itself as Mike. The repository moved to
+  `Yoni-Raich/hey-mike`; GitHub redirects the old address, so v0.7.3 and
+  earlier still find updates. The package id (`dev.androidagent.app.dev`)
+  is unchanged, so updating keeps the sign-in and every chat.
+
 ## 0.7.3 — 2026-09-11
 
 - Device control works in the published APKs. Codex runs tool calls for

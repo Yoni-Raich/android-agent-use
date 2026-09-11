@@ -18,8 +18,8 @@ android {
     }
     flavorDimensions += "channel"
     productFlavors {
-        create("prod") { dimension = "channel"; resValue("string", "app_name", "Android Agent") }
-        create("dev") { dimension = "channel"; applicationIdSuffix = ".dev"; resValue("string", "app_name", "Android Agent Dev") }
+        create("prod") { dimension = "channel"; resValue("string", "app_name", "Hey Mike") }
+        create("dev") { dimension = "channel"; applicationIdSuffix = ".dev"; resValue("string", "app_name", "Hey Mike Dev") }
     }
     buildTypes { release { isMinifyEnabled = false; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro") } }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }

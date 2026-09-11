@@ -351,7 +351,7 @@ class FloatingControlOverlay(
         commentaryView = commentary
 
         val openButton = circleButton(
-            description = "Open Android Agent",
+            description = "Open Hey Mike",
             diameterDp = 40,
             fill = Color.TRANSPARENT,
             stroke = OUTLINE,
@@ -422,7 +422,7 @@ class FloatingControlOverlay(
         // Shown instead of the steer field while an approval is waiting: the
         // approval card lives only in the app.
         val approve = TextView(appContext).apply {
-            text = "Review in Android Agent"
+            text = "Review in Hey Mike"
             setTextColor(APPROVE_INK)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             setTypeface(typeface, android.graphics.Typeface.BOLD)

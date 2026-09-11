@@ -43,7 +43,7 @@ class AppUpdateManager(
     private val context: Context,
     private val currentVersion: String = BuildConfig.VERSION_NAME,
     private val repoOwner: String = "Yoni-Raich",
-    private val repoName: String = "android-agent-use",
+    private val repoName: String = "hey-mike",
 ) {
     suspend fun checkForUpdates(): AppUpdateInfo = withContext(Dispatchers.IO) {
         val endpoint = "https://api.github.com/repos/$repoOwner/$repoName/releases/latest"

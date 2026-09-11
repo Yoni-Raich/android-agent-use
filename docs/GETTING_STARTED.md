@@ -1,6 +1,6 @@
 # Getting started
 
-Android Agent is a Developer Preview. Use it for local testing and keep a
+Hey Mike is a Developer Preview. Use it for local testing and keep a
 recovery path for the phone you connect.
 
 ## Requirements
@@ -17,8 +17,8 @@ not prove that chat or device control works.
 ## Build
 
 ```powershell
-git clone https://github.com/Yoni-Raich/android-agent-use.git
-cd android-agent-use
+git clone https://github.com/Yoni-Raich/hey-mike.git
+cd hey-mike
 .\gradlew.bat :app:assembleDevDebug --no-daemon
 ```
 

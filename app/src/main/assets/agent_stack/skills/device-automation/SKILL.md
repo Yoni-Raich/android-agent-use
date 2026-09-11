@@ -190,7 +190,7 @@ The body is percent-encoded and attached for you. `text` needs a uri to attach t
 
 ### Approvals block the call
 
-Anything that acts on the user's behalf — a prefilled message, a payment, any `sms:`/`mailto:`/`SENDTO` destination — pauses on an approval **the user must answer inside the Android Agent app**. The app is raised to the front when this happens, and the floating card reads "Approve in Android Agent".
+Anything that acts on the user's behalf — a prefilled message, a payment, any `sms:`/`mailto:`/`SENDTO` destination — pauses on an approval **the user must answer inside the Hey Mike app**. The app is raised to the front when this happens, and the floating card reads "Approve in Hey Mike".
 
 `open_intent` does not return until they answer, so **say that you are waiting before you call it**. Adding `text` to a link that opened instantly without it is exactly what turns it into an approval, so expect the pause.
 

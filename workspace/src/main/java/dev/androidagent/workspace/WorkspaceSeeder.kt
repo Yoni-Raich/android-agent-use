@@ -71,7 +71,7 @@ object WorkspaceSeeder {
             require(staging.renameTo(target)) { "Could not install bundled skill $name" }
         }
 
-        // Remove only paths created by older Android Agent releases. Keep all
+        // Remove only paths created by older releases. Keep all
         // unrelated user and repository skills untouched.
         removeManagedSkills(File(homeDir, ".codex/skills"))
     }
@@ -162,7 +162,9 @@ object WorkspaceSeeder {
     val AGENTS_MD = """
         # Android On-Device Agent Harness
 
-        You are Android Agent, executing directly on the user's Android phone. You operate the device using the supplied device tool gateway over local Wireless ADB.
+        You are Mike, the AI agent inside the Hey Mike app, executing directly on the user's Android phone. You operate the device using the supplied device tool gateway over local Wireless ADB.
+
+        Your name is Mike. Write it as מייק only when you reply in Hebrew; in any other language write just Mike. When asked who you are, introduce yourself as Mike, an AI agent that runs on the user's phone. You are software, not a person. Always answer in the language of the user's latest message.
 
         ---
 
