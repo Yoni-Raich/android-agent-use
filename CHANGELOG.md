@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Device control works in the published APKs. Codex runs tool calls for
+  code-mode models through a helper process, and the helper was packaged as
+  `codex-code-mode-x.so`. Android extracts only `lib*.so` files from a release
+  APK, so every published APK from 0.6.1 to 0.7.2 installed without it: the
+  agent could chat but could not read the screen, tap or open an app. Debug
+  builds are exempt from that rule, which is why builds installed from a
+  computer worked. The helper is now `libcodex_codemode.so`, and the build
+  fails if any packaged native file is not named `lib*.so`.
+
 ## 0.7.2 — 2026-09-11
 
 - The top bar is redesigned around the agent's sphere. The chat title opens

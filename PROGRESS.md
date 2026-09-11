@@ -7,6 +7,26 @@ not production-ready.
 
 ### Verified
 
+- Device control in release builds was broken and is fixed on 2026-09-11.
+  The published v0.7.2 APK, installed on a Redmi Note 11 Pro (Android 13,
+  HyperOS 1.0), could chat but could not call any tool: the model reported
+  that "the device tool host failed to start" and no device action ran. The
+  code-mode helper `codex-code-mode-x.so` was missing from `nativeLibraryDir`,
+  because Android extracts only `lib*.so` entries from a non-debuggable APK
+  (AOSP `NativeLibraryHelper.cpp`; debuggable apps are exempt). Every
+  published APK from 0.6.1 to 0.7.2 is non-debuggable. A dev debug build of
+  the same commit extracted the helper, and "Open the Clock app and set a
+  timer for 5 minutes" completed on the same phone with the same model
+  (5.6-luna, low). With the helper renamed to `libcodex_codemode.so`, a
+  `assembleDevRelease` APK, zip-aligned and v3-signed with the debug key,
+  installed on the same phone with the helper present in `nativeLibraryDir`
+  and `run-as` refused (not debuggable); "Open Settings and tell me the
+  Android version" opened Settings and reached About phone (Android 13).
+  `./gradlew.bat test assembleDevRelease assembleDevDebugAndroidTest
+  :voice:lintDebug :app:lintDevDebug` passed (app lint 0 errors,
+  19 warnings), `python -m unittest tools.test_prepare_runtime` passed
+  (5 tests) and `git diff --check` is clean. Not verified: other phones, the
+  x86_64 helper, and a published release carrying this fix.
 - The public v0.7.2 dev APK was built from merged `main` at tag `v0.7.2` on
   2026-09-11. The full Gradle gate (including clean `:app:lintDevDebug`),
   runtime staging tests and `git diff --check` passed. `aapt2` reports

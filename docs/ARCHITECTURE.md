@@ -40,12 +40,17 @@ boundary if connection state changes after the snapshot.
 
 Codex app-server is preferred over parsing terminal UI output. The model remains a cloud service; the agent process and workspace live on the phone. The APK packages the official ARM64 and x86_64 Linux-musl app-server variants, and Android selects the matching native library directory. The x86_64 emulator now avoids ARM translation, but its app-process launch currently exits with `SIGSYS` (exit code 159), so emulator runtime support remains unproven.
 
-The Android APK stages the code-mode helper as `codex-code-mode-x.so`, because
-Android extracts `.so` entries into `nativeLibraryDir` but does not preserve a
-no-extension executable there. The staging script patches the helper-name
-lookup in the pinned app-server copy to this exact filename and fails closed
-if the upstream binary layout changes. The downloaded official archive stays
-unchanged, and the manifest records the staged file hashes.
+The Android APK stages the code-mode helper as `libcodex_codemode.so`. Android
+extracts an APK native-library entry into `nativeLibraryDir` only when its name
+starts with `lib` and ends with `.so`; debuggable apps are exempt from the
+prefix rule. The helper was once staged as `codex-code-mode-x.so`, which worked
+in debug builds and was silently left out of every release build, so code-mode
+models could not call any tool there. The staging script now fails if any staged
+name is not `lib*.so`. It patches the helper-name lookup in the pinned
+app-server copy to this exact filename, which must keep the upstream name's
+20-byte width, and fails closed if the upstream binary layout changes. The
+downloaded official archive stays unchanged, and the manifest records the
+staged file hashes.
 
 ## Android network compatibility
 
