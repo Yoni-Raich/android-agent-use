@@ -1,109 +1,205 @@
 # Android Agent
 
-Android Agent is an on-device Codex chat app. The app-server and session
-workspace run on the phone. The agent can use controlled screen, input, file,
-shell, and Wireless ADB tools on that same phone.
+**An AI agent that lives on your Android phone and uses it for you.**
 
-## Status
+Tell it what you want, typed or spoken. It reads the screen, taps, types,
+scrolls and opens apps on the same phone. You watch every step and can stop it
+at any moment.
 
-This repository is a **Developer Preview**. It is for development and local
-testing, not production use. The current public APK uses the `dev` package and
-test/debug signing. It is not a production-signed release.
+<p>
+  <a href="https://github.com/Yoni-Raich/android-agent-use/releases/latest"><img alt="Download the latest APK" src="https://img.shields.io/badge/Download-latest%20APK-3DDC84?style=for-the-badge&logo=android&logoColor=white"></a>
+</p>
 
-The latest recorded version is v0.6.0 (`versionCode` 16). Read
-[PROGRESS.md](PROGRESS.md) for the current evidence and open gaps.
+[![Latest release](https://img.shields.io/github/v/release/Yoni-Raich/android-agent-use?label=release)](https://github.com/Yoni-Raich/android-agent-use/releases/latest)
+![Android 11+](https://img.shields.io/badge/Android-11%2B-3DDC84?logo=android&logoColor=white)
+![Status](https://img.shields.io/badge/status-developer%20preview-orange)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
-## What is here
+- [1. Download and install](#1-download-and-install)
+- [2. Set up the app](#2-set-up-the-app)
+- [3. Use it](#3-use-it)
+- [Good to know](#good-to-know)
+- [For developers](#for-developers)
 
-- Codex app-server JSON-RPC over a supervised on-phone process.
-- Chat sessions with local session files and artifacts.
-- Wireless ADB pairing, discovery, reconnect, shell, file, and device tools.
-- Optional Android Accessibility control when Wireless Debugging is off.
-- Visible control state, steering, and local Stop.
-- Unicode input through a temporary bundled input method.
-- Optional floating overlay and experimental realtime voice.
-- On-device skills, app cards, preferences, and saved workflows.
+---
 
-These features are not all proven end to end on a phone. The test boundary is
-important: a build, APK install, unit test, or Compose fixture does not prove a
-real signed-in conversation or a successful device action.
+## 1. Download and install
 
-## Requirements
+**You need:** an Android phone with Android 11 or newer (ARM64, which is almost
+every phone today), and a ChatGPT account with Codex access.
 
-- Windows development machine with PowerShell, Git, JDK 17, Python 3, and an
-  Android SDK with platform tools.
-- Android 11 or newer (`minSdk 30`).
-- A supported ARM64 Android phone is the practical runtime target today.
-- A Codex account for sign-in. No API key is shipped in the APK.
+1. On your phone, open the
+   **[latest release](https://github.com/Yoni-Raich/android-agent-use/releases/latest)**.
+2. Under **Assets**, tap the `.apk` file to download it.
+3. Open the downloaded file and tap **Install**. If Android asks, allow your
+   browser or file manager to install unknown apps.
 
-The APK also contains an x86_64 runtime for emulator packaging. The current
-x86_64 app-server path exits with `SIGSYS` (159), so emulator installation is
-not proof of runtime support.
+> [!IMPORTANT]
+> ### Google Play Protect will probably block the install
+>
+> Play Protect blocks apps that come from outside Google Play and ask for
+> sensitive permissions. Android Agent needs **Accessibility**, the permission
+> that lets it see and tap the screen, so Play Protect treats it as risky, even
+> though it is not. You may see *"App blocked"* or *"Unsafe app blocked"*.
+>
+> - If the warning offers **Install anyway**, tap it.
+> - If it doesn't, turn Play Protect scanning off **for the install only**:
+>   1. Open the **Google Play Store** app.
+>   2. Tap your **profile icon** (top right) → **Play Protect** → **Settings** ⚙.
+>   3. Turn off **Scan apps with Play Protect**.
+>   4. Install the APK.
+>   5. **Go back and turn Play Protect on again.**
+>
+> Only do this for an APK you downloaded from this repository's
+> [Releases](https://github.com/Yoni-Raich/android-agent-use/releases/latest)
+> page. Each release lists the file's SHA-256 so you can check it.
 
-## Build and install
+## 2. Set up the app
 
-```powershell
-git clone https://github.com/Yoni-Raich/android-agent-use.git
-cd android-agent-use
-.\gradlew.bat :app:assembleDevDebug --no-daemon
-adb devices -l
-adb -s <serial> install -r app\build\outputs\apk\dev\debug\app-dev-debug.apk
-adb -s <serial> shell am start -n dev.androidagent.app.dev/.MainActivity
+1. **Open Android Agent and sign in.** The app shows a code; confirm it with
+   your ChatGPT account. No API key is needed.
+2. **Turn on Accessibility.** With the app open, go to *Settings →
+   Accessibility → Android Agent* and turn it on. This lets the agent see and
+   control the screen.
+   - **Greyed out?** Android 13+ restricts this for apps installed outside
+     Google Play. Go to *Settings → Apps → Android Agent*, tap **⋮** (top right)
+     → **Allow restricted settings**, then try again.
+3. **Allow "Display over other apps"** so the floating status pill with the
+   **Stop** button can stay on screen while the agent works (recommended).
+4. **Optional:** the microphone for voice mode, notifications, and Wireless
+   Debugging pairing for extra tools (shell, files, APK install).
+
+The app's setup screen shows what is ready and what is missing.
+
+## 3. Use it
+
+**Give it a task.** Type what you want and tap send, or tap the voice button
+when the field is empty to talk. For example:
+
+- *"Open Settings and tell me which Android version I have."*
+- *"Get Danny's address from WhatsApp and start navigation to it in Maps."*
+- *"Find the latest video from my favourite channel on YouTube and play it."*
+
+Start with something small to see how it works.
+
+**Watch it work.** The agent looks at the screen, does one thing, looks again
+and continues. A floating pill at the top of the screen shows what it is doing
+right now ("Reading the screen", "Tapping"). In the chat, its steps fold into
+one row, such as "5 actions on your phone", that you can open.
+
+**Stay in control:**
+
+- **Stop:** tap **Stop** on the floating pill or in the app. The agent stops
+  right away.
+- **Steer:** send a message while it works, or tap the pill and type, to
+  correct it mid-task ("not that one, the second contact").
+- **Approve:** for some actions, like sending a message with prefilled text,
+  the agent waits for you to approve in the app.
+
+**More features:**
+
+- **Voice mode:** a full-screen live conversation. You can mute the mic
+  without ending it.
+- **Skills and commands:** type `/` or tap the **Skills** chip to pick a skill
+  or a command: *New chat*, *Compact*, *Plan mode*, *Model*, *Rename*, *Status*.
+  In Plan mode the agent proposes a plan before it acts.
+- **Model and reasoning:** tap the chip under the text field.
+- **Hebrew and Arabic** lines show right to left.
+- **Updates:** the app can check for a newer release and download it. Android
+  still asks you to confirm the install, and Play Protect may block it again
+  (see above).
+
+## Good to know
+
+> [!WARNING]
+> **This is a Developer Preview.** Expect rough edges. The APK is signed with a
+> test key, and not every feature has been tested on every phone.
+
+- **Your data goes to the cloud while a task runs.** The agent runs on your
+  phone, but the model is OpenAI's Codex service. Your messages, the screen
+  text the agent reads, and screenshots when it needs them are sent to it.
+  Sessions and settings are stored only on the phone.
+- **Keep secrets off the screen** while the agent works, and don't let it
+  handle passwords or payments.
+- **Screens can lie.** A web page or message can contain text that tries to
+  steer the agent. Watch what it does and use Stop if something looks wrong.
+- **Stop can't undo.** It prevents further actions, but a message that was
+  already sent stays sent.
+- **One task at a time** per phone.
+- **Emulators don't work yet.** Use a real ARM64 phone.
+- **From 2027, Google plans to require verified developers** for apps installed
+  outside Google Play, starting with some countries on September 30, 2026.
+  Installing apps from unverified developers will then need Android's one-time
+  [advanced flow](https://android-developers.googleblog.com/2026/03/android-developer-verification.html).
+
+More: [Permissions and privacy](docs/PERMISSIONS_AND_PRIVACY.md) ·
+[Known issues](docs/KNOWN_ISSUES.md) · [Changelog](CHANGELOG.md)
+
+Found a bug? [Open an issue](https://github.com/Yoni-Raich/android-agent-use/issues).
+Please don't include passwords, pairing codes, tokens or screenshots with
+private information. To report a security problem, see [SECURITY.md](SECURITY.md).
+
+---
+
+## For developers
+
+### How it works
+
+```mermaid
+flowchart LR
+    You([You: text or voice]) --> App[Android Agent app]
+    App <-->|JSON-RPC| Codex[Codex app-server<br/>on the phone]
+    Codex <-->|HTTPS| Model[(Codex model<br/>in the cloud)]
+    Codex -->|tool calls| Gateway[Device gateway]
+    Gateway --> A11y[Accessibility]
+    Gateway --> ADB[Wireless ADB<br/>to the same phone]
+    A11y --> Phone[Your apps]
+    ADB --> Phone
+    App --> Pill[Floating pill<br/>status and Stop]
 ```
 
-Select a serial deliberately when more than one device is attached. Do not
-use an `unauthorized` or `offline` device. The build may download the pinned
-Codex runtime and CA bundle when they are not already cached; the staging script
-hash-checks them.
+- The app runs the official Codex app-server binary on the phone and talks to
+  it over JSON-RPC. The UI shows app events, never raw model output.
+- Every device action goes through one gateway, which knows which tools are
+  available, shows the control state and enforces Stop. Stop blocks new
+  actions first, then interrupts the one in progress.
+- Modules: `app`, `core`, `engine-codex`, `runtime`, `workspace`, `adb`,
+  `a11y`, `device-tools`, `overlay`, `voice`. See
+  [Architecture](docs/ARCHITECTURE.md).
 
-For setup details, see [Getting started](docs/GETTING_STARTED.md). For the
-test-safe install and test commands, see [Testing](docs/TESTING.md).
+### Build from source
 
-## Permissions and privacy
+You need Git, JDK 17, Python 3, and the Android SDK with platform tools.
 
-The app asks for sensitive Android capabilities because it can control the
-phone. Accessibility, overlay, microphone, notifications, and package discovery
-are optional paths with different uses. Screen text and screenshots can be
-sent to the Codex service while a task is running. Raw microphone audio and SDP
-are not saved by the app; finalized transcripts may be stored in the session.
+```bash
+git clone https://github.com/Yoni-Raich/android-agent-use.git
+cd android-agent-use
+./gradlew :app:assembleDevDebug
+```
 
-Read [Permissions and privacy](docs/PERMISSIONS_AND_PRIVACY.md) before enabling
-device control.
+On Windows, use `.\gradlew.bat :app:assembleDevDebug`. The first build
+downloads the pinned Codex app-server and CA bundle and checks their hashes.
+Install on a chosen device:
 
-## Architecture
+```bash
+adb -s <serial> install -r app/build/outputs/apk/dev/debug/app-dev-debug.apk
+```
 
-The main modules are `app`, `core`, `engine-codex`, `runtime`, `workspace`,
-`adb`, `device-tools`, `a11y`, `overlay`, and `voice`. The UI observes app
-events instead of raw Codex JSON. Device calls go through the device gateway,
-and one phone has at most one active agent run.
+See [Getting started](docs/GETTING_STARTED.md), [Testing](docs/TESTING.md),
+[Release process](docs/RELEASES.md) and [PROGRESS.md](PROGRESS.md).
 
-See [Architecture](docs/ARCHITECTURE.md) for the boundaries and safety rules.
+### Contributing
 
-## Known limits
+Pull requests and device reports are welcome. Read
+[CONTRIBUTING.md](CONTRIBUTING.md) and the
+[Code of Conduct](CODE_OF_CONDUCT.md) first.
 
-- Developer Preview only; production signing and full release readiness are
-  not established.
-- Full signed-in phone chat, voice, recovery, and device-control E2E are still
-  incomplete.
-- `:app:lintDevDebug` has a known pre-existing error; see
-  [Known issues](docs/KNOWN_ISSUES.md).
-- Stop prevents new work and interrupts active work, but it cannot undo a side
-  effect that already completed.
+### License
 
-See [Known issues](docs/KNOWN_ISSUES.md) for the full list.
+The code in this repository is licensed under the [Apache License 2.0](LICENSE).
+Bundled and downloaded third-party components keep their own licenses; see
+[NOTICE](NOTICE) and the
+[Codex app-server license](third_party/licenses/openai-codex-app-server-0.153.4-Apache-2.0.txt).
 
-## Contributing and security
-
-Start with [Contributing](CONTRIBUTING.md), [Security](SECURITY.md), and the
-[Code of Conduct](CODE_OF_CONDUCT.md). Please do not post credentials, pairing
-codes, tokens, or private screen captures in issues.
-
-## License
-
-Repository-owned code is provided under the [Apache License 2.0](LICENSE),
-subject to the copyright owner's authority. Bundled or fetched third-party
-components keep their own licenses; see [NOTICE](NOTICE) and
-[third-party license notes](third_party/licenses/openai-codex-app-server-0.153.4-Apache-2.0.txt).
-
-See the [changelog](CHANGELOG.md) for release notes and the
-[documentation index](docs/INDEX.md) for all project docs.
+Android Agent is an independent project and is not affiliated with or endorsed
+by OpenAI or Google. All docs: [docs/INDEX.md](docs/INDEX.md).
