@@ -99,6 +99,8 @@ data class AgentUiState(
     val availableSkills: List<AgentSkill> = emptyList(),
     val selectedModel: String? = null,
     val selectedReasoningEffort: String? = null,
+    /** Turns sent from the composer run in Codex plan mode. */
+    val planMode: Boolean = false,
     val voiceState: VoiceState = VoiceState(),
     val voiceTranscript: String = "",
     val voiceTranscriptRole: String? = null,
@@ -158,6 +160,9 @@ data class AgentUiActions(
     val onModelSelected: (String) -> Unit = {},
     val onReasoningEffortSelected: (String?) -> Unit = {},
     val onRenameSession: (sessionId: String, title: String) -> Unit = { _, _ -> },
+    val onCompact: () -> Unit = {},
+    val onTogglePlanMode: () -> Unit = {},
+    val onShowStatus: () -> Unit = {},
     val onDeleteSession: (String) -> Unit = {},
     val onRetry: () -> Unit = {},
     val onDismissError: () -> Unit = {},

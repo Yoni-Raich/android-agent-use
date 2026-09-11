@@ -834,6 +834,10 @@ private fun MessageBubble(message: ChatMessage) {
     val role = message.role.lowercase()
     val user = role == "user"
     val system = role == "system" || role == "tool"
+    if (role == "note") {
+        CommandNote(message.text)
+        return
+    }
     if (system) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             ActivityDetail(

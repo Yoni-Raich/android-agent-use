@@ -172,12 +172,23 @@ catalog:
   retains user defaults (preferred messaging apps, addresses) to prevent
   redundant questioning while respecting intent fidelity.
 - **Catalog and composer**: For each session workspace, the pinned app-server
-  is queried through `skills/list` with that workspace as the CWD. The composer
-  uses the returned catalog and explicit `$skill-name` invocations; the turn
-  includes Codex's native skill input item with the catalog-provided name and
-  path. `skills/changed` refreshes the catalog. There is no hard-coded
-  slash-skill list. `WorkspaceSeeder` still populates `AGENTS.md`, app cards,
-  `RECOVERY.md`, and `preferences.json` offline without duplicating skills.
+  is queried through `skills/list` with that workspace as the CWD. The catalog
+  keeps each skill's interface block (display name, short description, brand
+  colour, default prompt). The composer reaches it three ways: the Skills chip
+  opens a sheet with search, a leading `/` opens skills and commands above the
+  field, and a leading `$` opens skills only. A picked skill rides as a chip
+  and is sent as `$skill-name` text plus Codex's native skill input item with
+  the catalog-provided name and path. `skills/changed` refreshes the catalog.
+  `WorkspaceSeeder` still populates `AGENTS.md`, app cards, `RECOVERY.md`, and
+  `preferences.json` offline without duplicating skills.
+- **Composer commands**: Codex has no call that lists its slash commands, so
+  `/` offers the app's own set (`ComposerCommand`): New chat, Compact
+  (`thread/compact/start`), Plan mode (`collaborationMode` with mode `plan` on
+  each `turn/start`, carrying the turn's model and effort), Model, Rename and
+  Status. What a command did is recorded in the chat as a `note` message, which
+  never reaches the model. Goals are left out on purpose: an active
+  `thread/goal` lets Codex start continuation turns that the coordinator does
+  not own.
 
 ## Bounded UI observation
 
