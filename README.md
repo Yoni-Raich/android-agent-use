@@ -98,6 +98,18 @@ Start with [Contributing](CONTRIBUTING.md), [Security](SECURITY.md), and the
 [Code of Conduct](CODE_OF_CONDUCT.md). Please do not post credentials, pairing
 codes, tokens, or private screen captures in issues.
 
+## Disclaimer
+
+Android Agent is an independent open-source project. It is not affiliated
+with, endorsed by, or sponsored by Google or OpenAI. Android is a trademark of
+Google LLC. Other product names and trademarks belong to their owners.
+
+The agent can read your screen, send screen content to a cloud model, and act
+on your phone for you. You are responsible for how you use it and for what it
+does on your device and accounts. Automating third-party apps may break their
+terms of service. The software is provided "as is", without warranty of any
+kind; see the [License](LICENSE) for the full terms.
+
 ## License
 
 Repository-owned code is provided under the [Apache License 2.0](LICENSE),
