@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.7.3 — 2026-09-11
+
 - Device control works in the published APKs. Codex runs tool calls for
   code-mode models through a helper process, and the helper was packaged as
   `codex-code-mode-x.so`. Android extracts only `lib*.so` files from a release

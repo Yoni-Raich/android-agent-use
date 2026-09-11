@@ -7,6 +7,21 @@ not production-ready.
 
 ### Verified
 
+- The public v0.7.3 dev APK was built from merged `main` (with #55) on
+  2026-09-11. `./gradlew.bat test assembleDevRelease
+  assembleDevDebugAndroidTest :voice:lintDebug :overlay:lintDebug
+  :app:lintDevDebug --no-daemon` passed (832 actionable tasks; app lint
+  0 errors, 19 warnings), `python -m unittest tools.test_prepare_runtime`
+  passed and `git diff --check` is clean. `aapt2` reports
+  `dev.androidagent.app.dev` versionCode 22 versionName 0.7.3, not
+  debuggable, with `libcodex_codemode.so` for ARM64 and x86_64; zip alignment
+  and APK Signature Scheme v3 verification passed with the local debug key.
+  SHA-256 `2157EED1D1D1CB936CA927377AD2BDA59D3D236583763B47C2B378FF00D9D09E`.
+  **This release APK was installed on a physical phone**, the first since
+  v0.6.1: on the Redmi Note 11 Pro (Android 13), `adb install -r` of the
+  exact asset kept the sign-in, `libcodex_codemode.so` was in
+  `nativeLibraryDir`, and "Open Settings and tell me the Android version"
+  (5.6-luna, low) opened Settings and reached About phone showing Android 13.
 - Device control in release builds was broken and is fixed on 2026-09-11.
   The published v0.7.2 APK, installed on a Redmi Note 11 Pro (Android 13,
   HyperOS 1.0), could chat but could not call any tool: the model reported

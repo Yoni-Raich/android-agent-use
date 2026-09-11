@@ -5,17 +5,28 @@ and complete phone E2E are established.
 
 ## Current public artifact
 
-The latest public artifact is v0.7.2:
+The latest public artifact is v0.7.3:
 
 - package: `dev.androidagent.app.dev`;
-- versionCode: `21`;
-- APK: `android-agent-0.7.2.apk`;
-- SHA-256: `F5FA50A871CED900488736E8EB7113FBE1A36EB17CD0E75C5E73F90A6F72AE25`;
+- versionCode: `22`;
+- APK: `android-agent-0.7.3.apk`;
+- SHA-256: `2157EED1D1D1CB936CA927377AD2BDA59D3D236583763B47C2B378FF00D9D09E`;
 - signing: APK Signature Scheme v3 with the local Android debug key.
 
 This is test-only signing. It is installable for local testing, not a production
 release. The public release page is
-[v0.7.2 on GitHub](https://github.com/Yoni-Raich/android-agent-use/releases/tag/v0.7.2).
+[v0.7.3 on GitHub](https://github.com/Yoni-Raich/android-agent-use/releases/tag/v0.7.3).
+
+v0.6.1 to v0.7.2 cannot control the phone: their release APKs install without
+the code-mode helper. v0.7.3 is the first published APK with device control.
+
+## Check the release APK on a phone
+
+A release APK is not debuggable, and Android treats it differently from the
+debug builds used during development (for example, it extracts only `lib*.so`
+native files). Before publishing, install the signed candidate itself on a
+phone, confirm every staged `lib*.so` is in the app's `nativeLibraryDir`, and
+run one short task that uses a device tool.
 
 ## Version rules
 
