@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.10.1 — 2026-09-11
+
 - Voice mode speaks as Mike: the caption labels the agent "MIKE" instead of
   "CODEX", the status reads "Mike is speaking" and the notification says
   "Talking with Mike". The chat title at the top of voice mode is readable

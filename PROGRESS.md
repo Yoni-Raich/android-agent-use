@@ -7,6 +7,22 @@ not production-ready.
 
 ### Verified
 
+- The public v0.10.1 dev APK was built from merged `main` (with #58) on
+  2026-09-11. `./gradlew.bat test assembleDevRelease
+  assembleDevDebugAndroidTest :voice:lintDebug :overlay:lintDebug
+  :app:lintDevDebug --no-daemon` passed (832 actionable tasks; app lint
+  0 errors, 19 warnings), `python -m unittest tools.test_prepare_runtime`
+  passed (5 tests) and `git diff --check` is clean. `aapt2` reports
+  versionCode 24 versionName 0.10.1, label "Hey Mike Dev", not debuggable,
+  with `libcodex_codemode.so` for ARM64 and x86_64; zip alignment and APK
+  Signature Scheme v3 verification passed with the local debug key. SHA-256
+  `0CECB9AD07C1B1128507043C47820556C294656E10DEB2F56FFEF399A0ECBB46`. The
+  exact asset was installed on the Redmi Note 11 Pro (Android 13) over
+  v0.10.0 with the sign-in kept: the helper was in `nativeLibraryDir`, the
+  accessibility service bound as "Hey Mike Dev", and "Open Settings and tell
+  me the Android version" reached About phone showing Android 13. Not
+  verified on hardware: the voice-mode labels ("MIKE", "Mike is speaking")
+  and the voice-mode title colour, which need a live spoken conversation.
 - The public v0.10.0 dev APK, the first named Hey Mike, was built from merged
   `main` (with #57) on 2026-09-11. `./gradlew.bat test assembleDevRelease
   assembleDevDebugAndroidTest :voice:lintDebug :overlay:lintDebug
