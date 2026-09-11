@@ -69,7 +69,7 @@ class AgentService : Service() {
         val stop = PendingIntent.getService(this, 1, Intent(this, AgentService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val active = state.active || voice.active
         return NotificationCompat.Builder(this, CHANNEL).setSmallIcon(R.drawable.ic_agent)
-            .setContentTitle(if (voice.active) "Codex voice is active" else if (state.active) "Mike is working" else "Hey Mike")
+            .setContentTitle(if (voice.active) "Talking with Mike" else if (state.active) "Mike is working" else "Hey Mike")
             .setContentText(if (voice.active) voice.message else if (state.active) state.status else "Local runtime ready")
             .setContentIntent(open).setOngoing(active).setSilent(true)
             .addAction(0, "Stop", stop).build()
