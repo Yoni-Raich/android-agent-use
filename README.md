@@ -15,6 +15,12 @@ at any moment.
 ![Status](https://img.shields.io/badge/status-developer%20preview-orange)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
+<p align="center">
+  <img src="docs/images/demo-youtube.gif" width="280" alt="Android Agent receives the task &quot;Open YouTube, search for Android 16 features and play the first video&quot;, opens YouTube, types the search and opens the first result, with its floating status pill and Stop button on screen">
+  <br>
+  <em>“Open YouTube, search for Android 16 features and play the first video.”<br>A real screen recording of the agent on a phone, at 2× speed.</em>
+</p>
+
 - [1. Download and install](#1-download-and-install)
 - [2. Set up the app](#2-set-up-the-app)
 - [3. Use it](#3-use-it)
