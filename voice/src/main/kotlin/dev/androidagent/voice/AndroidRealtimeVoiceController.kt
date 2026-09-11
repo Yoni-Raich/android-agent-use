@@ -282,7 +282,7 @@ class AndroidRealtimeVoiceController(
         lastCodexAudioAt = System.nanoTime()
         mutableState.update { current ->
             if (current.threadId == threadId && current.active && current.phase != VoicePhase.STOPPING) {
-                VoiceState(VoicePhase.SPEAKING, "Codex is speaking", threadId)
+                VoiceState(VoicePhase.SPEAKING, "Mike is speaking", threadId)
             } else {
                 current
             }

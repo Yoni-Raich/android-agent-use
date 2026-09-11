@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Voice mode speaks as Mike: the caption labels the agent "MIKE" instead of
+  "CODEX", the status reads "Mike is speaking" and the notification says
+  "Talking with Mike". The chat title at the top of voice mode is readable
+  again; it was drawn in dark text on the dark background.
+
 ## 0.10.0 — 2026-09-11
 
 - Android Agent is now **Hey Mike**, and the agent is **Mike**. The app,

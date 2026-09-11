@@ -245,6 +245,9 @@ private fun VoiceHeader(title: String?, modifier: Modifier) {
         Text(
             text = title?.takeIf { it.isNotBlank() } ?: "Hey Mike",
             style = MaterialTheme.typography.titleMedium,
+            // Without an explicit colour the title inherits dark content
+            // colour and disappears on the voice screen's dark background.
+            color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -304,7 +307,7 @@ private fun VoiceCaption(transcript: String, role: String?, modifier: Modifier) 
     ) {
         if (text.isNotEmpty()) {
             Text(
-                text = if (codex) "CODEX" else "YOU",
+                text = if (codex) "MIKE" else "YOU",
                 fontSize = 11.sp,
                 lineHeight = 16.sp,
                 fontWeight = FontWeight.SemiBold,
