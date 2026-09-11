@@ -5,20 +5,22 @@ and complete phone E2E are established.
 
 ## Current public artifact
 
-The latest public artifact is v0.7.3:
+The latest public artifact is v0.10.0, the first release named Hey Mike:
 
 - package: `dev.androidagent.app.dev`;
-- versionCode: `22`;
-- APK: `android-agent-0.7.3.apk`;
-- SHA-256: `2157EED1D1D1CB936CA927377AD2BDA59D3D236583763B47C2B378FF00D9D09E`;
+- versionCode: `23`;
+- APK: `hey-mike-0.10.0.apk`;
+- SHA-256: `EA49FD1DD40107054FE35A67CC3118549CA8506AC2529EB25D07F8F62AA7B3B1`;
 - signing: APK Signature Scheme v3 with the local Android debug key.
 
 This is test-only signing. It is installable for local testing, not a production
 release. The public release page is
-[v0.7.3 on GitHub](https://github.com/Yoni-Raich/hey-mike/releases/tag/v0.7.3).
+[v0.10.0 on GitHub](https://github.com/Yoni-Raich/hey-mike/releases/tag/v0.10.0).
 
-v0.6.1 to v0.7.2 cannot control the phone: their release APKs install without
-the code-mode helper. v0.7.3 is the first published APK with device control.
+Assets are named `hey-mike-X.Y.Z.apk` from v0.10.0; earlier releases used
+`android-agent-X.Y.Z.apk`. v0.6.1 to v0.7.2 cannot control the phone: their
+release APKs install without the code-mode helper. v0.7.3 is the first
+published APK with device control.
 
 ## Check the release APK on a phone
 

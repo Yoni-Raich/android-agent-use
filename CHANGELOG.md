@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.10.0 — 2026-09-11
+
 - Android Agent is now **Hey Mike**, and the agent is **Mike**. The app,
   its Accessibility entry, the notification and the floating card use the
   new name, and the agent knows its name: it answers to "Mike" or
