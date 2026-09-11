@@ -79,6 +79,23 @@ class AgentCoordinatorTest {
         rig.close()
     }
 
+    @Test fun planModeAsksTheEngineForAPlanWithTheTurnsModel() = runTest {
+        val rig = Rig(this)
+        rig.coordinator.send("one", "Clean up my inbox", model = "gpt-5.6-luna", planMode = true)
+        runCurrent()
+        assertEquals("gpt-5.6-luna", rig.engine.planModel)
+        rig.close()
+    }
+
+    @Test fun anOrdinaryTurnIsNotAPlan() = runTest {
+        val rig = Rig(this)
+        rig.coordinator.send("one", "Clean up my inbox", model = "gpt-5.6-luna")
+        runCurrent()
+        assertNull(rig.engine.planModel)
+        assertEquals(1, rig.engine.turns)
+        rig.close()
+    }
+
     @Test fun currentAdbStatusIsSnapshottedForEachNewTurn() = runTest {
         val rig = Rig(this)
         rig.adbStatus.value = AdbStatus(ConnectionPhase.CONNECTED, "Connected", 37123)
@@ -450,6 +467,7 @@ class AgentCoordinatorTest {
         var reasoningEffort: String? = null
         var skill: AgentSkill? = null
         var adbStatus: AdbStatus? = null
+        var planModel: String? = null
         var closed = false
         var waitForInterrupt: CompletableDeferred<Unit>? = null
         val answers = mutableListOf<ToolResult>()
@@ -486,6 +504,18 @@ class AgentCoordinatorTest {
         ): String {
             this.adbStatus = adbStatus
             return startTurn(threadId, prompt, images, reasoningEffort, skill)
+        }
+        override suspend fun startTurn(
+            threadId: String,
+            prompt: String,
+            images: List<File>,
+            reasoningEffort: String?,
+            skill: AgentSkill?,
+            capabilities: DeviceCapabilities,
+            planModel: String?,
+        ): String {
+            this.planModel = planModel
+            return startTurn(threadId, prompt, images, reasoningEffort, skill, capabilities)
         }
         override suspend fun steer(threadId: String, turnId: String, prompt: String) = Unit
         override suspend fun interrupt(threadId: String, turnId: String) { waitForInterrupt?.await() }
